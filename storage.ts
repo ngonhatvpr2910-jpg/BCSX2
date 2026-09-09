@@ -1,0 +1,938 @@
+import { supabase, isSupabaseConfigured } from './supabaseClient';
+import {
+  Worker,
+  AttendanceRecord,
+  ProductDefinition,
+  ProductionLog,
+  MonthlyMetric,
+  DailyReportRowGas,
+  DailyReportRowAssembly,
+  MonthlyScrapReport,
+  WeeklyScrapReport,
+  WeeklyDclreErrorRate,
+  MonthlyDclreErrorRate,
+} from './types';
+import {
+  INITIAL_WORKERS,
+  INITIAL_ATTENDANCE,
+  SUNHOUSE_PRODUCTS,
+  INITIAL_PRODUCTION_LOGS,
+  HISTORICAL_2025,
+  HISTORICAL_2026,
+  INITIAL_GAS_DAILY_REPORTS,
+  INITIAL_ASSEMBLY_DAILY_REPORTS,
+  MONTHLY_SCRAP_REPORT,
+  WEEKLY_SCRAP_REPORT,
+  WEEKLY_DCLR_ERROR_RATE,
+  MONTHLY_DCLR_ERROR_RATE,
+} from './data';
+
+// ==========================================
+// LOCAL STORAGE KEYS (Fallback an toàn)
+// ==========================================
+const STORAGE_KEYS = {
+  WORKERS: 'sunhouse_workers',
+  ATTENDANCE: 'sunhouse_attendance_logs',
+  PRODUCTS: 'sunhouse_products_v2',
+  PRODUCTION_LOGS: 'sunhouse_production_logs_v2',
+  MONTHLY_PLAN: 'sunhouse_monthly_plan_v2',
+  MONTHLY_TARGETS: 'sunhouse_monthly_targets_v2',
+  METRICS_2025: 'sunhouse_metrics_2025_v2',
+  METRICS_2026: 'sunhouse_metrics_2026_v2',
+  GAS_DAILY: 'sunhouse_gas_daily_reports_v2',
+  ASSEMBLY_DAILY: 'sunhouse_assembly_daily_reports_v2',
+  DECLARED_IMEIS: 'sunhouse_declared_imeis',
+  SCANNED_IMEIS: 'sunhouse_scanned_imeis',
+  MONTHLY_SCRAP: 'sunhouse_monthly_scrap_v2',
+  WEEKLY_SCRAP: 'sunhouse_weekly_scrap_v2',
+  WEEKLY_DCLR_ERROR: 'sunhouse_weekly_dclr_error_v2',
+  MONTHLY_DCLR_ERROR: 'sunhouse_monthly_dclr_error_v2',
+};
+
+// Helper đọc localStorage an toàn
+function getLocal<T>(key: string, fallback: T): T {
+  try {
+    const saved = localStorage.getItem(key);
+    if (!saved) return fallback;
+    return JSON.parse(saved) as T;
+  } catch (err) {
+    console.warn(`[storage] Lỗi đọc localStorage key "${key}":`, err);
+    return fallback;
+  }
+}
+
+// Helper ghi localStorage an toàn
+function setLocal<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (err) {
+    console.warn(`[storage] Lỗi ghi localStorage key "${key}":`, err);
+  }
+}
+
+// ==========================================
+// 1. QUẢN LÝ NHÂN SỰ (WORKERS)
+// ==========================================
+export async function getWorkers(): Promise<Worker[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('workers')
+        .select('id, name, division, type, qr_code, image_url')
+        .order('id', { ascending: true });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: Worker[] = data.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          division: row.division,
+          type: row.type,
+          qrCode: row.qr_code || row.qrCode || row.id,
+          imageUrl: row.image_url || row.imageUrl || undefined,
+        }));
+        setLocal(STORAGE_KEYS.WORKERS, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải workers từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+}
+
+export async function saveWorker(worker: Worker): Promise<void> {
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const updated = localList.some((w) => w.id === worker.id)
+    ? localList.map((w) => (w.id === worker.id ? worker : w))
+    : [...localList, worker];
+  setLocal(STORAGE_KEYS.WORKERS, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('workers').upsert({
+        id: worker.id,
+        name: worker.name,
+        division: worker.division,
+        type: worker.type,
+        qr_code: worker.qrCode,
+        image_url: worker.imageUrl || null,
+      });
+      if (error) console.warn('[storage] Lưu worker lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu worker:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteWorker(id: string): Promise<void> {
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  setLocal(STORAGE_KEYS.WORKERS, localList.filter((w) => w.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('workers').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa worker trên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa worker:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllWorkers(workers: Worker[]): Promise<void> {
+  setLocal(STORAGE_KEYS.WORKERS, workers);
+
+  if (supabase && isSupabaseConfigured && workers.length > 0) {
+    try {
+      const rows = workers.map((w) => ({
+        id: w.id,
+        name: w.name,
+        division: w.division,
+        type: w.type,
+        qr_code: w.qrCode,
+        image_url: w.imageUrl || null,
+      }));
+      const { error } = await supabase.from('workers').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ workers lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu workers lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 2. NHẬT KÝ ĐIỂM DANH (ATTENDANCE LOGS)
+// ==========================================
+export async function getAttendanceLogs(): Promise<AttendanceRecord[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('attendance_records')
+        .select('id, worker_id, date, slot, check_in_time, check_out_time, scanned_division')
+        .order('date', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: AttendanceRecord[] = data.map((row: any) => ({
+          id: row.id,
+          workerId: row.worker_id || row.workerId,
+          date: row.date,
+          slot: row.slot || undefined,
+          checkInTime: row.check_in_time || row.checkInTime,
+          checkOutTime: row.check_out_time || row.checkOutTime || undefined,
+          scannedDivision: row.scanned_division || row.scannedDivision || undefined,
+        }));
+        setLocal(STORAGE_KEYS.ATTENDANCE, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải attendance_records từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+}
+
+export async function saveAttendanceLog(record: AttendanceRecord): Promise<void> {
+  const localList = getLocal<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+  const updated = localList.some((r) => r.id === record.id)
+    ? localList.map((r) => (r.id === record.id ? record : r))
+    : [...localList, record];
+  setLocal(STORAGE_KEYS.ATTENDANCE, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('attendance_records').upsert({
+        id: record.id,
+        worker_id: record.workerId,
+        date: record.date,
+        slot: record.slot || null,
+        check_in_time: record.checkInTime,
+        check_out_time: record.checkOutTime || null,
+        scanned_division: record.scannedDivision || null,
+      });
+      if (error) console.warn('[storage] Lưu attendance_record lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu attendance_record:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteAttendanceLog(id: string): Promise<void> {
+  const localList = getLocal<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+  setLocal(STORAGE_KEYS.ATTENDANCE, localList.filter((r) => r.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('attendance_records').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa attendance_record trên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa attendance_record:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllAttendanceLogs(logs: AttendanceRecord[]): Promise<void> {
+  setLocal(STORAGE_KEYS.ATTENDANCE, logs);
+
+  if (supabase && isSupabaseConfigured && logs.length > 0) {
+    try {
+      const rows = logs.map((record) => ({
+        id: record.id,
+        worker_id: record.workerId,
+        date: record.date,
+        slot: record.slot || null,
+        check_in_time: record.checkInTime,
+        check_out_time: record.checkOutTime || null,
+        scanned_division: record.scannedDivision || null,
+      }));
+      const { error } = await supabase.from('attendance_records').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ attendance_records lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu attendance lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 3. DANH MỤC SẢN PHẨM (PRODUCTS)
+// ==========================================
+export async function getProducts(): Promise<ProductDefinition[]> {
+  const defaultProducts = SUNHOUSE_PRODUCTS.map((p) => ({
+    ...p,
+    price: p.price === null || Number.isNaN(Number(p.price)) ? (p.group === 'MLN' ? 4500000 : 1800000) : Number(p.price),
+    factor: p.factor === null || Number.isNaN(Number(p.factor)) ? 1 : Number(p.factor),
+  }));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, group, code, factor, description, price')
+        .order('id', { ascending: true });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: ProductDefinition[] = data.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          group: row.group,
+          code: row.code,
+          factor: Number(row.factor ?? 1),
+          description: row.description || '',
+          price: row.price !== null ? Number(row.price) : undefined,
+        }));
+        setLocal(STORAGE_KEYS.PRODUCTS, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải products từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, defaultProducts);
+}
+
+export async function saveProduct(product: ProductDefinition): Promise<void> {
+  const localList = await getProducts();
+  const updated = localList.some((p) => p.id === product.id)
+    ? localList.map((p) => (p.id === product.id ? product : p))
+    : [...localList, product];
+  setLocal(STORAGE_KEYS.PRODUCTS, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('products').upsert({
+        id: product.id,
+        name: product.name,
+        group: product.group,
+        code: product.code,
+        factor: product.factor,
+        description: product.description || '',
+        price: product.price ?? null,
+      });
+      if (error) console.warn('[storage] Lưu product lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu product:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteProduct(id: string): Promise<void> {
+  const localList = await getProducts();
+  setLocal(STORAGE_KEYS.PRODUCTS, localList.filter((p) => p.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('products').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa product trên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa product:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllProducts(products: ProductDefinition[]): Promise<void> {
+  setLocal(STORAGE_KEYS.PRODUCTS, products);
+
+  if (supabase && isSupabaseConfigured && products.length > 0) {
+    try {
+      const rows = products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        group: p.group,
+        code: p.code,
+        factor: p.factor,
+        description: p.description || '',
+        price: p.price ?? null,
+      }));
+      const { error } = await supabase.from('products').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ products lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu products lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 4. NHẬT KÝ SẢN XUẤT (PRODUCTION LOGS)
+// ==========================================
+export async function getProductionLogs(): Promise<ProductionLog[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('production_logs')
+        .select(
+          'id, date, line_id, line_name, product_id, product_name, product_group, ' +
+          'actual_units, workers_count, official_workers, seasonal_workers, equivalent_factor, ' +
+          'equivalent_products, labor_productivity_percent, shift, technician_name, ' +
+          'hourly_actuals, hourly_workers, hourly_official_workers, hourly_seasonal_workers'
+        )
+        .order('date', { ascending: false })
+        .limit(100);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: ProductionLog[] = data.map((row: any) => ({
+          id: row.id,
+          date: row.date,
+          lineId: row.line_id || row.lineId,
+          lineName: row.line_name || row.lineName,
+          productId: row.product_id || row.productId,
+          productName: row.product_name || row.productName,
+          productGroup: row.product_group || row.productGroup,
+          actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
+          workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
+          officialWorkers: row.official_workers !== null ? Number(row.official_workers) : undefined,
+          seasonalWorkers: row.seasonal_workers !== null ? Number(row.seasonal_workers) : undefined,
+          equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
+          equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
+          laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
+          shift: row.shift,
+          technicianName: row.technician_name || row.technicianName || '',
+          hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
+          hourlyWorkers: row.hourly_workers || row.hourlyWorkers || {},
+          hourlyOfficialWorkers: row.hourly_official_workers || row.hourlyOfficialWorkers || {},
+          hourlySeasonalWorkers: row.hourly_seasonal_workers || row.hourlySeasonalWorkers || {},
+        }));
+        setLocal(STORAGE_KEYS.PRODUCTION_LOGS, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải production_logs từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+}
+
+export async function saveProductionLog(log: ProductionLog): Promise<void> {
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  const updated = localList.some((l) => l.id === log.id)
+    ? localList.map((l) => (l.id === log.id ? log : l))
+    : [log, ...localList];
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('production_logs').upsert({
+        id: log.id,
+        date: log.date,
+        line_id: log.lineId,
+        line_name: log.lineName,
+        product_id: log.productId,
+        product_name: log.productName,
+        product_group: log.productGroup,
+        actual_units: log.actualUnits,
+        workers_count: log.workersCount,
+        official_workers: log.officialWorkers ?? null,
+        seasonal_workers: log.seasonalWorkers ?? null,
+        equivalent_factor: log.equivalentFactor,
+        equivalent_products: log.equivalentProducts,
+        labor_productivity_percent: log.laborProductivityPercent,
+        shift: log.shift,
+        technician_name: log.technicianName,
+        hourly_actuals: log.hourlyActuals || {},
+        hourly_workers: log.hourlyWorkers || {},
+        hourly_official_workers: log.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
+      });
+      if (error) console.warn('[storage] Lưu production_log lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu production_log:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteProductionLog(id: string): Promise<void> {
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, localList.filter((l) => l.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('production_logs').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa production_log trên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa production_log:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void> {
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, logs);
+
+  if (supabase && isSupabaseConfigured && logs.length > 0) {
+    try {
+      const rows = logs.map((log) => ({
+        id: log.id,
+        date: log.date,
+        line_id: log.lineId,
+        line_name: log.lineName,
+        product_id: log.productId,
+        product_name: log.productName,
+        product_group: log.productGroup,
+        actual_units: log.actualUnits,
+        workers_count: log.workersCount,
+        official_workers: log.officialWorkers ?? null,
+        seasonal_workers: log.seasonalWorkers ?? null,
+        equivalent_factor: log.equivalentFactor,
+        equivalent_products: log.equivalentProducts,
+        labor_productivity_percent: log.laborProductivityPercent,
+        shift: log.shift,
+        technician_name: log.technicianName,
+        hourly_actuals: log.hourlyActuals || {},
+        hourly_workers: log.hourlyWorkers || {},
+        hourly_official_workers: log.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
+      }));
+      const { error } = await supabase.from('production_logs').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ production_logs lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu production_logs lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 5. KẾ HOẠCH THÁNG (MONTHLY PLAN)
+// ==========================================
+export type MonthlyPlanData = {
+  [yearMonth: string]: { [productId: string]: { [day: number]: number } };
+};
+
+export async function getMonthlyPlan(): Promise<MonthlyPlanData> {
+  const today = new Date();
+  const currentYearMonthStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
+  const initial: MonthlyPlanData = { [currentYearMonthStr]: {} };
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('monthly_plan')
+        .select('id, plan_data')
+        .eq('id', 'default_plan')
+        .single();
+
+      if (!error && data && data.plan_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_PLAN, data.plan_data);
+        return data.plan_data as MonthlyPlanData;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_plan từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<MonthlyPlanData>(STORAGE_KEYS.MONTHLY_PLAN, initial);
+}
+
+export async function saveMonthlyPlan(plan: MonthlyPlanData): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_PLAN, plan);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('monthly_plan').upsert({
+        id: 'default_plan',
+        plan_data: plan,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_plan lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_plan:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 6. MỤC TIÊU NSLĐ THÁNG (MONTHLY TARGETS)
+// ==========================================
+export async function getMonthlyTargets(): Promise<Record<string, number>> {
+  const defaults: Record<string, number> = {};
+  for (const y of [2025, 2026]) {
+    for (let m = 1; m <= 12; m++) {
+      defaults[`${y}-${m}`] = 110;
+    }
+  }
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('monthly_targets')
+        .select('id, targets_data')
+        .eq('id', 'default_targets')
+        .single();
+
+      if (!error && data && data.targets_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_TARGETS, data.targets_data);
+        return data.targets_data as Record<string, number>;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_targets từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<Record<string, number>>(STORAGE_KEYS.MONTHLY_TARGETS, defaults);
+}
+
+export async function saveMonthlyTargets(targets: Record<string, number>): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_TARGETS, targets);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('monthly_targets').upsert({
+        id: 'default_targets',
+        targets_data: targets,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_targets lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_targets:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 7. SỐ LIỆU LỊCH SỬ THÁNG (METRICS 2025 / 2026)
+// ==========================================
+export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetric[]> {
+  const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
+  const initial = year === 2025 ? HISTORICAL_2025 : HISTORICAL_2026;
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('monthly_metrics')
+        .select('id, year, metrics_data')
+        .eq('id', `metrics_${year}`)
+        .single();
+
+      if (!error && data && data.metrics_data) {
+        setLocal(key, data.metrics_data);
+        return data.metrics_data as MonthlyMetric[];
+      }
+    } catch (err) {
+      console.warn(`[storage] Không thể tải metrics ${year} từ Supabase, dùng local fallback:`, err);
+    }
+  }
+  return getLocal<MonthlyMetric[]>(key, initial);
+}
+
+export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetric[]): Promise<void> {
+  const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
+  setLocal(key, metrics);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('monthly_metrics').upsert({
+        id: `metrics_${year}`,
+        year: year,
+        metrics_data: metrics,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn(`[storage] Lưu metrics ${year} lên Supabase:`, error.message || error);
+    } catch (err: any) {
+      console.warn(`[storage] Trạng thái kết nối khi lưu metrics ${year}:`, err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 8. BÁO CÁO HÀNG NGÀY CHI TIẾT (GAS & ASSEMBLY)
+// ==========================================
+export async function getGasDailyReports(): Promise<DailyReportRowGas[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('id, report_type, report_data')
+        .eq('id', 'gas_daily_reports')
+        .single();
+
+      if (!error && data && data.report_data) {
+        setLocal(STORAGE_KEYS.GAS_DAILY, data.report_data);
+        return data.report_data as DailyReportRowGas[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải gas_daily_reports từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<DailyReportRowGas[]>(STORAGE_KEYS.GAS_DAILY, INITIAL_GAS_DAILY_REPORTS);
+}
+
+export async function saveGasDailyReports(reports: DailyReportRowGas[]): Promise<void> {
+  setLocal(STORAGE_KEYS.GAS_DAILY, reports);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'gas_daily_reports',
+        report_type: 'gas',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu gas_daily_reports lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu gas_daily_reports:', err?.message || err);
+    }
+  }
+}
+
+export async function getAssemblyDailyReports(): Promise<DailyReportRowAssembly[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('id, report_type, report_data')
+        .eq('id', 'assembly_daily_reports')
+        .single();
+
+      if (!error && data && data.report_data) {
+        setLocal(STORAGE_KEYS.ASSEMBLY_DAILY, data.report_data);
+        return data.report_data as DailyReportRowAssembly[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải assembly_daily_reports từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<DailyReportRowAssembly[]>(STORAGE_KEYS.ASSEMBLY_DAILY, INITIAL_ASSEMBLY_DAILY_REPORTS);
+}
+
+export async function saveAssemblyDailyReports(reports: DailyReportRowAssembly[]): Promise<void> {
+  setLocal(STORAGE_KEYS.ASSEMBLY_DAILY, reports);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'assembly_daily_reports',
+        report_type: 'assembly',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu assembly_daily_reports lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu assembly_daily_reports:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 9. QUẢN LÝ IMEI, GIAO DỊCH & CHẤT LƯỢNG (TRANSACTIONS, LABELS, INVENTORY)
+// ==========================================
+export async function getDeclaredImeis(): Promise<any[]> {
+  return getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
+}
+
+export async function saveDeclaredImeis(records: any[]): Promise<void> {
+  setLocal(STORAGE_KEYS.DECLARED_IMEIS, records);
+}
+
+export async function getScannedImeis(): Promise<any[]> {
+  return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+}
+
+export async function saveScannedImeis(records: any[]): Promise<void> {
+  setLocal(STORAGE_KEYS.SCANNED_IMEIS, records);
+}
+
+// Bảng nhật ký giao dịch (Transactions) - Giới hạn 100 bản ghi mới nhất để tiết kiệm tối đa Egress
+export async function getTransactions(limit: number = 100): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('id, type, amount, status, reference_id, created_at, metadata')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải transactions:', err);
+    }
+  }
+  return [];
+}
+
+// Bảng nhật ký nhãn/tem (Labels) - Giới hạn 100 bản ghi mới nhất để tiết kiệm tối đa Egress
+export async function getLabels(limit: number = 100): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('labels')
+        .select('id, imei, product_id, status, print_date, batch_number')
+        .order('print_date', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải labels:', err);
+    }
+  }
+  return [];
+}
+
+// Bảng tồn kho (Inventory) - Chỉ chọn các cột cần thiết
+export async function getInventory(): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('inventory')
+        .select('id, product_id, quantity, warehouse, updated_at')
+        .order('updated_at', { ascending: false });
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải inventory:', err);
+    }
+  }
+  return [];
+}
+
+// Bảng lệnh sản xuất (Production Orders) - Giới hạn 100 bản ghi gần nhất
+export async function getProductionOrders(limit: number = 100): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('production_orders')
+        .select('id, order_code, product_id, target_quantity, status, start_date, end_date')
+        .order('start_date', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải production_orders:', err);
+    }
+  }
+  return [];
+}
+
+// ==========================================
+// 10. REALTIME SUBSCRIPTION (LẮNG NGHE THAY ĐỔI TỐI ƯU)
+// ==========================================
+export interface RealtimeCallbacks {
+  // Các bảng dữ liệu biến động liên tục (ưu tiên hàng đầu)
+  onProductionLogsChange?: (payload: any) => void;
+  onAttendanceChange?: (payload: any) => void;
+  onTransactionsChange?: (payload: any) => void;
+  onInventoryChange?: (payload: any) => void;
+  onProductionOrdersChange?: (payload: any) => void;
+
+  // Các bảng danh mục (chỉ kích hoạt lắng nghe khi có callback truyền vào)
+  onWorkersChange?: (payload: any) => void;
+  onProductsChange?: (payload: any) => void;
+  onMonthlyPlanChange?: (payload: any) => void;
+}
+
+/**
+ * Đăng ký lắng nghe Realtime tối ưu băng thông (Egress) và Connection Quota:
+ * - Chỉ tạo event listener cho đúng các bảng có callback thực tế.
+ * - Cung cấp hàm cleanup (unsubscribe) đảm bảo không bị trùng lặp kết nối khi component re-render.
+ */
+export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
+  if (!supabase || !isSupabaseConfigured) {
+    return () => {};
+  }
+
+  try {
+    const channelName = `sunhouse_realtime_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    let channel = supabase.channel(channelName);
+
+    // 1. Lắng nghe các bảng biến động liên tục
+    if (callbacks.onProductionLogsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'production_logs' },
+        (payload) => {
+          callbacks.onProductionLogsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onAttendanceChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance_records' },
+        (payload) => {
+          callbacks.onAttendanceChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onTransactionsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'transactions' },
+        (payload) => {
+          callbacks.onTransactionsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onInventoryChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inventory' },
+        (payload) => {
+          callbacks.onInventoryChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onProductionOrdersChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'production_orders' },
+        (payload) => {
+          callbacks.onProductionOrdersChange?.(payload);
+        }
+      );
+    }
+
+    // 2. Chỉ lắng nghe các bảng cấu hình / danh mục khi thực sự có yêu cầu
+    if (callbacks.onWorkersChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'workers' },
+        (payload) => {
+          callbacks.onWorkersChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onProductsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        (payload) => {
+          callbacks.onProductsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onMonthlyPlanChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'monthly_plan' },
+        (payload) => {
+          callbacks.onMonthlyPlanChange?.(payload);
+        }
+      );
+    }
+
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Kênh đồng bộ thời gian thực đã sẵn sàng');
+      }
+    });
+
+    // Cleanup function để hủy kết nối channel khi unmount
+    return () => {
+      try {
+        supabase?.removeChannel(channel);
+      } catch (err) {
+        console.warn('[Realtime] Lỗi dọn dẹp kênh kết nối:', err);
+      }
+    };
+  } catch (err) {
+    console.warn('[Realtime] Không thể kết nối kênh Realtime:', err);
+    return () => {};
+  }
+}
