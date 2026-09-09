@@ -68,7 +68,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear());
+  const [selectedYear, setSelectedYear] = useState<number>(2026);
   const [selectedMonth, setSelectedMonth] = useState<number>(new Date().getMonth() + 1);
   const [laborViewMode, setLaborViewMode] = useState<"daily" | "weekly" | "monthly" | "yearly">("daily");
   const [filterDivision, setFilterDivision] = useState<ProductGroup | "ALL">("ALL");
@@ -87,7 +87,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   const [dashboardSubTab, setDashboardSubTab] = useState<"standard" | "scrap-quality" | "charts">("standard");
   const [scrapQualityMonth, setScrapQualityMonth] = useState<number>(new Date().getMonth() + 1);
   const [chartTimeDimension, setChartTimeDimension] = useState<"daily" | "weekly" | "monthly" | "yearly">("monthly");
-  const [historyYear, setHistoryYear] = useState<2025 | 2026>(2025);
+  const [historyYear, setHistoryYear] = useState<2025 | 2026>(2026);
   const [focusedField, setFocusedField] = useState<{ month: number; year: number; field: string } | null>(null);
   const [executionFilterType, setExecutionFilterType] = useState<"MONTH" | "WEEK" | "DAY">("MONTH");
   const [executionFilterWeek, setExecutionFilterWeek] = useState<number>(1);
@@ -1263,28 +1263,38 @@ const [isScrolled, setIsScrolled] = useState(false);
 
       // (3) Bảng production_logs: Cập nhật state trực tiếp
       onProductionLogsChange: (payload) => {
-        const mapPayloadToProductionLog = (row: any): ProductionLog => ({
-          id: String(row.id || ''),
-          date: String(row.date || ''),
-          lineId: String(row.line_id || row.lineId || ''),
-          lineName: String(row.line_name || row.lineName || ''),
-          productId: String(row.product_id || row.productId || ''),
-          productName: String(row.product_name || row.productName || ''),
-          productGroup: (row.product_group || row.productGroup || 'MLN') as ProductGroup,
-          actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
-          workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
-          officialWorkers: row.official_workers !== null && row.official_workers !== undefined ? Number(row.official_workers) : undefined,
-          seasonalWorkers: row.seasonal_workers !== null && row.seasonal_workers !== undefined ? Number(row.seasonal_workers) : undefined,
-          equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
-          equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
-          laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
-          shift: (row.shift || 'Ca HC (08:00 - 17:00)') as ProductionLog['shift'],
-          technicianName: String(row.technician_name || row.technicianName || ''),
-          hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
-          hourlyWorkers: row.hourly_workers || row.hourlyWorkers || {},
-          hourlyOfficialWorkers: row.hourly_official_workers || row.hourlyOfficialWorkers || {},
-          hourlySeasonalWorkers: row.hourly_seasonal_workers || row.hourlySeasonalWorkers || {},
-        });
+        const mapPayloadToProductionLog = (row: any): ProductionLog => {
+          const hw = row.hourly_workers || row.hourlyWorkers || {};
+          let official = row.hourly_official_workers || row.hourlyOfficialWorkers || hw["__official"];
+          let seasonal = row.hourly_seasonal_workers || row.hourlySeasonalWorkers || hw["__seasonal"];
+          
+          const cleanedHw = { ...hw };
+          delete cleanedHw["__official"];
+          delete cleanedHw["__seasonal"];
+
+          return {
+            id: String(row.id || ''),
+            date: String(row.date || ''),
+            lineId: String(row.line_id || row.lineId || ''),
+            lineName: String(row.line_name || row.lineName || ''),
+            productId: String(row.product_id || row.productId || ''),
+            productName: String(row.product_name || row.productName || ''),
+            productGroup: (row.product_group || row.productGroup || 'MLN') as ProductGroup,
+            actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
+            workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
+            officialWorkers: row.official_workers !== null && row.official_workers !== undefined ? Number(row.official_workers) : undefined,
+            seasonalWorkers: row.seasonal_workers !== null && row.seasonal_workers !== undefined ? Number(row.seasonal_workers) : undefined,
+            equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
+            equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
+            laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
+            shift: (row.shift || 'Ca HC (08:00 - 17:00)') as ProductionLog['shift'],
+            technicianName: String(row.technician_name || row.technicianName || ''),
+            hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
+            hourlyWorkers: cleanedHw,
+            hourlyOfficialWorkers: official || {},
+            hourlySeasonalWorkers: seasonal || {},
+          };
+        };
 
         if (payload.eventType === 'INSERT' && payload.new) {
           const newLog = mapPayloadToProductionLog(payload.new);
@@ -3299,7 +3309,18 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [formSlots, formModelItems, products, formOfficialWorkersRO, formSeasonalWorkersRO, formOfficialWorkersRMA, formSeasonalWorkersRMA, formOfficialWorkersBG, formSeasonalWorkersBG]);
 
   // --- EVENT HANDLERS ---
-  const autoSyncAttendanceToForm = (targetDate: string) => {
+  const autoSyncAttendanceToForm = (targetDate: string, force = false) => {
+    // 1. Dữ liệu cũ đã lưu: Tuyệt đối KHÔNG tự động thay đổi/ghi đè nếu là ngày cũ trong quá khứ đã có nhật ký,
+    // trừ khi người dùng chủ động nhấn nút "Đồng bộ từ điểm danh" (force = true)
+    const today = new Date();
+    const todayStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, '0') + "-" + String(today.getDate()).padStart(2, '0');
+    const isPastDate = targetDate < todayStr;
+    const hasSavedLogs = productionLogs.some(log => log.date === targetDate);
+
+    if (isPastDate && hasSavedLogs && !force) {
+      return;
+    }
+
     const dateLogs = attendanceLogs.filter(a => a.date === targetDate);
     if (dateLogs.length === 0) return;
 
@@ -3322,7 +3343,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const slotStartHours: Record<string, number> = {
       "8H - 9H": 8, "9H - 10H": 9, "10H - 11H": 10, "11H - 12H": 11,
       "13H - 14H": 13, "14H - 15H": 14, "15H - 16H": 15, "16H - 17H": 16,
-      "17H - 18H": 17, "18H - 19H": 18
+      "17H - 18H": 17, "18H - 19H": 18, "19H - 20H": 19, "20H - 21H": 20
     };
 
     // Nhóm logs theo workerId để xử lý chính xác 1 nhân sự / 1 slot
@@ -3339,7 +3360,11 @@ const [isScrolled, setIsScrolled] = useState(false);
       const wLogs = logsByWorker[workerId];
 
       formSlots.forEach(slot => {
-        const slotStart = slotStartHours[slot];
+        let slotStart = slotStartHours[slot];
+        if (slotStart === undefined) {
+          const match = slot.match(/^(\d+)H/i);
+          if (match) slotStart = parseInt(match[1], 10);
+        }
         if (slotStart === undefined) return;
         const slotEnd = slotStart + 1;
 
@@ -3347,13 +3372,15 @@ const [isScrolled, setIsScrolled] = useState(false);
         let durationRO = 0;
         let durationBG = 0;
         let durationRMA = 0;
+        let activeInSlot = false;
 
         wLogs.forEach(log => {
           const checkInDate = new Date(log.checkInTime);
           const checkinDecimal = checkInDate.getHours() + (checkInDate.getMinutes() / 60);
           const checkOutDate = log.checkOutTime ? new Date(log.checkOutTime) : null;
+          // Nếu chưa check-out, xem như nhân sự vẫn đang làm việc suốt ca (24h)
           const checkoutDecimal = checkOutDate ? checkOutDate.getHours() + (checkOutDate.getMinutes() / 60) : 24;
-          const actualDivision = log.scannedDivision || w.division;
+          const actualDivision = log.scannedDivision || w.division || 'RO';
 
           const overlapStart = Math.max(slotStart, checkinDecimal);
           const overlapEnd = Math.min(slotEnd, checkoutDecimal);
@@ -3364,10 +3391,15 @@ const [isScrolled, setIsScrolled] = useState(false);
             else if (actualDivision === 'BG') durationBG += workDuration;
             else if (actualDivision === 'RMA') durationRMA += workDuration;
           }
+
+          // Kiểm tra xem nhân sự có mặt trong slot này không
+          if (checkinDecimal < slotEnd && checkoutDecimal > slotStart) {
+            activeInSlot = true;
+          }
         });
 
         // Tìm bộ phận mà worker dành nhiều thời gian nhất trong slot này
-        let majorityDivision = 'RO';
+        let majorityDivision: WorkerDivision = 'RO';
         let maxDuration = durationRO;
 
         if (durationBG > maxDuration) {
@@ -3379,18 +3411,36 @@ const [isScrolled, setIsScrolled] = useState(false);
           maxDuration = durationRMA;
         }
 
-        // Yêu cầu: Phải làm đủ 1h thì mới tính nhân sự cho khung giờ đó
-        // (Sử dụng >= 0.95 để cho phép sai số check-in muộn / check-out sớm khoảng 3 phút)
-        if (maxDuration >= 0.95) {
+        if (maxDuration === 0 && activeInSlot) {
+          const latestLog = wLogs[wLogs.length - 1];
+          majorityDivision = (latestLog?.scannedDivision || w.division || 'RO') as WorkerDivision;
+        }
+
+        // Quy tắc tính công:
+        // - Làm từ 20 phút trở lên trong khung giờ (>= 0.33)
+        // - HOẶC có mặt trong slot và chưa check out
+        const shouldCount = maxDuration >= 0.33 || (activeInSlot && (!wLogs[wLogs.length - 1].checkOutTime || maxDuration > 0));
+
+        if (shouldCount) {
+          // Quy tắc phân loại loại nhân sự:
+          // 1. NS chính thức (OFFICIAL) -> Tính vào NS chính thức
+          // 2. NS thử việc (PROBATION) -> VẪN TÍNH LÀ NS CHÍNH THỨC theo yêu cầu
+          // 3. NS thời vụ (SEASONAL) -> Tính vào NS thời vụ
+          const isOfficialOrProbation = w.type === 'OFFICIAL' || w.type === 'PROBATION';
+          const isSeasonal = w.type === 'SEASONAL';
+
           if (majorityDivision === 'RO') {
-            if (w.type === 'OFFICIAL') newOffRO[slot] += 1;
-            if (w.type === 'SEASONAL') newSeasRO[slot] += 1;
+            if (isOfficialOrProbation) newOffRO[slot] = (newOffRO[slot] || 0) + 1;
+            else if (isSeasonal) newSeasRO[slot] = (newSeasRO[slot] || 0) + 1;
+            else newOffRO[slot] = (newOffRO[slot] || 0) + 1;
           } else if (majorityDivision === 'BG') {
-            if (w.type === 'OFFICIAL') newOffBG[slot] += 1;
-            if (w.type === 'SEASONAL') newSeasBG[slot] += 1;
+            if (isOfficialOrProbation) newOffBG[slot] = (newOffBG[slot] || 0) + 1;
+            else if (isSeasonal) newSeasBG[slot] = (newSeasBG[slot] || 0) + 1;
+            else newOffBG[slot] = (newOffBG[slot] || 0) + 1;
           } else if (majorityDivision === 'RMA') {
-            if (w.type === 'OFFICIAL') newOffRMA[slot] += 1;
-            if (w.type === 'SEASONAL') newSeasRMA[slot] += 1;
+            if (isOfficialOrProbation) newOffRMA[slot] = (newOffRMA[slot] || 0) + 1;
+            else if (isSeasonal) newSeasRMA[slot] = (newSeasRMA[slot] || 0) + 1;
+            else newOffRMA[slot] = (newOffRMA[slot] || 0) + 1;
           }
         }
       });
@@ -3417,8 +3467,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       alert("Không có dữ liệu điểm danh nào cho ngày " + formDate);
       return;
     }
-    autoSyncAttendanceToForm(formDate);
-    alert(`Đã đồng bộ ${dateLogs.length} lượt điểm danh thành công!`);
+    autoSyncAttendanceToForm(formDate, true);
+    alert(`Đã đồng bộ ${dateLogs.length} lượt điểm danh vào bảng ghi nhật ký ca ngày ${formDate}!`);
   };
 
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3624,33 +3674,44 @@ const [isScrolled, setIsScrolled] = useState(false);
       const isMLN = log.lineId === "line-mln-01";
       const isBG = log.lineId === "line-bg-02";
 
+      const synthesizeWorkers = (log: ProductionLog) => {
+        let official = log.hourlyOfficialWorkers || {};
+        let seasonal = log.hourlySeasonalWorkers || {};
+        
+        // If no official/seasonal breakdown but we have hourlyWorkers (old records)
+        if (Object.keys(official).length === 0 && Object.keys(seasonal).length === 0 && log.hourlyWorkers && Object.keys(log.hourlyWorkers).length > 0) {
+          const totalOff = log.officialWorkers || 0;
+          const totalSeas = log.seasonalWorkers || 0;
+          const total = totalOff + totalSeas;
+          
+          if (total > 0) {
+            const offRatio = totalOff / total;
+            const seasRatio = totalSeas / total;
+            
+            Object.keys(log.hourlyWorkers).forEach(slot => {
+              const hw = log.hourlyWorkers[slot];
+              official[slot] = Number((hw * offRatio).toFixed(3));
+              seasonal[slot] = Number((hw * seasRatio).toFixed(3));
+            });
+          } else {
+            official = { ...log.hourlyWorkers }; // fallback to all official
+          }
+        }
+        return { official, seasonal };
+      };
+
       if (isRMA) {
-        if (log.hourlyOfficialWorkers) {
-          setFormOfficialWorkersRMA(prev => ({ ...prev, ...log.hourlyOfficialWorkers }));
-        } else if (log.hourlyWorkers) {
-          setFormOfficialWorkersRMA(prev => ({ ...prev, ...log.hourlyWorkers }));
-        }
-        if (log.hourlySeasonalWorkers) {
-          setFormSeasonalWorkersRMA(prev => ({ ...prev, ...log.hourlySeasonalWorkers }));
-        }
+        const { official, seasonal } = synthesizeWorkers(log);
+        setFormOfficialWorkersRMA(prev => ({ ...prev, ...official }));
+        setFormSeasonalWorkersRMA(prev => ({ ...prev, ...seasonal }));
       } else if (isMLN) {
-        if (log.hourlyOfficialWorkers) {
-          setFormOfficialWorkersRO(prev => ({ ...prev, ...log.hourlyOfficialWorkers }));
-        } else if (log.hourlyWorkers) {
-          setFormOfficialWorkersRO(prev => ({ ...prev, ...log.hourlyWorkers }));
-        }
-        if (log.hourlySeasonalWorkers) {
-          setFormSeasonalWorkersRO(prev => ({ ...prev, ...log.hourlySeasonalWorkers }));
-        }
+        const { official, seasonal } = synthesizeWorkers(log);
+        setFormOfficialWorkersRO(prev => ({ ...prev, ...official }));
+        setFormSeasonalWorkersRO(prev => ({ ...prev, ...seasonal }));
       } else if (isBG) {
-        if (log.hourlyOfficialWorkers) {
-          setFormOfficialWorkersBG(prev => ({ ...prev, ...log.hourlyOfficialWorkers }));
-        } else if (log.hourlyWorkers) {
-          setFormOfficialWorkersBG(prev => ({ ...prev, ...log.hourlyWorkers }));
-        }
-        if (log.hourlySeasonalWorkers) {
-          setFormSeasonalWorkersBG(prev => ({ ...prev, ...log.hourlySeasonalWorkers }));
-        }
+        const { official, seasonal } = synthesizeWorkers(log);
+        setFormOfficialWorkersBG(prev => ({ ...prev, ...official }));
+        setFormSeasonalWorkersBG(prev => ({ ...prev, ...seasonal }));
       }
     });
 

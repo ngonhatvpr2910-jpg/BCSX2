@@ -466,28 +466,38 @@ export async function getProductionLogs(): Promise<ProductionLog[]> {
       if (error) throw error;
 
       if (data && data.length > 0) {
-        const mapped: ProductionLog[] = data.map((row: any) => ({
-          id: row.id,
-          date: row.date,
-          lineId: row.line_id || row.lineId,
-          lineName: row.line_name || row.lineName,
-          productId: row.product_id || row.productId,
-          productName: row.product_name || row.productName,
-          productGroup: row.product_group || row.productGroup,
-          actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
-          workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
-          officialWorkers: row.official_workers !== null ? Number(row.official_workers) : undefined,
-          seasonalWorkers: row.seasonal_workers !== null ? Number(row.seasonal_workers) : undefined,
-          equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
-          equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
-          laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
-          shift: row.shift,
-          technicianName: row.technician_name || row.technicianName || '',
-          hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
-          hourlyWorkers: row.hourly_workers || row.hourlyWorkers || {},
-          hourlyOfficialWorkers: row.hourly_official_workers || row.hourlyOfficialWorkers || {},
-          hourlySeasonalWorkers: row.hourly_seasonal_workers || row.hourlySeasonalWorkers || {},
-        }));
+        const mapped: ProductionLog[] = data.map((row: any) => {
+          const hw = row.hourly_workers || row.hourlyWorkers || {};
+          let official = row.hourly_official_workers || row.hourlyOfficialWorkers || hw["__official"];
+          let seasonal = row.hourly_seasonal_workers || row.hourlySeasonalWorkers || hw["__seasonal"];
+          
+          const cleanedHw = { ...hw };
+          delete cleanedHw["__official"];
+          delete cleanedHw["__seasonal"];
+
+          return {
+            id: row.id,
+            date: row.date,
+            lineId: row.line_id || row.lineId,
+            lineName: row.line_name || row.lineName,
+            productId: row.product_id || row.productId,
+            productName: row.product_name || row.productName,
+            productGroup: row.product_group || row.productGroup,
+            actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
+            workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
+            officialWorkers: row.official_workers !== null ? Number(row.official_workers) : undefined,
+            seasonalWorkers: row.seasonal_workers !== null ? Number(row.seasonal_workers) : undefined,
+            equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
+            equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
+            laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
+            shift: row.shift,
+            technicianName: row.technician_name || row.technicianName || '',
+            hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
+            hourlyWorkers: cleanedHw,
+            hourlyOfficialWorkers: official || {},
+            hourlySeasonalWorkers: seasonal || {},
+          };
+        });
         setLocal(STORAGE_KEYS.PRODUCTION_LOGS, mapped);
         return mapped;
       }
@@ -525,7 +535,7 @@ export async function saveProductionLog(log: ProductionLog): Promise<void> {
         shift: log.shift,
         technician_name: log.technicianName,
         hourly_actuals: log.hourlyActuals || {},
-        hourly_workers: log.hourlyWorkers || {},
+        hourly_workers: { ...(log.hourlyWorkers || {}), "__official": log.hourlyOfficialWorkers || {}, "__seasonal": log.hourlySeasonalWorkers || {} },
         hourly_official_workers: log.hourlyOfficialWorkers || {},
         hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
       });
@@ -577,7 +587,7 @@ export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void>
         shift: log.shift,
         technician_name: log.technicianName,
         hourly_actuals: log.hourlyActuals || {},
-        hourly_workers: log.hourlyWorkers || {},
+        hourly_workers: { ...(log.hourlyWorkers || {}), "__official": log.hourlyOfficialWorkers || {}, "__seasonal": log.hourlySeasonalWorkers || {} },
         hourly_official_workers: log.hourlyOfficialWorkers || {},
         hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
       }));
@@ -612,7 +622,7 @@ export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void
         shift: log.shift,
         technician_name: log.technicianName,
         hourly_actuals: log.hourlyActuals || {},
-        hourly_workers: log.hourlyWorkers || {},
+        hourly_workers: { ...(log.hourlyWorkers || {}), "__official": log.hourlyOfficialWorkers || {}, "__seasonal": log.hourlySeasonalWorkers || {} },
         hourly_official_workers: log.hourlyOfficialWorkers || {},
         hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
       }));
