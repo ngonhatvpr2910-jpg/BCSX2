@@ -1,6 +1,8 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import {
   Worker,
+  WorkerDivision,
+  WorkerType,
   AttendanceRecord,
   ProductDefinition,
   ProductionLog,
@@ -76,20 +78,29 @@ function setLocal<T>(key: string, data: T): void {
 export async function getWorkers(): Promise<Worker[]> {
   if (supabase && isSupabaseConfigured) {
     try {
-      const { data, error } = await supabase
+      // Tối ưu Egress: Chỉ select đúng các cột cần hiển thị trên bảng, tuyệt đối KHÔNG dùng '*'
+      let res: any = await supabase
         .from('workers')
         .select('id, name, division, type, qr_code, image_url')
         .order('id', { ascending: true });
 
-      if (error) throw error;
+      // Hỗ trợ trường hợp bảng dùng tên cột biến thể (worker_code, full_name, department, status)
+      if (res.error && res.error.message?.includes('does not exist')) {
+        res = await supabase
+          .from('workers')
+          .select('id, worker_code, full_name, department, status')
+          .order('id', { ascending: true });
+      }
 
-      if (data && data.length > 0) {
-        const mapped: Worker[] = data.map((row: any) => ({
-          id: row.id,
-          name: row.name,
-          division: row.division,
-          type: row.type,
-          qrCode: row.qr_code || row.qrCode || row.id,
+      if (res.error) throw res.error;
+
+      if (res.data) {
+        const mapped: Worker[] = res.data.map((row: any) => ({
+          id: String(row.id || row.worker_code || ''),
+          name: String(row.name || row.full_name || ''),
+          division: (row.division || row.department || 'RO') as WorkerDivision,
+          type: (row.type || row.status || 'OFFICIAL') as WorkerType,
+          qrCode: String(row.qr_code || row.worker_code || row.id || ''),
           imageUrl: row.image_url || row.imageUrl || undefined,
         }));
         setLocal(STORAGE_KEYS.WORKERS, mapped);
@@ -102,40 +113,93 @@ export async function getWorkers(): Promise<Worker[]> {
   return getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
 }
 
-export async function saveWorker(worker: Worker): Promise<void> {
-  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
-  const updated = localList.some((w) => w.id === worker.id)
-    ? localList.map((w) => (w.id === worker.id ? worker : w))
-    : [...localList, worker];
-  setLocal(STORAGE_KEYS.WORKERS, updated);
+export const fetchWorkers = getWorkers;
 
+export async function insertWorker(worker: Worker): Promise<void> {
+  // Gọi trực tiếp lên Supabase trước
   if (supabase && isSupabaseConfigured) {
-    try {
-      const { error } = await supabase.from('workers').upsert({
+    const { error } = await supabase.from('workers').insert([
+      {
         id: worker.id,
         name: worker.name,
         division: worker.division,
         type: worker.type,
         qr_code: worker.qrCode,
         image_url: worker.imageUrl || null,
-      });
-      if (error) console.warn('[storage] Lưu worker lên Supabase:', error.message || error);
-    } catch (err: any) {
-      console.warn('[storage] Trạng thái kết nối khi lưu worker:', err?.message || err);
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    if (error) {
+      console.warn('[storage] Lỗi thêm mới worker lên Supabase:', error.message || error);
+      throw error;
     }
   }
+
+  // Chỉ cập nhật Local Storage sau khi Supabase trả về kết quả thành công
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const updated = [worker, ...localList.filter((w) => w.id !== worker.id)];
+  setLocal(STORAGE_KEYS.WORKERS, updated);
+}
+
+export async function updateWorker(id: string, updatedData: Partial<Worker>): Promise<void> {
+  // Gọi trực tiếp update lên Supabase trước
+  if (supabase && isSupabaseConfigured) {
+    const payload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (updatedData.name !== undefined) payload.name = updatedData.name;
+    if (updatedData.division !== undefined) payload.division = updatedData.division;
+    if (updatedData.type !== undefined) payload.type = updatedData.type;
+    if (updatedData.qrCode !== undefined) payload.qr_code = updatedData.qrCode;
+    if (updatedData.imageUrl !== undefined) payload.image_url = updatedData.imageUrl || null;
+    if (updatedData.id !== undefined && updatedData.id !== id) payload.id = updatedData.id;
+
+    const { error } = await supabase.from('workers').update(payload).eq('id', id);
+    if (error) {
+      console.warn('[storage] Lỗi cập nhật worker trên Supabase:', error.message || error);
+      throw error;
+    }
+  }
+
+  // Chỉ cập nhật Local Storage sau khi Supabase trả về kết quả thành công
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const updated = localList.map((w) => (w.id === id ? { ...w, ...updatedData } : w));
+  setLocal(STORAGE_KEYS.WORKERS, updated);
 }
 
 export async function deleteWorker(id: string): Promise<void> {
+  // Gọi trực tiếp xóa trên Supabase trước
+  if (supabase && isSupabaseConfigured) {
+    const { error } = await supabase.from('workers').delete().eq('id', id);
+    if (error) {
+      console.warn('[storage] Lỗi xóa worker trên Supabase:', error.message || error);
+      throw error;
+    }
+  }
+
+  // Chỉ cập nhật Local Storage sau khi Supabase trả về kết quả thành công
   const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
   setLocal(STORAGE_KEYS.WORKERS, localList.filter((w) => w.id !== id));
+}
+
+export async function saveWorker(worker: Worker): Promise<void> {
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const exists = localList.some((w) => w.id === worker.id);
+  const updated = exists
+    ? localList.map((w) => (w.id === worker.id ? worker : w))
+    : [...localList, worker];
+  setLocal(STORAGE_KEYS.WORKERS, updated);
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const { error } = await supabase.from('workers').delete().eq('id', id);
-      if (error) console.warn('[storage] Xóa worker trên Supabase:', error.message || error);
+      if (exists) {
+        await updateWorker(worker.id, worker);
+      } else {
+        await insertWorker(worker);
+      }
     } catch (err: any) {
-      console.warn('[storage] Trạng thái kết nối khi xóa worker:', err?.message || err);
+      console.warn('[storage] Trạng thái kết nối khi lưu worker:', err?.message || err);
     }
   }
 }
@@ -296,7 +360,7 @@ export async function getProducts(): Promise<ProductDefinition[]> {
 }
 
 export async function saveProduct(product: ProductDefinition): Promise<void> {
-  const localList = await getProducts();
+  const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
   const updated = localList.some((p) => p.id === product.id)
     ? localList.map((p) => (p.id === product.id ? product : p))
     : [...localList, product];
@@ -321,7 +385,7 @@ export async function saveProduct(product: ProductDefinition): Promise<void> {
 }
 
 export async function deleteProduct(id: string): Promise<void> {
-  const localList = await getProducts();
+  const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
   setLocal(STORAGE_KEYS.PRODUCTS, localList.filter((p) => p.id !== id));
 
   if (supabase && isSupabaseConfigured) {
@@ -330,6 +394,32 @@ export async function deleteProduct(id: string): Promise<void> {
       if (error) console.warn('[storage] Xóa product trên Supabase:', error.message || error);
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi xóa product:', err?.message || err);
+    }
+  }
+}
+
+export async function upsertProducts(products: ProductDefinition[]): Promise<void> {
+  if (!products || products.length === 0) return;
+  const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
+  const prodMap = new Map<string, ProductDefinition>(localList.map((p) => [p.id, p]));
+  products.forEach((p) => prodMap.set(p.id, p));
+  setLocal(STORAGE_KEYS.PRODUCTS, Array.from(prodMap.values()));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const rows = products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        group: p.group,
+        code: p.code,
+        factor: p.factor,
+        description: p.description || '',
+        price: p.price ?? null,
+      }));
+      const { error } = await supabase.from('products').upsert(rows);
+      if (error) console.warn('[storage] Upsert products lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi upsert products:', err?.message || err);
     }
   }
 }
@@ -456,6 +546,45 @@ export async function deleteProductionLog(id: string): Promise<void> {
       if (error) console.warn('[storage] Xóa production_log trên Supabase:', error.message || error);
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi xóa production_log:', err?.message || err);
+    }
+  }
+}
+
+export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void> {
+  if (!logs || logs.length === 0) return;
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  const logMap = new Map<string, ProductionLog>(localList.map((l) => [l.id, l]));
+  logs.forEach((l) => logMap.set(l.id, l));
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, Array.from(logMap.values()));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const rows = logs.map((log) => ({
+        id: log.id,
+        date: log.date,
+        line_id: log.lineId,
+        line_name: log.lineName,
+        product_id: log.productId,
+        product_name: log.productName,
+        product_group: log.productGroup,
+        actual_units: log.actualUnits,
+        workers_count: log.workersCount,
+        official_workers: log.officialWorkers ?? null,
+        seasonal_workers: log.seasonalWorkers ?? null,
+        equivalent_factor: log.equivalentFactor,
+        equivalent_products: log.equivalentProducts,
+        labor_productivity_percent: log.laborProductivityPercent,
+        shift: log.shift,
+        technician_name: log.technicianName,
+        hourly_actuals: log.hourlyActuals || {},
+        hourly_workers: log.hourlyWorkers || {},
+        hourly_official_workers: log.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
+      }));
+      const { error } = await supabase.from('production_logs').upsert(rows);
+      if (error) console.warn('[storage] Upsert production_logs lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi upsert production_logs:', err?.message || err);
     }
   }
 }
@@ -718,19 +847,77 @@ export async function saveAssemblyDailyReports(reports: DailyReportRowAssembly[]
 // 9. QUẢN LÝ IMEI, GIAO DỊCH & CHẤT LƯỢNG (TRANSACTIONS, LABELS, INVENTORY)
 // ==========================================
 export async function getDeclaredImeis(): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'declared_imeis')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.DECLARED_IMEIS, data.report_data);
+        return data.report_data as any[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải declared_imeis từ Supabase, dùng local fallback:', err);
+    }
+  }
   return getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
 }
 
 export async function saveDeclaredImeis(records: any[]): Promise<void> {
   setLocal(STORAGE_KEYS.DECLARED_IMEIS, records);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'declared_imeis',
+        report_type: 'imei',
+        report_data: records,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu declared_imeis lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu declared_imeis:', err?.message || err);
+    }
+  }
 }
 
 export async function getScannedImeis(): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'scanned_imeis')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.SCANNED_IMEIS, data.report_data);
+        return data.report_data as any[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải scanned_imeis từ Supabase, dùng local fallback:', err);
+    }
+  }
   return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
 }
 
 export async function saveScannedImeis(records: any[]): Promise<void> {
   setLocal(STORAGE_KEYS.SCANNED_IMEIS, records);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'scanned_imeis',
+        report_type: 'imei',
+        report_data: records,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu scanned_imeis lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu scanned_imeis:', err?.message || err);
+    }
+  }
 }
 
 // Bảng nhật ký giao dịch (Transactions) - Giới hạn 100 bản ghi mới nhất để tiết kiệm tối đa Egress
@@ -815,10 +1002,13 @@ export interface RealtimeCallbacks {
   onInventoryChange?: (payload: any) => void;
   onProductionOrdersChange?: (payload: any) => void;
 
-  // Các bảng danh mục (chỉ kích hoạt lắng nghe khi có callback truyền vào)
+  // Các bảng danh mục và kế hoạch
   onWorkersChange?: (payload: any) => void;
   onProductsChange?: (payload: any) => void;
   onMonthlyPlanChange?: (payload: any) => void;
+  onMonthlyTargetsChange?: (payload: any) => void;
+  onMonthlyMetricsChange?: (payload: any) => void;
+  onDailyReportsChange?: (payload: any) => void;
 }
 
 /**
@@ -886,7 +1076,7 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
       );
     }
 
-    // 2. Chỉ lắng nghe các bảng cấu hình / danh mục khi thực sự có yêu cầu
+    // 2. Lắng nghe các bảng cấu hình / danh mục / kế hoạch
     if (callbacks.onWorkersChange) {
       channel = channel.on(
         'postgres_changes',
@@ -917,9 +1107,39 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
       );
     }
 
+    if (callbacks.onMonthlyTargetsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'monthly_targets' },
+        (payload) => {
+          callbacks.onMonthlyTargetsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onMonthlyMetricsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'monthly_metrics' },
+        (payload) => {
+          callbacks.onMonthlyMetricsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onDailyReportsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'daily_reports' },
+        (payload) => {
+          callbacks.onDailyReportsChange?.(payload);
+        }
+      );
+    }
+
     channel.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[Realtime] Kênh đồng bộ thời gian thực đã sẵn sàng');
+        console.log('[Realtime] Kênh đồng bộ thời gian thực đa bảng đã sẵn sàng');
       }
     });
 

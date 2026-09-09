@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Worker, AttendanceRecord, WorkerDivision, WorkerType } from './types';
 import { INITIAL_WORKERS } from './data';
-import { Plus, Trash2, Edit2, QrCode, User, ScanLine, X, CheckCircle, FileText, Download, RefreshCw, Upload } from 'lucide-react';
+import { Plus, Trash2, Edit2, QrCode, User, ScanLine, X, CheckCircle, FileText, Download, RefreshCw, Upload, AlertCircle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
+import * as storage from './storage';
 
 interface PersonnelTabProps {
   workers: Worker[];
   setWorkers: React.Dispatch<React.SetStateAction<Worker[]>>;
+  fetchWorkers?: () => Promise<void>;
   attendanceLogs: AttendanceRecord[];
   setAttendanceLogs: React.Dispatch<React.SetStateAction<AttendanceRecord[]>>;
 }
@@ -15,6 +18,7 @@ interface PersonnelTabProps {
 export const PersonnelTab: React.FC<PersonnelTabProps> = ({
   workers,
   setWorkers,
+  fetchWorkers,
   attendanceLogs,
   setAttendanceLogs
 }) => {
@@ -28,6 +32,17 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
   const [formCode, setFormCode] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  // ASYNC & NOTIFICATION STATES
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
+
   const getWorkerTypeFromId = (id: string): WorkerType => {
     const upper = id.toUpperCase();
     if (upper.includes("THUVIEC")) return "PROBATION";
@@ -35,43 +50,115 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
     return "OFFICIAL";
   };
 
-  const handleSave = () => {
-    if (!formName || !formCode) {
-      alert("Vui lòng nhập tên và mã nhân viên!");
+  // 2. SỬA / CẬP NHẬT (UPDATE) & 3. THÊM MỚI (INSERT)
+  const handleSave = async () => {
+    if (!formName.trim()) {
+      showToast("Vui lòng nhập họ và tên nhân viên!", "error");
       return;
     }
 
-    const derivedType = getWorkerTypeFromId(formCode);
+    setIsSubmitting(true);
+    try {
+      if (isEditing && editId) {
+        // 2. SỬA / CẬP NHẬT (UPDATE):
+        const targetId = formCode.trim() || editId;
+        const derivedType = getWorkerTypeFromId(targetId);
 
-    if (isEditing && editId) {
-      setWorkers(prev => prev.map(w => w.id === editId ? {
-        ...w,
-        name: formName,
-        division: formDivision,
-        type: derivedType,
-        qrCode: formCode,
-        id: formCode
-      } : w));
-    } else {
-      const exists = workers.find(w => w.id === formCode);
-      if (exists) {
-        alert("Mã nhân viên đã tồn tại!");
-        return;
+        const updatedData: Record<string, any> = {
+          name: formName.trim(),
+          division: formDivision,
+          type: derivedType,
+          qr_code: targetId,
+          updated_at: new Date().toISOString()
+        };
+
+        if (targetId !== editId) {
+          updatedData.id = targetId;
+        }
+
+        if (supabase && isSupabaseConfigured) {
+          const { error } = await supabase
+            .from('workers')
+            .update(updatedData)
+            .eq('id', editId);
+
+          if (error) {
+            throw new Error(error.message || 'Lỗi khi cập nhật nhân viên trên Supabase');
+          }
+        }
+
+        // Chỉ cập nhật State trên giao diện sau khi Supabase trả về kết quả thành công
+        setWorkers(prev => prev.map(w => w.id === editId ? {
+          ...w,
+          id: targetId,
+          name: formName.trim(),
+          division: formDivision,
+          type: derivedType,
+          qrCode: targetId
+        } : w));
+
+        showToast(`Cập nhật nhân viên "${formName.trim()}" thành công!`, "success");
+        setIsEditing(false);
+        setEditId("");
+        setFormName("");
+        setFormCode("");
+      } else {
+        // 3. THÊM MỚI (INSERT):
+        const workerId = formCode.trim() || `60000${Math.floor(1000 + Math.random() * 9000)}`;
+        const derivedType = getWorkerTypeFromId(workerId);
+
+        const exists = workers.find(w => w.id === workerId);
+        if (exists) {
+          showToast(`Mã nhân viên "${workerId}" đã tồn tại trên hệ thống!`, "error");
+          setIsSubmitting(false);
+          return;
+        }
+
+        const newData = {
+          id: workerId,
+          name: formName.trim(),
+          division: formDivision,
+          type: derivedType,
+          qr_code: workerId,
+          image_url: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+
+        if (supabase && isSupabaseConfigured) {
+          const { error } = await supabase
+            .from('workers')
+            .insert([newData]);
+
+          if (error) {
+            throw new Error(error.message || 'Lỗi khi thêm mới nhân viên trên Supabase');
+          }
+        }
+
+        // Chỉ cập nhật State trên giao diện sau khi Supabase trả về kết quả thành công
+        const newWorkerItem: Worker = {
+          id: workerId,
+          name: formName.trim(),
+          division: formDivision,
+          type: derivedType,
+          qrCode: workerId
+        };
+        setWorkers(prev => [newWorkerItem, ...prev]);
+
+        showToast(`Đã thêm nhân viên "${formName.trim()}" (${workerId}) thành công!`, "success");
+        setIsEditing(false);
+        setEditId("");
+        setFormName("");
+        setFormCode("");
       }
-      setWorkers(prev => [...prev, {
-        id: formCode,
-        name: formName,
-        division: formDivision,
-        type: derivedType,
-        qrCode: formCode
-      }]);
+    } catch (err: any) {
+      console.error('Lỗi khi lưu nhân viên:', err);
+      const msg = err?.message || JSON.stringify(err);
+      showToast(`Lưu nhân viên thất bại: ${msg}`, "error");
+      alert(`Lưu nhân viên thất bại: ${msg}`);
+    } finally {
+      setIsSubmitting(false);
     }
-
-    // Reset
-    setIsEditing(false);
-    setEditId("");
-    setFormName("");
-    setFormCode("");
   };
 
   const handleEdit = (w: Worker) => {
@@ -82,14 +169,60 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
     setFormCode(w.qrCode);
   };
 
+  // 1. XÓA (DELETE)
   const handleDelete = (id: string) => {
     setDeleteConfirmId(id);
   };
 
+  const confirmDelete = async (workerId: string) => {
+    if (!workerId) return;
+    setIsDeleting(true);
+    try {
+      if (supabase && isSupabaseConfigured) {
+        const { error } = await supabase
+          .from('workers')
+          .delete()
+          .eq('id', workerId);
+
+        if (error) {
+          throw new Error(error.message || 'Lỗi khi xóa nhân viên trên Supabase');
+        }
+      }
+
+      // Chỉ cập nhật State trên giao diện sau khi Supabase trả về kết quả xóa thành công
+      setWorkers(prev => prev.filter(w => w.id !== workerId));
+      setDeleteConfirmId(null);
+      showToast(`Đã xóa nhân viên có mã "${workerId}" thành công!`, "success");
+    } catch (err: any) {
+      console.error('Lỗi khi xóa nhân viên:', err);
+      const msg = err?.message || JSON.stringify(err);
+      showToast(`Xóa nhân viên thất bại: ${msg}`, "error");
+      alert(`Xóa nhân viên thất bại: ${msg}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleReloadFromCloud = async () => {
+    setIsRefreshing(true);
+    try {
+      if (fetchWorkers) {
+        await fetchWorkers();
+      } else {
+        const fresh = await storage.getWorkers();
+        if (fresh) setWorkers(fresh);
+      }
+      showToast("Đã đồng bộ lại danh sách nhân sự mới nhất từ Supabase Cloud!", "success");
+    } catch (err: any) {
+      showToast(`Lỗi đồng bộ: ${err?.message || err}`, "error");
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleResetData = () => {
-    if (confirm("Hành động này sẽ XÓA TOÀN BỘ danh sách nhân sự hiện tại và tải lại danh sách gốc từ hệ thống. Bạn có chắc chắn không?")) {
-      setWorkers(INITIAL_WORKERS);
-      alert("Đã cập nhật danh sách nhân sự thành công!");
+    if (confirm("Hành động này sẽ tải lại danh sách gốc từ hệ thống. Bạn có chắc chắn không?")) {
+      handleReloadFromCloud();
     }
   };
 
@@ -160,14 +293,22 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
         }
 
         if (importedWorkers.length > 0) {
-          setWorkers(importedWorkers);
-          alert("Đã đồng bộ danh sách nhân sự thành công!");
+          setIsSubmitting(true);
+          storage.saveAllWorkers(importedWorkers).then(() => {
+            setWorkers(importedWorkers);
+            showToast(`Đã import và đồng bộ ${importedWorkers.length} nhân viên lên Supabase thành công!`, "success");
+          }).catch((err: any) => {
+            setWorkers(importedWorkers);
+            showToast(`Import hoàn tất, đang lưu vào bộ nhớ tạm (${err?.message || err})`, "error");
+          }).finally(() => {
+            setIsSubmitting(false);
+          });
         } else {
-          alert("Không tìm thấy dữ liệu hợp lệ trong file Excel. Vui lòng đảm bảo Cột 1 là Mã NV, Cột 2 là Họ Tên, Cột 3 là Bộ Phận.");
+          showToast("Không tìm thấy dữ liệu hợp lệ trong file Excel. Vui lòng đảm bảo Cột 1 là Mã NV, Cột 2 là Họ Tên, Cột 3 là Bộ Phận.", "error");
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
-        alert("Lỗi khi đọc file Excel!");
+        showToast(`Lỗi khi đọc file Excel: ${err?.message || err}`, "error");
       }
       
       // Reset input
@@ -177,7 +318,25 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
   };
 
   return (
-    <div className="w-full">
+    <div className="w-full relative">
+      {/* Thông báo Toast trực quan */}
+      {toast && (
+        <div
+          className={`fixed top-5 right-5 z-[200] px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 text-sm font-medium border backdrop-blur-md transition-all duration-300 ${
+            toast.type === 'success'
+              ? 'bg-emerald-950/95 text-emerald-200 border-emerald-500/50 shadow-emerald-950/50'
+              : 'bg-rose-950/95 text-rose-200 border-rose-500/50 shadow-rose-950/50'
+          }`}
+        >
+          {toast.type === 'success' ? (
+            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+          ) : (
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+          )}
+          <span>{toast.message}</span>
+        </div>
+      )}
+
       <div className="mb-6 flex gap-4 border-b border-slate-800 pb-4">
         <button
           onClick={() => setActiveView('LIST')}
@@ -206,18 +365,30 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-xl p-5">
             <h3 className="text-lg font-semibold text-white mb-4">
-              {isEditing ? "Cập nhật nhân viên" : "Thêm mới nhân viên"}
+              {isEditing ? "Cập nhật thông tin nhân viên" : "Thêm mới nhân viên"}
             </h3>
             
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Mã NV / QR Code</label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="block text-xs font-medium text-slate-400">Mã NV / QR Code</label>
+                  {!isEditing && (
+                    <button
+                      type="button"
+                      onClick={() => setFormCode(`60000${Math.floor(1000 + Math.random() * 9000)}`)}
+                      className="text-[11px] text-indigo-400 hover:text-indigo-300 transition"
+                      title="Tự động tạo mã nhân viên mới"
+                    >
+                      + Tạo mã tự động
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={formCode}
                   onChange={e => setFormCode(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 outline-none focus:border-indigo-500 transition-colors"
-                  placeholder="Ví dụ: NV007"
+                  placeholder="Ví dụ: 600001001 (để trống để tự tạo)"
                 />
               </div>
 
@@ -246,32 +417,44 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
               </div>
 
               <button
+                disabled={isSubmitting}
                 onClick={handleSave}
-                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 rounded-lg flex items-center justify-center gap-2 mt-4"
+                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2 rounded-lg flex items-center justify-center gap-2 mt-4 transition disabled:opacity-50"
               >
-                <Plus className="w-4 h-4" />
-                {isEditing ? "Cập nhật" : "Thêm mới"}
+                {isSubmitting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    {isEditing ? "Đang cập nhật..." : "Đang lưu lên Supabase..."}
+                  </>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4" />
+                    {isEditing ? "Cập nhật nhân viên" : "Thêm mới nhân viên"}
+                  </>
+                )}
               </button>
 
               {isEditing && (
                 <button
+                  disabled={isSubmitting}
                   onClick={() => {
                     setIsEditing(false);
+                    setEditId("");
                     setFormCode("");
                     setFormName("");
                   }}
-                  className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium py-2 rounded-lg mt-2"
+                  className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium py-2 rounded-lg mt-2 transition"
                 >
-                  Hủy
+                  Hủy chỉnh sửa
                 </button>
               )}
             </div>
           </div>
 
           <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden flex flex-col h-full min-h-[400px]">
-            <div className="px-5 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/50">
+            <div className="px-5 py-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/50 flex-wrap gap-2">
               <h3 className="text-sm font-semibold text-white">Danh sách ({workers.length})</h3>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-center flex-wrap">
                 <button 
                   onClick={handleDownloadTemplate}
                   className="text-xs bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 px-3 py-1.5 rounded-lg flex items-center gap-1 transition"
@@ -286,11 +469,13 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
                   <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImportExcel} />
                 </label>
                 <button 
-                  onClick={handleResetData}
-                  className="text-xs bg-rose-500/10 text-rose-400 hover:bg-rose-500/20 px-3 py-1.5 rounded-lg flex items-center gap-1 transition"
+                  disabled={isRefreshing}
+                  onClick={handleReloadFromCloud}
+                  className="text-xs bg-slate-800 text-slate-300 hover:bg-slate-700 px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition disabled:opacity-50"
+                  title="Đồng bộ lại dữ liệu mới nhất từ Supabase Cloud"
                 >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Đồng bộ danh sách mới
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-indigo-400' : ''}`} />
+                  {isRefreshing ? "Đang tải..." : "Tải lại từ Cloud"}
                 </button>
               </div>
             </div>
@@ -379,25 +564,34 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
       {deleteConfirmId && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[100] backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 max-w-sm w-full shadow-2xl">
-            <h3 className="text-lg font-semibold text-white mb-2">Xác nhận xóa</h3>
+            <h3 className="text-lg font-semibold text-white mb-2">Xác nhận xóa nhân viên</h3>
             <p className="text-slate-400 text-sm mb-6">
-              Bạn có chắc chắn muốn xóa nhân viên này khỏi danh sách? Hành động này không thể hoàn tác.
+              Bạn có chắc chắn muốn xóa nhân viên <span className="text-rose-400 font-mono font-semibold">{deleteConfirmId}</span> khỏi hệ thống và Supabase Cloud? Thao tác này sẽ đồng bộ trực tiếp tới cơ sở dữ liệu.
             </p>
             <div className="flex justify-end gap-3">
               <button
+                disabled={isDeleting}
                 onClick={() => setDeleteConfirmId(null)}
                 className="px-4 py-2 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 transition"
               >
                 Hủy
               </button>
               <button
-                onClick={() => {
-                  setWorkers(prev => prev.filter(w => w.id !== deleteConfirmId));
-                  setDeleteConfirmId(null);
-                }}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-rose-600 hover:bg-rose-500 text-white transition"
+                disabled={isDeleting}
+                onClick={() => confirmDelete(deleteConfirmId)}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-rose-600 hover:bg-rose-500 text-white transition flex items-center gap-2 disabled:opacity-50"
               >
-                Xóa
+                {isDeleting ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Đang xóa trên Supabase...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Xác nhận Xóa
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -477,11 +671,11 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
     if (activeRecord) {
       if (activeRecord.scannedDivision === finalDivision) {
         // Checking out of the current division
+        const updatedRecord = { ...activeRecord, checkOutTime: new Date().toISOString() };
         setAttendanceLogs((prev: AttendanceRecord[]) => prev.map(a => 
-          a.id === activeRecord.id 
-            ? { ...a, checkOutTime: new Date().toISOString() } 
-            : a
+          a.id === activeRecord.id ? updatedRecord : a
         ));
+        storage.saveAttendanceLog(updatedRecord);
         setLastScanned({ worker, action: "OUT", time: new Date().toLocaleTimeString() });
       } else {
         // Scanning into a NEW division without explicitly checking out of the old one
@@ -495,29 +689,36 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
 
         if (diffMins < 30) {
           // Less than 30 mins: Delete old record, start new record using old check-in time
+          const newRecord: AttendanceRecord = {
+            id: Date.now().toString(),
+            workerId: worker.id,
+            date: cd,
+            checkInTime: activeRecord.checkInTime, // keep the old start time
+            scannedDivision: finalDivision
+          };
+          storage.deleteAttendanceLog(activeRecord.id);
+          storage.saveAttendanceLog(newRecord);
           setAttendanceLogs((prev: AttendanceRecord[]) => {
             const filteredPrev = prev.filter(a => a.id !== activeRecord.id);
-            return [...filteredPrev, {
-              id: Date.now().toString(),
-              workerId: worker.id,
-              date: cd,
-              checkInTime: activeRecord.checkInTime, // keep the old start time
-              scannedDivision: finalDivision
-            }];
+            return [...filteredPrev, newRecord];
           });
         } else {
           // 30 mins or more: Auto-checkout old record normally, start new record now
+          const updatedOld: AttendanceRecord = { ...activeRecord, checkOutTime: now.toISOString() };
+          const newRecord: AttendanceRecord = {
+            id: Date.now().toString(),
+            workerId: worker.id,
+            date: cd,
+            checkInTime: now.toISOString(),
+            scannedDivision: finalDivision
+          };
+          storage.saveAttendanceLog(updatedOld);
+          storage.saveAttendanceLog(newRecord);
           setAttendanceLogs((prev: AttendanceRecord[]) => {
             const updatedPrev = prev.map(a => 
-              a.id === activeRecord.id ? { ...a, checkOutTime: now.toISOString() } : a
+              a.id === activeRecord.id ? updatedOld : a
             );
-            return [...updatedPrev, {
-              id: Date.now().toString(),
-              workerId: worker.id,
-              date: cd,
-              checkInTime: now.toISOString(),
-              scannedDivision: finalDivision
-            }];
+            return [...updatedPrev, newRecord];
           });
         }
         setLastScanned({ worker, action: "IN", time: now.toLocaleTimeString() });
@@ -531,6 +732,7 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
         checkInTime: new Date().toISOString(),
         scannedDivision: finalDivision
       };
+      storage.saveAttendanceLog(newRecord);
       setAttendanceLogs((prev: AttendanceRecord[]) => [...prev, newRecord]);
       setLastScanned({ worker, action: "IN", time: new Date().toLocaleTimeString() });
     }
@@ -569,9 +771,11 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
       const baseDate = currentValue ? new Date(currentValue) : new Date();
       baseDate.setHours(parseInt(match[1]), parseInt(match[2]), 0, 0);
       
+      const updatedLog: AttendanceRecord = { ...log, [field]: baseDate.toISOString() };
       setAttendanceLogs((prev: AttendanceRecord[]) => 
-        prev.map(a => a.id === log.id ? { ...a, [field]: baseDate.toISOString() } : a)
+        prev.map(a => a.id === log.id ? updatedLog : a)
       );
+      storage.saveAttendanceLog(updatedLog);
     }
     
     setEditModalOpen(false);

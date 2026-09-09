@@ -1,14 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  MonthlyMetric, ProductDefinition, ProductionLine, ProductionLog, ProductGroup, WeeklyAttendance, MonthlyScrapReport, WeeklyScrapReport, WeeklyDclreErrorRate, MonthlyDclreErrorRate, DailyReportRowGas, DailyReportRowAssembly, CombinedDailyReportRow, Worker, AttendanceRecord
+  MonthlyMetric, ProductDefinition, ProductionLine, ProductionLog, ProductGroup, WeeklyAttendance, MonthlyScrapReport, WeeklyScrapReport, WeeklyDclreErrorRate, MonthlyDclreErrorRate, DailyReportRowGas, DailyReportRowAssembly, CombinedDailyReportRow, Worker, AttendanceRecord, WorkerDivision, WorkerType
 } from './types';
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
 import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem } from './appUtils';
 import * as storage from './storage';
-import { isSupabaseConfigured } from './supabaseClient';
+import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 export const useAppLogic = () => {
   // Trạng thái đồng bộ Supabase Cloud
@@ -33,12 +33,12 @@ export const useAppLogic = () => {
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    storage.saveAllWorkers(workers);
+    localStorage.setItem("sunhouse_workers", JSON.stringify(workers));
   }, [workers]);
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    storage.saveAllAttendanceLogs(attendanceLogs);
+    localStorage.setItem("sunhouse_attendance_logs", JSON.stringify(attendanceLogs));
   }, [attendanceLogs]);
 
 
@@ -339,7 +339,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    storage.saveAllProductionLogs(productionLogs);
+    localStorage.setItem("sunhouse_production_logs_v2", JSON.stringify(productionLogs));
   }, [productionLogs]);
 
   // Dữ liệu báo cáo chi tiết Excel cho 2 chuyền (Bếp Gas & Lắp ráp)
@@ -1089,7 +1089,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    storage.saveAllProducts(products);
+    localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
   }, [products]);
 
   // Hàm tải / làm mới dữ liệu từ Supabase Cloud
@@ -1159,20 +1159,252 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   }, []);
 
+  // Tải lại danh sách nhân sự trực tiếp từ Supabase Cloud
+  const fetchWorkers = useCallback(async () => {
+    try {
+      const fresh = await storage.getWorkers();
+      if (fresh) {
+        setWorkers(fresh);
+      }
+    } catch (err: any) {
+      console.warn('[Realtime] Lỗi khi nạp danh sách workers:', err?.message || err);
+    }
+  }, []);
+
   // Khởi chạy khi khởi động ứng dụng & Đăng ký Realtime
   useEffect(() => {
     refreshFromCloud();
 
-    // Tối ưu Realtime: Chỉ lắng nghe các bảng dữ liệu biến động liên tục trong ca sản xuất
-    // để tiết kiệm tối đa băng thông (Egress) và hạn mức kết nối cho gói Supabase Free
+    // 1. Đăng ký Realtime đa bảng với cơ chế Update State trực tiếp từ Payload (Egress = 0 khi nhận thay đổi)
     const unsubscribe = storage.subscribeToRealtime({
-      onProductionLogsChange: async () => {
-        const fresh = await storage.getProductionLogs();
-        setProductionLogs(fresh);
+      // (1) Bảng workers: Cập nhật state trực tiếp
+      onWorkersChange: (payload) => {
+        const mapPayloadToWorker = (row: any): Worker => {
+          const id = String(row.id || row.worker_code || '');
+          return {
+            id,
+            name: String(row.name || row.full_name || ''),
+            division: (row.division || row.department || 'RO') as WorkerDivision,
+            type: (row.type || row.status || 'OFFICIAL') as WorkerType,
+            qrCode: String(row.qr_code || row.worker_code || id),
+            imageUrl: row.image_url || undefined,
+          };
+        };
+
+        if (payload.eventType === 'INSERT' && payload.new) {
+          const newWorker = mapPayloadToWorker(payload.new);
+          if (newWorker.id) {
+            setWorkers((prev) => {
+              if (prev.some((w) => w.id === newWorker.id)) {
+                return prev.map((w) => (w.id === newWorker.id ? { ...w, ...newWorker } : w));
+              }
+              return [newWorker, ...prev];
+            });
+          }
+        } else if (payload.eventType === 'UPDATE' && payload.new) {
+          const updatedWorker = mapPayloadToWorker(payload.new);
+          if (updatedWorker.id) {
+            setWorkers((prev) => {
+              const exists = prev.some((w) => w.id === updatedWorker.id);
+              if (exists) {
+                return prev.map((w) => (w.id === updatedWorker.id ? { ...w, ...updatedWorker } : w));
+              }
+              return [updatedWorker, ...prev];
+            });
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const deleteId = String(payload.old?.id || (payload.old as any)?.worker_code || '');
+          if (deleteId) {
+            setWorkers((prev) => prev.filter((w) => w.id !== deleteId));
+          }
+        }
       },
-      onAttendanceChange: async () => {
-        const fresh = await storage.getAttendanceLogs();
-        setAttendanceLogs(fresh);
+
+      // (2) Bảng products: Cập nhật state trực tiếp
+      onProductsChange: (payload) => {
+        const mapPayloadToProduct = (row: any): ProductDefinition => ({
+          id: String(row.id || ''),
+          name: String(row.name || ''),
+          group: (row.group || 'MLN') as ProductGroup,
+          code: String(row.code || ''),
+          factor: Number(row.factor ?? 1),
+          price: row.price !== null && row.price !== undefined ? Number(row.price) : undefined,
+          description: String(row.description || ''),
+        });
+
+        if (payload.eventType === 'INSERT' && payload.new) {
+          const newProd = mapPayloadToProduct(payload.new);
+          if (newProd.id) {
+            setProducts((prev) => {
+              if (prev.some((p) => p.id === newProd.id)) {
+                return prev.map((p) => (p.id === newProd.id ? { ...p, ...newProd } : p));
+              }
+              return [...prev, newProd];
+            });
+          }
+        } else if (payload.eventType === 'UPDATE' && payload.new) {
+          const updatedProd = mapPayloadToProduct(payload.new);
+          if (updatedProd.id) {
+            setProducts((prev) => {
+              const exists = prev.some((p) => p.id === updatedProd.id);
+              if (exists) {
+                return prev.map((p) => (p.id === updatedProd.id ? { ...p, ...updatedProd } : p));
+              }
+              return [...prev, updatedProd];
+            });
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const deleteId = String(payload.old?.id || '');
+          if (deleteId) {
+            setProducts((prev) => prev.filter((p) => p.id !== deleteId));
+          }
+        }
+      },
+
+      // (3) Bảng production_logs: Cập nhật state trực tiếp
+      onProductionLogsChange: (payload) => {
+        const mapPayloadToProductionLog = (row: any): ProductionLog => ({
+          id: String(row.id || ''),
+          date: String(row.date || ''),
+          lineId: String(row.line_id || row.lineId || ''),
+          lineName: String(row.line_name || row.lineName || ''),
+          productId: String(row.product_id || row.productId || ''),
+          productName: String(row.product_name || row.productName || ''),
+          productGroup: (row.product_group || row.productGroup || 'MLN') as ProductGroup,
+          actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
+          workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
+          officialWorkers: row.official_workers !== null && row.official_workers !== undefined ? Number(row.official_workers) : undefined,
+          seasonalWorkers: row.seasonal_workers !== null && row.seasonal_workers !== undefined ? Number(row.seasonal_workers) : undefined,
+          equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
+          equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
+          laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
+          shift: (row.shift || 'Ca HC (08:00 - 17:00)') as ProductionLog['shift'],
+          technicianName: String(row.technician_name || row.technicianName || ''),
+          hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
+          hourlyWorkers: row.hourly_workers || row.hourlyWorkers || {},
+          hourlyOfficialWorkers: row.hourly_official_workers || row.hourlyOfficialWorkers || {},
+          hourlySeasonalWorkers: row.hourly_seasonal_workers || row.hourlySeasonalWorkers || {},
+        });
+
+        if (payload.eventType === 'INSERT' && payload.new) {
+          const newLog = mapPayloadToProductionLog(payload.new);
+          if (newLog.id) {
+            setProductionLogs((prev) => {
+              if (prev.some((l) => l.id === newLog.id)) {
+                return prev.map((l) => (l.id === newLog.id ? { ...l, ...newLog } : l));
+              }
+              return [newLog, ...prev];
+            });
+          }
+        } else if (payload.eventType === 'UPDATE' && payload.new) {
+          const updatedLog = mapPayloadToProductionLog(payload.new);
+          if (updatedLog.id) {
+            setProductionLogs((prev) => {
+              const exists = prev.some((l) => l.id === updatedLog.id);
+              if (exists) {
+                return prev.map((l) => (l.id === updatedLog.id ? { ...l, ...updatedLog } : l));
+              }
+              return [updatedLog, ...prev];
+            });
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const deleteId = String(payload.old?.id || '');
+          if (deleteId) {
+            setProductionLogs((prev) => prev.filter((l) => l.id !== deleteId));
+          }
+        }
+      },
+
+      // (4) Bảng attendance_records: Cập nhật state trực tiếp
+      onAttendanceChange: (payload) => {
+        const mapPayloadToAttendance = (row: any): AttendanceRecord => ({
+          id: String(row.id || ''),
+          workerId: String(row.worker_id || row.workerId || ''),
+          date: String(row.date || ''),
+          slot: row.slot || undefined,
+          checkInTime: String(row.check_in_time || row.checkInTime || ''),
+          checkOutTime: row.check_out_time || row.checkOutTime || undefined,
+          scannedDivision: (row.scanned_division || row.scannedDivision || undefined) as WorkerDivision | undefined,
+        });
+
+        if (payload.eventType === 'INSERT' && payload.new) {
+          const newAtt = mapPayloadToAttendance(payload.new);
+          if (newAtt.id) {
+            setAttendanceLogs((prev) => {
+              if (prev.some((a) => a.id === newAtt.id)) {
+                return prev.map((a) => (a.id === newAtt.id ? { ...a, ...newAtt } : a));
+              }
+              return [...prev, newAtt];
+            });
+          }
+        } else if (payload.eventType === 'UPDATE' && payload.new) {
+          const updatedAtt = mapPayloadToAttendance(payload.new);
+          if (updatedAtt.id) {
+            setAttendanceLogs((prev) => {
+              const exists = prev.some((a) => a.id === updatedAtt.id);
+              if (exists) {
+                return prev.map((a) => (a.id === updatedAtt.id ? { ...a, ...updatedAtt } : a));
+              }
+              return [...prev, updatedAtt];
+            });
+          }
+        } else if (payload.eventType === 'DELETE') {
+          const deleteId = String(payload.old?.id || '');
+          if (deleteId) {
+            setAttendanceLogs((prev) => prev.filter((a) => a.id !== deleteId));
+          }
+        }
+      },
+
+      // (5) Bảng monthly_plan: Cập nhật state trực tiếp
+      onMonthlyPlanChange: (payload) => {
+        if (payload.new && payload.new.plan_data) {
+          setMonthlyPlan(payload.new.plan_data);
+          localStorage.setItem('sunhouse_monthly_plan_v2', JSON.stringify(payload.new.plan_data));
+        }
+      },
+
+      // (6) Bảng monthly_targets: Cập nhật state trực tiếp
+      onMonthlyTargetsChange: (payload) => {
+        if (payload.new && payload.new.targets_data) {
+          setMonthlyTargets(payload.new.targets_data);
+          localStorage.setItem('sunhouse_monthly_targets_v2', JSON.stringify(payload.new.targets_data));
+        }
+      },
+
+      // (7) Bảng monthly_metrics: Cập nhật state trực tiếp
+      onMonthlyMetricsChange: (payload) => {
+        if (payload.new && payload.new.metrics_data) {
+          const yr = Number(payload.new.year);
+          if (yr === 2025) {
+            setMetrics2025(payload.new.metrics_data);
+            localStorage.setItem('sunhouse_metrics_2025_v2', JSON.stringify(payload.new.metrics_data));
+          } else if (yr === 2026) {
+            setMetrics2026(payload.new.metrics_data);
+            localStorage.setItem('sunhouse_metrics_2026_v2', JSON.stringify(payload.new.metrics_data));
+          }
+        }
+      },
+
+      // (8) Bảng daily_reports (Bếp Gas, Lắp ráp, IMEI): Cập nhật state trực tiếp
+      onDailyReportsChange: (payload) => {
+        if (payload.new && payload.new.report_data) {
+          const id = payload.new.id;
+          const repType = payload.new.report_type;
+          if (id === 'gas_daily_reports' || repType === 'gas') {
+            setGasDailyReports(payload.new.report_data);
+            localStorage.setItem('sunhouse_gas_daily_reports_v2', JSON.stringify(payload.new.report_data));
+          } else if (id === 'assembly_daily_reports' || repType === 'assembly') {
+            setAssemblyDailyReports(payload.new.report_data);
+            localStorage.setItem('sunhouse_assembly_daily_reports_v2', JSON.stringify(payload.new.report_data));
+          } else if (id === 'declared_imeis') {
+            setDeclaredImeis(payload.new.report_data);
+            localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(payload.new.report_data));
+          } else if (id === 'scanned_imeis') {
+            setScannedImeis(payload.new.report_data);
+            localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(payload.new.report_data));
+          }
+        }
       },
     });
 
@@ -3298,6 +3530,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       };
     });
 
+    storage.upsertProductionLogs(newLogs);
     setProductionLogs((prev) => {
       const filtered = prev.filter((log) => log.date !== formDate || log.shift !== formShift);
       return [...newLogs, ...filtered];
@@ -3333,6 +3566,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   };
 
   const handleDeleteLog = (id: string) => {
+    storage.deleteProductionLog(id);
     setProductionLogs((prev) => prev.filter((log) => log.id !== id));
     setFormMessage("❌ Đã xóa bản ghi nhật ký ca thành công.");
     setTimeout(() => {
@@ -3887,20 +4121,17 @@ const [isScrolled, setIsScrolled] = useState(false);
 
     if (editingProductId) {
       // Update existing
-      setProducts(prev => prev.map(p => {
-        if (p.id === editingProductId) {
-          return {
-            ...p,
-            name: prodFormName,
-            code: prodFormCode,
-            group: prodFormGroup,
-            factor: Number(prodFormFactor),
-            price: Number(prodFormPrice),
-            description: prodFormDescription
-          };
-        }
-        return p;
-      }));
+      const updatedProduct: ProductDefinition = {
+        id: editingProductId,
+        name: prodFormName,
+        code: prodFormCode,
+        group: prodFormGroup,
+        factor: Number(prodFormFactor),
+        price: Number(prodFormPrice),
+        description: prodFormDescription
+      };
+      storage.saveProduct(updatedProduct);
+      setProducts(prev => prev.map(p => p.id === editingProductId ? updatedProduct : p));
       setProdFormMessage("✅ Đã cập nhật sản phẩm thành công!");
     } else {
       // Add new
@@ -3914,6 +4145,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         price: Number(prodFormPrice),
         description: prodFormDescription
       };
+      storage.saveProduct(newProduct);
       setProducts(prev => [...prev, newProduct]);
       setProdFormMessage("✅ Đã thêm sản phẩm mới thành công!");
     }
@@ -3924,6 +4156,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   };
 
   const handleDeleteProduct = (id: string) => {
+    storage.deleteProduct(id);
     setProducts(prev => prev.filter(p => p.id !== id));
     setProdFormMessage("❌ Đã xóa sản phẩm thành công.");
     setTimeout(() => {
@@ -4052,6 +4285,8 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   const handleConfirmExcelImport = () => {
     if (parsedExcelProducts.length === 0) return;
+
+    storage.upsertProducts(parsedExcelProducts);
 
     setProducts((prev) => {
       const existingMap = new Map<string, ProductDefinition>(prev.map((p) => [p.code.toLowerCase(), p]));
@@ -4554,6 +4789,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     syncAttendanceToForm,
     workers,
     setWorkers,
+    fetchWorkers,
     attendanceLogs,
     setAttendanceLogs,
     showHeader,

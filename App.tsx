@@ -113,6 +113,7 @@ export default function App() {
     syncAttendanceToForm,
     workers,
     setWorkers,
+    fetchWorkers,
     attendanceLogs,
     setAttendanceLogs,
     showHeader,
@@ -910,6 +911,7 @@ export default function App() {
             <PersonnelTab 
               workers={workers}
               setWorkers={setWorkers}
+              fetchWorkers={fetchWorkers}
               attendanceLogs={attendanceLogs}
               setAttendanceLogs={setAttendanceLogs}
             />
