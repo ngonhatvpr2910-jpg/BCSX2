@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Worker, AttendanceRecord, WorkerDivision, WorkerType } from './types';
 import { INITIAL_WORKERS } from './data';
-import { Plus, Trash2, Edit2, QrCode, User, ScanLine, X, CheckCircle, FileText, Download, RefreshCw, Upload, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, QrCode, User, ScanLine, X, CheckCircle, FileText, Download, RefreshCw, Upload, AlertCircle, Camera } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Html5QrcodeScanner, Html5Qrcode } from 'html5-qrcode';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
@@ -615,28 +615,53 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
   const [editPassword, setEditPassword] = useState("");
   const [editTimeValue, setEditTimeValue] = useState("");
   const [editError, setEditError] = useState("");
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    // Initialize html5-qrcode
-    const scanner = new Html5QrcodeScanner(
-      "reader",
-      { fps: 10, qrbox: { width: 250, height: 250 }, rememberLastUsedCamera: true },
-      false
-    );
-
-    scanner.render(
-      (decodedText) => {
-        handleScanSuccess(decodedText);
-      },
-      (error) => {
-        // scan errors happen continuously, usually ignore
-      }
-    );
-
     return () => {
-      scanner.clear().catch(e => console.error(e));
+      if (scannerRef.current && scannerRef.current.isScanning) {
+        scannerRef.current.stop().catch(console.error);
+      }
     };
-  }, [scanDate]); // re-bind if config changes
+  }, []);
+
+  const startCamera = async () => {
+    setCameraError(null);
+    try {
+      if (!scannerRef.current) {
+        scannerRef.current = new Html5Qrcode("reader");
+      }
+      await scannerRef.current.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => {
+          handleScanSuccess(decodedText);
+          // Optional: stop after scan if desired, but usually we want continuous
+        },
+        (errorMessage) => {
+          // ignore scan frame errors
+        }
+      );
+      setCameraActive(true);
+    } catch (err: any) {
+      console.error(err);
+      setCameraError(err?.message || "Không thể truy cập camera. Vui lòng mở ứng dụng trong thẻ mới (New Tab) và cấp quyền truy cập máy ảnh.");
+      setCameraActive(false);
+    }
+  };
+
+  const stopCamera = async () => {
+    if (scannerRef.current && scannerRef.current.isScanning) {
+      try {
+        await scannerRef.current.stop();
+        setCameraActive(false);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
 
   const configRef = useRef({ scanDate, cameraTargetDivision });
   useEffect(() => {
@@ -799,7 +824,7 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
           />
         </div>
 
-        <div className="bg-black rounded-lg overflow-hidden border border-slate-800 min-h-[300px] relative flex flex-col items-center justify-center">
+        <div className="bg-black rounded-lg overflow-hidden border border-slate-800 min-h-[300px] relative flex flex-col items-center justify-center p-4">
           <div className="absolute top-2 right-2 z-10 bg-slate-900/80 px-3 py-1 rounded-full text-xs flex items-center gap-2 border border-slate-700 backdrop-blur">
             <span className="text-slate-400">Cam:</span>
             <select 
@@ -812,7 +837,37 @@ const ScannerView = ({ workers, attendanceLogs, setAttendanceLogs }: { workers: 
               <option value="RMA">RMA</option>
             </select>
           </div>
+          
           <div id="reader" className="w-full max-w-[400px]"></div>
+
+          {!cameraActive && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 z-20 p-6 text-center">
+              <Camera className="w-12 h-12 text-slate-500 mb-4" />
+              {cameraError ? (
+                <div className="text-red-400 text-sm mb-4 max-w-sm">
+                  {cameraError}
+                  <p className="mt-2 text-slate-400 text-xs">Hãy mở ứng dụng bằng trình duyệt Safari/Chrome, hoặc mở trong Tab mới (New Tab) để cấp quyền Camera.</p>
+                </div>
+              ) : (
+                <p className="text-slate-400 mb-4">Camera đang tắt. Nhấn nút bên dưới để bắt đầu quét QR.</p>
+              )}
+              <button 
+                onClick={startCamera}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white font-medium py-2 px-6 rounded-lg flex items-center gap-2 transition-colors"
+              >
+                <Camera className="w-4 h-4" /> Bật Camera (Sau)
+              </button>
+            </div>
+          )}
+
+          {cameraActive && (
+            <button 
+              onClick={stopCamera}
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 bg-red-500/90 hover:bg-red-600 text-white font-medium py-2 px-6 rounded-full flex items-center gap-2 transition-colors backdrop-blur"
+            >
+              Dừng Camera
+            </button>
+          )}
         </div>
 
         <div className="mt-6 border-t border-slate-800 pt-6">
