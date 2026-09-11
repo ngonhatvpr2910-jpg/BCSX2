@@ -1067,6 +1067,160 @@ const [isScrolled, setIsScrolled] = useState(false);
   const [formTechnician, setFormTechnician] = useState<string>("Nguyễn Minh Hoàng Khiêm ( DCLR )");
   const [formMessage, setFormMessage] = useState<string>("");
 
+  // Quản lý đồng bộ trực tiếp hai chiều & Realtime cho Form Nhật ký ca
+  const formDateRef = useRef(formDate);
+  const formShiftRef = useRef(formShift);
+  formDateRef.current = formDate;
+  formShiftRef.current = formShift;
+  const isSyncingFromExternalRef = useRef(false);
+
+  // Tự động nạp dữ liệu ca từ productionLogs / drafts / KHSX tháng khi chuyển ngày hoặc khi nhận dữ liệu từ Cloud
+  useEffect(() => {
+    if (!formDate || !formShift || isSyncingFromExternalRef.current) return;
+    
+    const [year, month, day] = formDate.split("-");
+    const ym = `${year}-${month}`;
+    const dayNum = parseInt(day, 10);
+
+    const logsForDate = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
+
+    if (logsForDate.length > 0) {
+      // 1. Tự động nạp từ bản ghi productionLogs của ngày/ca đó
+      const allSlots = new Set<string>();
+      logsForDate.forEach(log => {
+        if (log.hourlyActuals) {
+          Object.keys(log.hourlyActuals).forEach(slot => allSlots.add(slot));
+        }
+      });
+      const defaultSlots = getShiftSlots(formShift);
+      defaultSlots.forEach(s => allSlots.add(s));
+      const sortedSlots = Array.from(allSlots).sort((a, b) => {
+        const hA = parseInt(a.split("H")[0]) || 0;
+        const hB = parseInt(b.split("H")[0]) || 0;
+        return hA - hB;
+      });
+      setFormSlots(sortedSlots);
+
+      const items: FormModelItem[] = logsForDate.map(log => {
+        const planVal = (!isNaN(dayNum) && monthlyPlan[ym]?.[log.productId]?.[dayNum]) || 0;
+        return {
+          id: `item-${log.productId}-${log.id}`,
+          productId: log.productId,
+          dailyPlan: planVal,
+          hourlyActuals: log.hourlyActuals || {},
+        };
+      });
+      setFormModelItems(items);
+
+      // Khôi phục nhân sự theo từng bộ phận
+      const newOffRO: Record<string, number> = {};
+      const newSeasRO: Record<string, number> = {};
+      const newOffBG: Record<string, number> = {};
+      const newSeasBG: Record<string, number> = {};
+      const newOffRMA: Record<string, number> = {};
+      const newSeasRMA: Record<string, number> = {};
+
+      logsForDate.forEach(log => {
+        const isRMA = log.lineId === "line-rma-03";
+        const isMLN = log.lineId === "line-mln-01";
+        const isBG = log.lineId === "line-bg-02";
+
+        const off = log.hourlyOfficialWorkers || {};
+        const seas = log.hourlySeasonalWorkers || {};
+
+        if (isRMA) {
+          Object.assign(newOffRMA, off);
+          Object.assign(newSeasRMA, seas);
+        } else if (isMLN) {
+          Object.assign(newOffRO, off);
+          Object.assign(newSeasRO, seas);
+        } else if (isBG) {
+          Object.assign(newOffBG, off);
+          Object.assign(newSeasBG, seas);
+        }
+      });
+
+      if (Object.keys(newOffRO).length > 0) setFormOfficialWorkersRO(newOffRO);
+      if (Object.keys(newSeasRO).length > 0) setFormSeasonalWorkersRO(newSeasRO);
+      if (Object.keys(newOffBG).length > 0) setFormOfficialWorkersBG(newOffBG);
+      if (Object.keys(newSeasBG).length > 0) setFormSeasonalWorkersBG(newSeasBG);
+      if (Object.keys(newOffRMA).length > 0) setFormOfficialWorkersRMA(newOffRMA);
+      if (Object.keys(newSeasRMA).length > 0) setFormSeasonalWorkersRMA(newSeasRMA);
+      if (logsForDate[0]?.technicianName) {
+        setFormTechnician(logsForDate[0].technicianName);
+      }
+    } else {
+      // 2. Chưa có log: Tự động khởi tạo từ KHSX Tháng (monthlyPlan)
+      if (!isNaN(dayNum) && monthlyPlan[ym]) {
+        const plannedProducts = products.filter(p => (monthlyPlan[ym]?.[p.id]?.[dayNum] || 0) > 0);
+        if (plannedProducts.length > 0) {
+          const shiftSlots = getShiftSlots(formShift);
+          setFormSlots(shiftSlots);
+          const newItems: FormModelItem[] = plannedProducts.map(p => {
+            const initialHrs: Record<string, number> = {};
+            shiftSlots.forEach(s => { initialHrs[s] = 0; });
+            return {
+              id: `item-${p.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              productId: p.id,
+              dailyPlan: monthlyPlan[ym][p.id][dayNum],
+              hourlyActuals: initialHrs,
+            };
+          });
+          setFormModelItems(newItems);
+        }
+      }
+    }
+  }, [formDate, formShift, productionLogs]);
+
+  // Tự động Auto-Save Draft & Realtime Broadcast khi có bất kỳ thao tác nhập liệu ô nào
+  const draftSaveTimeoutRef = useRef<any>(null);
+  useEffect(() => {
+    if (!isLoadedRef.current || !formDate || !formShift || isSyncingFromExternalRef.current) return;
+
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: formModelItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 1. Lưu LocalStorage tức thì
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+
+    // 2. Gửi Realtime Broadcast đến các thiết bị / tab khác
+    storage.sendLiveFormBroadcast(draftData);
+
+    // 3. Debounce 300ms lưu lên Supabase Cloud (Daily Reports / Drafts)
+    if (draftSaveTimeoutRef.current) clearTimeout(draftSaveTimeoutRef.current);
+    draftSaveTimeoutRef.current = setTimeout(() => {
+      storage.saveFormDraft(draftData);
+    }, 300);
+
+    return () => {
+      if (draftSaveTimeoutRef.current) clearTimeout(draftSaveTimeoutRef.current);
+    };
+  }, [
+    formDate,
+    formShift,
+    formSlots,
+    formModelItems,
+    formOfficialWorkersRO,
+    formSeasonalWorkersRO,
+    formOfficialWorkersBG,
+    formSeasonalWorkersBG,
+    formOfficialWorkersRMA,
+    formSeasonalWorkersRMA,
+    formTechnician,
+  ]);
+
   // Lưu trữ dữ liệu khi có thay đổi (Local + Supabase Cloud)
   useEffect(() => {
     if (!isLoadedRef.current) return;
@@ -1515,6 +1669,27 @@ const [isScrolled, setIsScrolled] = useState(false);
             setScannedImeis(payload.new.report_data);
             localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(payload.new.report_data));
           }
+        }
+      },
+
+      // (9) Lắng nghe live broadcast thao tác nhập liệu ô trực tiếp từ các máy khác
+      onLiveFormChange: (payload) => {
+        const data = payload?.payload;
+        if (!data || !data.date || !data.shift) return;
+        if (data.date === formDateRef.current && data.shift === formShiftRef.current) {
+          isSyncingFromExternalRef.current = true;
+          if (data.items) setFormModelItems(data.items);
+          if (data.slots) setFormSlots(data.slots);
+          if (data.officialRO) setFormOfficialWorkersRO(data.officialRO);
+          if (data.seasonalRO) setFormSeasonalWorkersRO(data.seasonalRO);
+          if (data.officialBG) setFormOfficialWorkersBG(data.officialBG);
+          if (data.seasonalBG) setFormSeasonalWorkersBG(data.seasonalBG);
+          if (data.officialRMA) setFormOfficialWorkersRMA(data.officialRMA);
+          if (data.seasonalRMA) setFormSeasonalWorkersRMA(data.seasonalRMA);
+          if (data.technician) setFormTechnician(data.technician);
+          setTimeout(() => {
+            isSyncingFromExternalRef.current = false;
+          }, 100);
         }
       },
     });

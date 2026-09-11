@@ -1153,6 +1153,88 @@ export async function getProductionOrders(limit: number = 100): Promise<any[]> {
 }
 
 // ==========================================
+// 9B. BẢN NHÁP FORM NHẬT KÝ CA (FORM DRAFTS & LIVE SYNC)
+// ==========================================
+export interface FormDraftData {
+  date: string;
+  shift: string;
+  slots: string[];
+  items: any[];
+  officialRO: Record<string, number>;
+  seasonalRO: Record<string, number>;
+  officialBG: Record<string, number>;
+  seasonalBG: Record<string, number>;
+  officialRMA: Record<string, number>;
+  seasonalRMA: Record<string, number>;
+  technician: string;
+  updatedAt: string;
+}
+
+export async function getFormDraft(date: string, shift: string): Promise<FormDraftData | null> {
+  const localKey = `sunhouse_draft_${date}_${shift}`;
+  const localData = getLocal<FormDraftData | null>(localKey, null);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const draftId = `draft_${date}_${shift.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', draftId)
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(localKey, data.report_data);
+        return data.report_data as FormDraftData;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải form draft từ Supabase:', err);
+    }
+  }
+  return localData;
+}
+
+export async function saveFormDraft(draft: FormDraftData): Promise<void> {
+  const localKey = `sunhouse_draft_${draft.date}_${draft.shift}`;
+  setLocal(localKey, draft);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const draftId = `draft_${draft.date}_${draft.shift.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: draftId,
+        report_type: 'form_draft',
+        report_data: draft,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu form draft lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu form draft:', err?.message || err);
+    }
+  }
+}
+
+// Live broadcast kênh nhập liệu chung
+let liveBroadcastChannel: any = null;
+
+export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    if (!liveBroadcastChannel) {
+      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room');
+      liveBroadcastChannel.subscribe();
+    }
+    liveBroadcastChannel.send({
+      type: 'broadcast',
+      event: 'form_cell_change',
+      payload: { ...draft, timestamp: Date.now() },
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi broadcast thất bại:', err);
+  }
+}
+
+// ==========================================
 // 10. REALTIME SUBSCRIPTION (LẮNG NGHE THAY ĐỔI TỐI ƯU)
 // ==========================================
 export interface RealtimeCallbacks {
@@ -1170,6 +1252,7 @@ export interface RealtimeCallbacks {
   onMonthlyTargetsChange?: (payload: any) => void;
   onMonthlyMetricsChange?: (payload: any) => void;
   onDailyReportsChange?: (payload: any) => void;
+  onLiveFormChange?: (payload: any) => void;
 }
 
 /**
@@ -1294,6 +1377,17 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
         { event: '*', schema: 'public', table: 'daily_reports' },
         (payload) => {
           callbacks.onDailyReportsChange?.(payload);
+        }
+      );
+    }
+
+    // 3. Lắng nghe kênh live broadcast thay đổi ô nhập liệu trực tiếp
+    if (callbacks.onLiveFormChange) {
+      channel = channel.on(
+        'broadcast',
+        { event: 'form_cell_change' },
+        (payload) => {
+          callbacks.onLiveFormChange?.(payload);
         }
       );
     }
