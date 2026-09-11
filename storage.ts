@@ -670,6 +670,8 @@ export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void
 // --------------------------------------------------------------------
 // ĐỒNG BỘ RIÊNG CHO TAB 'GHI NHẬT KÝ CA' (SHIFT LOG / HOURLY LOGS)
 // --------------------------------------------------------------------
+let hasGranularSchema: boolean | null = null;
+
 export interface HourlyLogPayload {
   work_date: string;
   department: string;
@@ -677,6 +679,8 @@ export interface HourlyLogPayload {
   shift: string;
   quantity: number;
   status?: string;
+  productId?: string;
+  productName?: string;
 }
 
 export async function fetchShiftProductionLogs(
@@ -688,21 +692,33 @@ export async function fetchShiftProductionLogs(
   }
 
   try {
-    let query = supabase.from('production_logs').select('*');
-    // Truy vấn theo work_date đúng như yêu cầu: supabase.from('production_logs').select('*').eq('work_date', selectedDate)
-    let res = await query.eq('work_date', selectedDate);
-    
-    // Nếu bảng cũ chưa có cột work_date, tự động fallback sang cột date
-    if (res.error && (res.error.message?.includes('work_date') || res.error.code === '42703')) {
-      res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+    let rows: any[] = [];
+
+    // Nếu chưa xác định hoặc đã xác nhận database hỗ trợ cột work_date
+    if (hasGranularSchema !== false) {
+      let res = await supabase.from('production_logs').select('*').eq('work_date', selectedDate);
+      
+      // Nếu bảng chưa có cột work_date (lỗi PGRST204 hoặc 42703), fallback sang cột date
+      if (res.error && (res.error.code === 'PGRST204' || res.error.code === '42703' || res.error.message?.includes('work_date') || res.error.message?.includes('schema cache'))) {
+        hasGranularSchema = false;
+        res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+      }
+
+      if (res.error) {
+        console.warn('[storage] Lỗi query production_logs theo ngày:', res.error);
+        return { data: null, error: res.error };
+      }
+      rows = res.data || [];
+    } else {
+      // Schema tiêu chuẩn (cột date)
+      const res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+      if (res.error) {
+        console.warn('[storage] Lỗi query production_logs theo date:', res.error);
+        return { data: null, error: res.error };
+      }
+      rows = res.data || [];
     }
 
-    if (res.error) {
-      console.warn('[storage] Lỗi query production_logs theo ngày:', res.error);
-      return { data: null, error: res.error };
-    }
-
-    let rows = res.data || [];
     if (selectedDept && selectedDept !== 'ALL') {
       rows = rows.filter((r: any) => {
         const d = r.department || r.product_group;
@@ -725,31 +741,130 @@ export async function upsertHourlyProductionLog(
   }
 
   const cleanSlot = payload.shift.replace(/\s+/g, ''); // Ví dụ: '8H-9H'
-  const record = {
-    work_date: payload.work_date,
-    department: payload.department,
-    product_code: payload.product_code,
-    shift: cleanSlot,
-    quantity: Number(payload.quantity || 0),
-    status: payload.status || 'OK'
-  };
+  const qty = Number(payload.quantity || 0);
 
+  // 1. Thử ghi theo Granular Schema (nếu database đã chạy migration có các cột work_date, department, product_code,...)
+  if (hasGranularSchema !== false) {
+    try {
+      const record = {
+        work_date: payload.work_date,
+        department: payload.department,
+        product_code: payload.product_code,
+        shift: cleanSlot,
+        quantity: qty,
+        status: payload.status || 'OK'
+      };
+
+      const res = await supabase.from('production_logs').upsert(record, {
+        onConflict: 'work_date,product_code,shift'
+      });
+
+      if (!res.error) {
+        hasGranularSchema = true;
+        console.log("✅ Đã đồng bộ Nhật ký ca lên Supabase (granular)");
+        broadcastTableUpdate('production_logs');
+        return { data: res.data, error: null };
+      }
+
+      // Kiểm tra nếu lỗi do thiếu cột (PGRST204: department / work_date not found) hoặc thiếu constraint
+      const isMissingColumn = 
+        res.error.code === 'PGRST204' || 
+        res.error.code === '42703' || 
+        res.error.code === '42P10' || 
+        res.error.message?.includes('department') || 
+        res.error.message?.includes('work_date') || 
+        res.error.message?.includes('schema cache');
+
+      if (isMissingColumn) {
+        hasGranularSchema = false;
+        console.info('[storage] Database Supabase hiện tại đang dùng schema tiêu chuẩn (bản ghi theo ngày với JSONB hourly_actuals). Tự động lưu theo schema tiêu chuẩn.');
+      } else {
+        console.error('[storage] Lỗi UPSERT production_logs:', res.error);
+        return { data: null, error: res.error };
+      }
+    } catch (err: any) {
+      console.warn('[storage] Ngoại lệ khi thử UPSERT granular, chuyển sang schema tiêu chuẩn:', err);
+      hasGranularSchema = false;
+    }
+  }
+
+  // 2. Fallback: Lưu theo Schema Tiêu Chuẩn (bảng production_logs có id, date, product_id, hourly_actuals, product_group,...)
   try {
-    // Gọi lệnh UPSERT lên Supabase với onConflict 'work_date,product_code,shift'
-    const res = await supabase.from('production_logs').upsert(record, {
-      onConflict: 'work_date,product_code,shift'
-    });
+    const localProducts = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, SUNHOUSE_PRODUCTS);
+    const prod = localProducts.find(
+      (p) => p.id === payload.productId || p.code === payload.product_code || p.id === payload.product_code || p.name.includes(payload.product_code)
+    );
 
+    const targetProdId = prod ? prod.id : (payload.productId || payload.product_code);
+    const targetProdName = prod ? prod.name : (payload.productName || payload.product_code);
+    const targetDept = prod ? prod.group : (payload.department === 'BG' ? 'BG' : payload.department === 'RMA' ? 'RMA' : 'MLN');
+    const factor = prod ? prod.factor : 1.0;
+
+    const lineId = targetDept === 'BG' ? 'line-bg-02' : targetDept === 'RMA' ? 'line-rma-03' : 'line-mln-01';
+    const lineName = targetDept === 'BG' ? 'DCBG' : targetDept === 'RMA' ? 'DCRMA' : 'DCRO';
+
+    // Tìm bản ghi hiện có trên Supabase để merge hourly_actuals
+    const { data: existingRows } = await supabase
+      .from('production_logs')
+      .select('id, hourly_actuals, date, product_id, actual_units, equivalent_factor, line_id, line_name, shift')
+      .eq('date', payload.work_date)
+      .eq('product_id', targetProdId)
+      .limit(1);
+
+    let rowId = `log-${payload.work_date}-${targetProdId}`;
+    let mergedHourly: Record<string, number> = {};
+    let existingShift = "Ca HC (08:00 - 17:00)";
+    let existingFactor = factor;
+
+    if (existingRows && existingRows.length > 0) {
+      const ex = existingRows[0];
+      rowId = ex.id || rowId;
+      mergedHourly = typeof ex.hourly_actuals === 'object' && ex.hourly_actuals ? { ...ex.hourly_actuals } : {};
+      existingShift = ex.shift || existingShift;
+      existingFactor = ex.equivalent_factor || factor;
+    } else {
+      // Thử tìm trong local storage
+      const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, []);
+      const localEx = localLogs.find(l => l.date === payload.work_date && l.productId === targetProdId);
+      if (localEx) {
+        rowId = localEx.id || rowId;
+        mergedHourly = { ...(localEx.hourlyActuals || {}) };
+        existingShift = localEx.shift || existingShift;
+        existingFactor = localEx.equivalentFactor || factor;
+      }
+    }
+
+    mergedHourly[cleanSlot] = qty;
+    const totalUnits = Object.values(mergedHourly).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const eqUnits = Math.round(totalUnits * existingFactor);
+
+    const standardRecord = {
+      id: rowId,
+      date: payload.work_date,
+      line_id: lineId,
+      line_name: lineName,
+      product_id: targetProdId,
+      product_name: targetProdName,
+      product_group: targetDept,
+      actual_units: totalUnits,
+      shift: existingShift,
+      equivalent_factor: existingFactor,
+      equivalent_products: eqUnits,
+      hourly_actuals: mergedHourly,
+      updated_at: new Date().toISOString()
+    };
+
+    const res = await supabase.from('production_logs').upsert(standardRecord);
     if (res.error) {
-      console.error('[storage] Lỗi UPSERT production_logs:', res.error);
+      console.error('[storage] Lỗi lưu production_logs (schema tiêu chuẩn):', res.error);
       return { data: null, error: res.error };
     }
 
-    console.log("✅ Đã đồng bộ Nhật ký ca lên Supabase");
+    console.log("✅ Đã đồng bộ Nhật ký ca lên Supabase (schema tiêu chuẩn)");
     broadcastTableUpdate('production_logs');
     return { data: res.data, error: null };
   } catch (err: any) {
-    console.error('[storage] Ngoại lệ khi UPSERT production_logs:', err);
+    console.error('[storage] Ngoại lệ khi lưu production_logs:', err);
     return { data: null, error: err };
   }
 }

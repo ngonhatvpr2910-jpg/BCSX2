@@ -821,7 +821,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       product_code: modelCode,
       shift: timeSlot,
       quantity: updatedQty,
-      status: 'OK'
+      status: 'OK',
+      productId: targetProd?.id || targetModelId,
+      productName: targetProd?.name
     }).then(({ error }) => {
       if (error) {
         showToastError(error.message || 'Lỗi đồng bộ Supabase khi quét mã');
@@ -1350,13 +1352,14 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
 
           // Granular row (work_date, product_code, shift, quantity)
-          if (row.shift && (row.quantity !== undefined || row.actual_units !== undefined)) {
+          const isHourlySlotShift = Boolean(row.shift && /\d+\s*H/i.test(row.shift));
+          if (row.quantity !== undefined || (isHourlySlotShift && row.actual_units !== undefined)) {
             const slot = matchSlotName(row.shift, Array.from(activeSlots));
             activeSlots.add(slot);
             item.hourlyActuals[slot] = Number(row.quantity ?? row.actual_units ?? 0);
           }
 
-          // Legacy hourly_actuals JSONB
+          // Legacy / Standard hourly_actuals JSONB
           if (row.hourly_actuals && typeof row.hourly_actuals === 'object') {
             Object.entries(row.hourly_actuals).forEach(([slotKey, val]) => {
               const slot = matchSlotName(slotKey, Array.from(activeSlots));
@@ -4582,7 +4585,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       product_code: modelCode,
       shift: timeSlot,
       quantity: qty,
-      status: 'OK'
+      status: 'OK',
+      productId: prod?.id || targetItem.productId,
+      productName: prod?.name
     });
 
     if (error) {
