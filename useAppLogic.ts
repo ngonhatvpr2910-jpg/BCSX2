@@ -438,8 +438,36 @@ const [isScrolled, setIsScrolled] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState<boolean>(false);
   const [aiError, setAiError] = useState<string>("");
 
-  // Điều khiển Form thêm nhật ký mới (Hỗ trợ Nhiều Model & Chia Khung giờ 2h/lần)
+  // Helpers lấy bản nháp chưa lưu (Draft) từ LocalStorage
+  const getInitialActiveDraft = (): storage.FormDraftData | null => {
+    try {
+      const raw = localStorage.getItem("sunhouse_last_active_form_draft");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") return parsed;
+      }
+    } catch (e) {}
+    return null;
+  };
+
+  const getDraftForDateAndShift = (date: string, shift: string): storage.FormDraftData | null => {
+    try {
+      const key = `sunhouse_draft_${date}_${shift}`;
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.date === date && parsed.shift === shift) return parsed;
+      }
+      const active = getInitialActiveDraft();
+      if (active && active.date === date && active.shift === shift) return active;
+    } catch (e) {}
+    return null;
+  };
+
+  // Điều khiển Form thêm nhật ký mới (Hỗ trợ Nhiều Model & Chia Khung giờ 1h-2h/lần)
   const [formDate, setFormDate] = useState<string>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft && draft.date) return draft.date;
     const today = new Date();
     // Use local time instead of UTC to avoid timezone issues where it might be one day behind
     return today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, '0') + "-" + String(today.getDate()).padStart(2, '0');
@@ -468,8 +496,16 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   }, [formDate]);
   const [formLineId, setFormLineId] = useState<string>(SUNHOUSE_LINES[0].id);
-  const [formShift, setFormShift] = useState<"Ca HC (08:00 - 17:00)" | "Ca HC (08:00 - 19h)" | "Ca HC (08:00 - 20h00)">("Ca HC (08:00 - 17:00)");
-  const [formSlots, setFormSlots] = useState<string[]>(() => getShiftSlots("Ca HC (08:00 - 17:00)"));
+  const [formShift, setFormShift] = useState<"Ca HC (08:00 - 17:00)" | "Ca HC (08:00 - 19h)" | "Ca HC (08:00 - 20h00)">(() => {
+    const draft = getInitialActiveDraft();
+    if (draft && draft.shift) return draft.shift as any;
+    return "Ca HC (08:00 - 17:00)";
+  });
+  const [formSlots, setFormSlots] = useState<string[]>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft && Array.isArray(draft.slots) && draft.slots.length > 0) return draft.slots;
+    return getShiftSlots("Ca HC (08:00 - 17:00)");
+  });
   const [newSlotInput, setNewSlotInput] = useState<string>("20H - 21H");
   const [scanInput, setScanInput] = useState<string>("");
 
@@ -839,83 +875,107 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   };
 
-  const [formOfficialWorkersRO, setFormOfficialWorkersRO] = useState<{ [slotName: string]: number }>({
-    "8H - 9H": 0,
-    "9H - 10H": 0,
-    "10H - 11H": 0,
-    "11H - 12H": 0,
-    "13H - 14H": 0,
-    "14H - 15H": 0,
-    "15H - 16H": 0,
-    "16H - 17H": 0,
-    "17H - 18H": 0,
-    "18H - 19H": 0,
-    "19H - 20H": 0,
+  const [formOfficialWorkersRO, setFormOfficialWorkersRO] = useState<{ [slotName: string]: number }>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft?.officialRO && Object.keys(draft.officialRO).length > 0) return draft.officialRO;
+    return {
+      "8H - 9H": 0,
+      "9H - 10H": 0,
+      "10H - 11H": 0,
+      "11H - 12H": 0,
+      "13H - 14H": 0,
+      "14H - 15H": 0,
+      "15H - 16H": 0,
+      "16H - 17H": 0,
+      "17H - 18H": 0,
+      "18H - 19H": 0,
+      "19H - 20H": 0,
+    };
   });
-  const [formSeasonalWorkersRO, setFormSeasonalWorkersRO] = useState<{ [slotName: string]: number }>({
-    "8H - 9H": 0,
-    "9H - 10H": 0,
-    "10H - 11H": 0,
-    "11H - 12H": 0,
-    "13H - 14H": 0,
-    "14H - 15H": 0,
-    "15H - 16H": 0,
-    "16H - 17H": 0,
-    "17H - 18H": 0,
-    "18H - 19H": 0,
-    "19H - 20H": 0,
+  const [formSeasonalWorkersRO, setFormSeasonalWorkersRO] = useState<{ [slotName: string]: number }>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft?.seasonalRO && Object.keys(draft.seasonalRO).length > 0) return draft.seasonalRO;
+    return {
+      "8H - 9H": 0,
+      "9H - 10H": 0,
+      "10H - 11H": 0,
+      "11H - 12H": 0,
+      "13H - 14H": 0,
+      "14H - 15H": 0,
+      "15H - 16H": 0,
+      "16H - 17H": 0,
+      "17H - 18H": 0,
+      "18H - 19H": 0,
+      "19H - 20H": 0,
+    };
   });
-  const [formOfficialWorkersRMA, setFormOfficialWorkersRMA] = useState<{ [slotName: string]: number }>({
-    "8H - 9H": 0,
-    "9H - 10H": 0,
-    "10H - 11H": 0,
-    "11H - 12H": 0,
-    "13H - 14H": 0,
-    "14H - 15H": 0,
-    "15H - 16H": 0,
-    "16H - 17H": 0,
-    "17H - 18H": 0,
-    "18H - 19H": 0,
-    "19H - 20H": 0,
+  const [formOfficialWorkersRMA, setFormOfficialWorkersRMA] = useState<{ [slotName: string]: number }>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft?.officialRMA && Object.keys(draft.officialRMA).length > 0) return draft.officialRMA;
+    return {
+      "8H - 9H": 0,
+      "9H - 10H": 0,
+      "10H - 11H": 0,
+      "11H - 12H": 0,
+      "13H - 14H": 0,
+      "14H - 15H": 0,
+      "15H - 16H": 0,
+      "16H - 17H": 0,
+      "17H - 18H": 0,
+      "18H - 19H": 0,
+      "19H - 20H": 0,
+    };
   });
-  const [formSeasonalWorkersRMA, setFormSeasonalWorkersRMA] = useState<{ [slotName: string]: number }>({
-    "8H - 9H": 0,
-    "9H - 10H": 0,
-    "10H - 11H": 0,
-    "11H - 12H": 0,
-    "13H - 14H": 0,
-    "14H - 15H": 0,
-    "15H - 16H": 0,
-    "16H - 17H": 0,
-    "17H - 18H": 0,
-    "18H - 19H": 0,
-    "19H - 20H": 0,
+  const [formSeasonalWorkersRMA, setFormSeasonalWorkersRMA] = useState<{ [slotName: string]: number }>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft?.seasonalRMA && Object.keys(draft.seasonalRMA).length > 0) return draft.seasonalRMA;
+    return {
+      "8H - 9H": 0,
+      "9H - 10H": 0,
+      "10H - 11H": 0,
+      "11H - 12H": 0,
+      "13H - 14H": 0,
+      "14H - 15H": 0,
+      "15H - 16H": 0,
+      "16H - 17H": 0,
+      "17H - 18H": 0,
+      "18H - 19H": 0,
+      "19H - 20H": 0,
+    };
   });
-  const [formOfficialWorkersBG, setFormOfficialWorkersBG] = useState<{ [slotName: string]: number }>({
-    "8H - 9H": 0,
-    "9H - 10H": 0,
-    "10H - 11H": 0,
-    "11H - 12H": 0,
-    "13H - 14H": 0,
-    "14H - 15H": 0,
-    "15H - 16H": 0,
-    "16H - 17H": 0,
-    "17H - 18H": 0,
-    "18H - 19H": 0,
-    "19H - 20H": 0,
+  const [formOfficialWorkersBG, setFormOfficialWorkersBG] = useState<{ [slotName: string]: number }>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft?.officialBG && Object.keys(draft.officialBG).length > 0) return draft.officialBG;
+    return {
+      "8H - 9H": 0,
+      "9H - 10H": 0,
+      "10H - 11H": 0,
+      "11H - 12H": 0,
+      "13H - 14H": 0,
+      "14H - 15H": 0,
+      "15H - 16H": 0,
+      "16H - 17H": 0,
+      "17H - 18H": 0,
+      "18H - 19H": 0,
+      "19H - 20H": 0,
+    };
   });
-  const [formSeasonalWorkersBG, setFormSeasonalWorkersBG] = useState<{ [slotName: string]: number }>({
-    "8H - 9H": 0,
-    "9H - 10H": 0,
-    "10H - 11H": 0,
-    "11H - 12H": 0,
-    "13H - 14H": 0,
-    "14H - 15H": 0,
-    "15H - 16H": 0,
-    "16H - 17H": 0,
-    "17H - 18H": 0,
-    "18H - 19H": 0,
-    "19H - 20H": 0,
+  const [formSeasonalWorkersBG, setFormSeasonalWorkersBG] = useState<{ [slotName: string]: number }>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft?.seasonalBG && Object.keys(draft.seasonalBG).length > 0) return draft.seasonalBG;
+    return {
+      "8H - 9H": 0,
+      "9H - 10H": 0,
+      "10H - 11H": 0,
+      "11H - 12H": 0,
+      "13H - 14H": 0,
+      "14H - 15H": 0,
+      "15H - 16H": 0,
+      "16H - 17H": 0,
+      "17H - 18H": 0,
+      "18H - 19H": 0,
+      "19H - 20H": 0,
+    };
   });
 
   // calculate hourly workers for RO and BG
@@ -952,23 +1012,29 @@ const [isScrolled, setIsScrolled] = useState(false);
     return hw;
   }, [formHourlyWorkersRO, formHourlyWorkersBG, formHourlyWorkersRMA, formSlots]);
 
-  const [formModelItems, setFormModelItems] = useState<FormModelItem[]>(() => [
-    {
-      id: "item-init",
-      productId: "mln-01",
-      dailyPlan: 0,
-      hourlyActuals: {
-        "8H - 9H": 0,
-        "9H - 10H": 0,
-        "10H - 11H": 0,
-        "11H - 12H": 0,
-        "13H - 14H": 0,
-        "14H - 15H": 0,
-        "15H - 16H": 0,
-        "16H - 17H": 0,
-      }
+  const [formModelItems, setFormModelItems] = useState<FormModelItem[]>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft && Array.isArray(draft.items) && draft.items.length > 0) {
+      return draft.items;
     }
-  ]);
+    return [
+      {
+        id: "item-init",
+        productId: "mln-01",
+        dailyPlan: 0,
+        hourlyActuals: {
+          "8H - 9H": 0,
+          "9H - 10H": 0,
+          "10H - 11H": 0,
+          "11H - 12H": 0,
+          "13H - 14H": 0,
+          "14H - 15H": 0,
+          "15H - 16H": 0,
+          "16H - 17H": 0,
+        }
+      }
+    ];
+  });
 
   const {
     formOfficialCountRO,
@@ -1064,7 +1130,11 @@ const [isScrolled, setIsScrolled] = useState(false);
       formWorkersCount: Number(((offRO + seasRO + offRMA + seasRMA + offBG + seasBG) / 8).toFixed(3)) || 0,
     };
   }, [formDate, formSlots, formModelItems, formOfficialWorkersRO, formSeasonalWorkersRO, formOfficialWorkersRMA, formSeasonalWorkersRMA, formOfficialWorkersBG, formSeasonalWorkersBG, products]);
-  const [formTechnician, setFormTechnician] = useState<string>("Nguyễn Minh Hoàng Khiêm ( DCLR )");
+  const [formTechnician, setFormTechnician] = useState<string>(() => {
+    const draft = getInitialActiveDraft();
+    if (draft && draft.technician) return draft.technician;
+    return "Nguyễn Minh Hoàng Khiêm ( DCLR )";
+  });
   const [formMessage, setFormMessage] = useState<string>("");
 
   // Quản lý đồng bộ trực tiếp hai chiều & Realtime cho Form Nhật ký ca
@@ -1077,6 +1147,23 @@ const [isScrolled, setIsScrolled] = useState(false);
   // Tự động nạp dữ liệu ca từ productionLogs / drafts / KHSX tháng khi chuyển ngày hoặc khi nhận dữ liệu từ Cloud
   useEffect(() => {
     if (!formDate || !formShift || isSyncingFromExternalRef.current) return;
+
+    // 1. Kiểm tra Bản Nháp (Draft) chưa lưu trước tiên để giữ lại toàn bộ số liệu vừa gõ dở
+    const draft = getDraftForDateAndShift(formDate, formShift);
+    if (draft && Array.isArray(draft.items) && draft.items.length > 0) {
+      if (draft.slots && Array.isArray(draft.slots) && draft.slots.length > 0) {
+        setFormSlots(draft.slots);
+      }
+      setFormModelItems(draft.items);
+      if (draft.officialRO) setFormOfficialWorkersRO(draft.officialRO);
+      if (draft.seasonalRO) setFormSeasonalWorkersRO(draft.seasonalRO);
+      if (draft.officialBG) setFormOfficialWorkersBG(draft.officialBG);
+      if (draft.seasonalBG) setFormSeasonalWorkersBG(draft.seasonalBG);
+      if (draft.officialRMA) setFormOfficialWorkersRMA(draft.officialRMA);
+      if (draft.seasonalRMA) setFormSeasonalWorkersRMA(draft.seasonalRMA);
+      if (draft.technician) setFormTechnician(draft.technician);
+      return;
+    }
     
     const [year, month, day] = formDate.split("-");
     const ym = `${year}-${month}`;
@@ -1085,7 +1172,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const logsForDate = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
 
     if (logsForDate.length > 0) {
-      // 1. Tự động nạp từ bản ghi productionLogs của ngày/ca đó
+      // 2. Tự động nạp từ bản ghi productionLogs của ngày/ca đó
       const allSlots = new Set<string>();
       logsForDate.forEach(log => {
         if (log.hourlyActuals) {
@@ -1150,7 +1237,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         setFormTechnician(logsForDate[0].technicianName);
       }
     } else {
-      // 2. Chưa có log: Tự động khởi tạo từ KHSX Tháng (monthlyPlan)
+      // 3. Chưa có log & chưa có draft: Tự động khởi tạo từ KHSX Tháng (monthlyPlan)
       if (!isNaN(dayNum) && monthlyPlan[ym]) {
         const plannedProducts = products.filter(p => (monthlyPlan[ym]?.[p.id]?.[dayNum] || 0) > 0);
         if (plannedProducts.length > 0) {
@@ -1192,8 +1279,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       updatedAt: new Date().toISOString(),
     };
 
-    // 1. Lưu LocalStorage tức thì
+    // 1. Lưu LocalStorage tức thì (cả key ngày/ca lẫn active draft)
     localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
 
     // 2. Gửi Realtime Broadcast đến các thiết bị / tab khác
     storage.sendLiveFormBroadcast(draftData);
@@ -3874,6 +3962,9 @@ const [isScrolled, setIsScrolled] = useState(false);
     const logMonth = parseInt(formDate.split("-")[1], 10) || 1;
     const logYear = parseInt(formDate.split("-")[0], 10) || 2026;
     setFormMessage(`✅ Đã lưu ${newLogs.length} bản ghi nhật ký ca & đồng bộ thành công dữ liệu lịch sử (Tháng ${logMonth}/${logYear})!`);
+
+    // Xóa bản nháp (draft) sau khi đã lưu thành công
+    storage.clearFormDraft(formDate, formShift);
 
     // Reset form fields
     resetFormFields();

@@ -1197,6 +1197,7 @@ export async function getFormDraft(date: string, shift: string): Promise<FormDra
 export async function saveFormDraft(draft: FormDraftData): Promise<void> {
   const localKey = `sunhouse_draft_${draft.date}_${draft.shift}`;
   setLocal(localKey, draft);
+  setLocal('sunhouse_last_active_form_draft', draft);
 
   if (supabase && isSupabaseConfigured) {
     try {
@@ -1210,6 +1211,23 @@ export async function saveFormDraft(draft: FormDraftData): Promise<void> {
       if (error) console.warn('[storage] Lưu form draft lên Supabase:', error.message || error);
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu form draft:', err?.message || err);
+    }
+  }
+}
+
+export async function clearFormDraft(date: string, shift: string): Promise<void> {
+  const localKey = `sunhouse_draft_${date}_${shift}`;
+  try {
+    localStorage.removeItem(localKey);
+    localStorage.removeItem('sunhouse_last_active_form_draft');
+  } catch (e) {}
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const draftId = `draft_${date}_${shift.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      await supabase.from('daily_reports').delete().eq('id', draftId);
+    } catch (err) {
+      console.warn('[storage] Xóa form draft thất bại:', err);
     }
   }
 }
