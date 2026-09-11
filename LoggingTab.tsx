@@ -86,7 +86,12 @@ export const LoggingTab = ({
   setFormModelItems,
   setFormMessage,
   toastError,
-  setToastError
+  setToastError,
+  toastSuccess,
+  setToastSuccess,
+  handleCommitItemHourly,
+  handleCommitItemDailyPlan,
+  handleCommitWorkerDraft
 }: any) => {
   return (
     <motion.div
@@ -225,6 +230,22 @@ export const LoggingTab = ({
                       </div>
                     </div>
 
+                    {/* Status Indicator: Cơ chế Enter để lưu */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 bg-slate-900/80 border border-slate-800 rounded-lg text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="flex items-center gap-1.5 font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-700/80 px-2.5 py-1 rounded text-[11px]">
+                          <Database className="w-3.5 h-3.5 text-emerald-400" /> Cơ chế: Sửa số &amp; nhấn Enter để lưu lên database Supabase
+                        </span>
+                        <span className="text-slate-400 text-[11px] hidden sm:inline">
+                          (Dữ liệu NSLĐ, tổng sản lượng và tiến độ tính toán tức thì khi gõ phím)
+                        </span>
+                      </div>
+                      <div className="text-[11px] font-mono text-slate-400 flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                        Phím tắt: <kbd className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-amber-300 font-bold">↵ Enter</kbd> để lưu ô
+                      </div>
+                    </div>
+
                     {/* Matrix Input Table */}
                     <div className="overflow-x-auto border border-slate-800 rounded-lg shadow-xl shadow-slate-950">
                       <table className="matrix-table w-full text-[12px] font-mono whitespace-nowrap text-center">
@@ -293,8 +314,18 @@ export const LoggingTab = ({
                                       min={0}
                                       value={item.dailyPlan !== undefined && !Number.isNaN(item.dailyPlan) ? item.dailyPlan : ""}
                                       onChange={(e) => handleUpdateItem(item.id, { dailyPlan: parseInt(e.target.value) || 0 })}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          (e.target as HTMLInputElement).blur();
+                                          handleCommitItemDailyPlan?.(item.id, parseInt((e.target as HTMLInputElement).value) || 0);
+                                        }
+                                      }}
+                                      onBlur={(e) => {
+                                        handleCommitItemDailyPlan?.(item.id, parseInt(e.target.value) || 0);
+                                      }}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-amber-400 placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       placeholder="0"
+                                      title="Nhập KHSX rồi nhấn ENTER để lưu lên database Supabase"
                                     />
                                   </td>
                                   {formSlots.map(slot => (
@@ -304,8 +335,18 @@ export const LoggingTab = ({
                                         min={0}
                                         value={item.hourlyActuals[slot] !== undefined && !Number.isNaN(item.hourlyActuals[slot]) ? item.hourlyActuals[slot] : ""}
                                         onChange={(e) => handleUpdateItemHourly(item.id, slot, parseInt(e.target.value) || 0)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            (e.target as HTMLInputElement).blur();
+                                            handleCommitItemHourly?.(item.id, slot, parseInt((e.target as HTMLInputElement).value) || 0);
+                                          }
+                                        }}
+                                        onBlur={(e) => {
+                                          handleCommitItemHourly?.(item.id, slot, parseInt(e.target.value) || 0);
+                                        }}
                                         className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-white placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         placeholder="-"
+                                        title="Nhập số lượng rồi nhấn ENTER để lưu lên database Supabase"
                                       />
                                     </td>
                                   ))}
@@ -574,6 +615,8 @@ export const LoggingTab = ({
                                       step="0.01"
                                       value={formOfficialWorkersRO[slot] !== undefined && !Number.isNaN(formOfficialWorkersRO[slot]) ? formOfficialWorkersRO[slot] : ""}
                                       onChange={(e) => handleUpdateOfficialWorkerRO(slot, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
+                                      onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
@@ -596,6 +639,8 @@ export const LoggingTab = ({
                                       step="0.01"
                                       value={formSeasonalWorkersRO[slot] !== undefined && !Number.isNaN(formSeasonalWorkersRO[slot]) ? formSeasonalWorkersRO[slot] : ""}
                                       onChange={(e) => handleUpdateSeasonalWorkerRO(slot, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
+                                      onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
@@ -652,6 +697,8 @@ export const LoggingTab = ({
                                       step="0.01"
                                       value={formOfficialWorkersRMA[slot] !== undefined && !Number.isNaN(formOfficialWorkersRMA[slot]) ? formOfficialWorkersRMA[slot] : ""}
                                       onChange={(e) => handleUpdateOfficialWorkerRMA(slot, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
+                                      onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
@@ -674,6 +721,8 @@ export const LoggingTab = ({
                                       step="0.01"
                                       value={formSeasonalWorkersRMA[slot] !== undefined && !Number.isNaN(formSeasonalWorkersRMA[slot]) ? formSeasonalWorkersRMA[slot] : ""}
                                       onChange={(e) => handleUpdateSeasonalWorkerRMA(slot, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
+                                      onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
@@ -729,6 +778,8 @@ export const LoggingTab = ({
                                       step="0.01"
                                       value={formOfficialWorkersBG[slot] !== undefined && !Number.isNaN(formOfficialWorkersBG[slot]) ? formOfficialWorkersBG[slot] : ""}
                                       onChange={(e) => handleUpdateOfficialWorkerBG(slot, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
+                                      onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
@@ -751,6 +802,8 @@ export const LoggingTab = ({
                                       step="0.01"
                                       value={formSeasonalWorkersBG[slot] !== undefined && !Number.isNaN(formSeasonalWorkersBG[slot]) ? formSeasonalWorkersBG[slot] : ""}
                                       onChange={(e) => handleUpdateSeasonalWorkerBG(slot, parseFloat(e.target.value) || 0)}
+                                      onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
+                                      onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>

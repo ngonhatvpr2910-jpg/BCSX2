@@ -73,20 +73,38 @@ function setLocal<T>(key: string, data: T): void {
   }
 }
 
+// Định danh duy nhất cho phiên trình duyệt/tab hiện tại để lọc bỏ phản hồi ngược (self-echo)
+export const CLIENT_SESSION_ID = typeof window !== 'undefined'
+  ? ((window as any).__SUNHOUSE_CLIENT_ID ||= 'cli_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now())
+  : 'cli_srv';
+
+// Live broadcast channel dùng chung toàn ứng dụng
+let sharedBroadcastChannel: any = null;
+export function getSharedBroadcastChannel(): any {
+  if (!supabase || !isSupabaseConfigured) return null;
+  if (!sharedBroadcastChannel) {
+    sharedBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
+      config: { broadcast: { self: false } },
+    });
+    sharedBroadcastChannel.subscribe((status: string) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Kênh Broadcast liên tab đã sẵn sàng');
+      }
+    });
+  }
+  return sharedBroadcastChannel;
+}
+
 // Helper phát broadcast đồng bộ tức thì cho tất cả các máy/tab đang mở
 export function broadcastTableUpdate(tableName: string, extraData?: any): void {
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    if (!liveBroadcastChannel) {
-      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
-        config: { broadcast: { self: false } },
-      });
-      liveBroadcastChannel.subscribe();
-    }
-    liveBroadcastChannel.send({
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    ch.send({
       type: 'broadcast',
       event: 'table_sync_event',
-      payload: { table: tableName, data: extraData, timestamp: Date.now() },
+      payload: { table: tableName, data: extraData, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
     });
   } catch (err) {
     console.warn('[storage] Gửi broadcast đồng bộ bảng thất bại:', err);
@@ -253,14 +271,14 @@ export async function saveAllWorkers(workers: Worker[]): Promise<void> {
 // ==========================================
 // 2. NHẬT KÝ ĐIỂM DANH (ATTENDANCE LOGS)
 // ==========================================
-export async function getAttendanceLogs(): Promise<AttendanceRecord[]> {
+export async function getAttendanceLogs(limitCount: number = 1000): Promise<AttendanceRecord[]> {
   if (supabase && isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
         .from('attendance_records')
         .select('id, worker_id, date, slot, check_in_time, check_out_time, scanned_division')
         .order('date', { ascending: false })
-        .limit(10000);
+        .limit(limitCount);
 
       if (error) throw error;
 
@@ -481,7 +499,7 @@ export async function saveAllProducts(products: ProductDefinition[]): Promise<vo
 // ==========================================
 // 4. NHẬT KÝ SẢN XUẤT (PRODUCTION LOGS)
 // ==========================================
-export async function getProductionLogs(): Promise<ProductionLog[]> {
+export async function getProductionLogs(limitCount: number = 1000): Promise<ProductionLog[]> {
   if (supabase && isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -493,7 +511,7 @@ export async function getProductionLogs(): Promise<ProductionLog[]> {
           'hourly_actuals, hourly_workers, hourly_official_workers, hourly_seasonal_workers'
         )
         .order('date', { ascending: false })
-        .limit(10000);
+        .limit(limitCount);
 
       if (error) throw error;
 
@@ -1179,6 +1197,83 @@ export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetr
 // ==========================================
 // 8. BÁO CÁO HÀNG NGÀY CHI TIẾT (GAS & ASSEMBLY)
 // ==========================================
+export interface AllDailyReportsBundle {
+  gas: DailyReportRowGas[];
+  assembly: DailyReportRowAssembly[];
+  monthlyScrap: MonthlyScrapReport[];
+  weeklyScrap: WeeklyScrapReport[];
+  weeklyDclr: WeeklyDclreErrorRate[];
+  monthlyDclr: MonthlyDclreErrorRate[];
+  declaredImeis: any[];
+  scannedImeis: any[];
+}
+
+// Gom toàn bộ 8 bảng báo cáo hàng ngày vào 1 query duy nhất để tiết kiệm 87% Egress và tải siêu tốc
+export async function getAllDailyReports(): Promise<AllDailyReportsBundle> {
+  const result: AllDailyReportsBundle = {
+    gas: getLocal<DailyReportRowGas[]>(STORAGE_KEYS.GAS_DAILY, INITIAL_GAS_DAILY_REPORTS),
+    assembly: getLocal<DailyReportRowAssembly[]>(STORAGE_KEYS.ASSEMBLY_DAILY, INITIAL_ASSEMBLY_DAILY_REPORTS),
+    monthlyScrap: getLocal<MonthlyScrapReport[]>(STORAGE_KEYS.MONTHLY_SCRAP, MONTHLY_SCRAP_REPORT),
+    weeklyScrap: getLocal<WeeklyScrapReport[]>(STORAGE_KEYS.WEEKLY_SCRAP, WEEKLY_SCRAP_REPORT),
+    weeklyDclr: getLocal<WeeklyDclreErrorRate[]>(STORAGE_KEYS.WEEKLY_DCLR_ERROR, WEEKLY_DCLR_ERROR_RATE),
+    monthlyDclr: getLocal<MonthlyDclreErrorRate[]>(STORAGE_KEYS.MONTHLY_DCLR_ERROR, MONTHLY_DCLR_ERROR_RATE),
+    declaredImeis: getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []),
+    scannedImeis: getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []),
+  };
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('id, report_type, report_data')
+        .in('id', [
+          'gas_daily_reports',
+          'assembly_daily_reports',
+          'monthly_scrap_report',
+          'weekly_scrap_report',
+          'weekly_dclr_error',
+          'monthly_dclr_error',
+          'declared_imeis',
+          'scanned_imeis',
+        ]);
+
+      if (!error && data && data.length > 0) {
+        data.forEach((row: any) => {
+          if (!row.report_data) return;
+          if (row.id === 'gas_daily_reports') {
+            result.gas = row.report_data;
+            setLocal(STORAGE_KEYS.GAS_DAILY, row.report_data);
+          } else if (row.id === 'assembly_daily_reports') {
+            result.assembly = row.report_data;
+            setLocal(STORAGE_KEYS.ASSEMBLY_DAILY, row.report_data);
+          } else if (row.id === 'monthly_scrap_report') {
+            result.monthlyScrap = row.report_data;
+            setLocal(STORAGE_KEYS.MONTHLY_SCRAP, row.report_data);
+          } else if (row.id === 'weekly_scrap_report') {
+            result.weeklyScrap = row.report_data;
+            setLocal(STORAGE_KEYS.WEEKLY_SCRAP, row.report_data);
+          } else if (row.id === 'weekly_dclr_error') {
+            result.weeklyDclr = row.report_data;
+            setLocal(STORAGE_KEYS.WEEKLY_DCLR_ERROR, row.report_data);
+          } else if (row.id === 'monthly_dclr_error') {
+            result.monthlyDclr = row.report_data;
+            setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, row.report_data);
+          } else if (row.id === 'declared_imeis') {
+            result.declaredImeis = row.report_data;
+            setLocal(STORAGE_KEYS.DECLARED_IMEIS, row.report_data);
+          } else if (row.id === 'scanned_imeis') {
+            result.scannedImeis = row.report_data;
+            setLocal(STORAGE_KEYS.SCANNED_IMEIS, row.report_data);
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể nạp gói daily_reports từ Supabase:', err);
+    }
+  }
+
+  return result;
+}
 export async function getGasDailyReports(): Promise<DailyReportRowGas[]> {
   if (supabase && isSupabaseConfigured) {
     try {
@@ -1642,22 +1737,15 @@ export async function clearFormDraft(date: string, shift: string): Promise<void>
   }
 }
 
-// Live broadcast kênh nhập liệu chung
-let liveBroadcastChannel: any = null;
-
 export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
   if (!supabase || !isSupabaseConfigured) return;
   try {
-    if (!liveBroadcastChannel) {
-      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
-        config: { broadcast: { self: false } },
-      });
-      liveBroadcastChannel.subscribe();
-    }
-    liveBroadcastChannel.send({
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    ch.send({
       type: 'broadcast',
       event: 'form_cell_change',
-      payload: { ...draft, timestamp: Date.now() },
+      payload: { ...draft, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
     });
   } catch (err) {
     console.warn('[storage] Gửi broadcast thất bại:', err);
@@ -1819,43 +1907,39 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
     });
 
     // 3. Đăng ký phòng Broadcast chung (sunhouse_live_form_room) để đồng bộ tức thì các tab/thiết bị
-    let broadcastRoom = supabase.channel('sunhouse_live_form_room', {
-      config: { broadcast: { self: false } },
-    });
-    if (callbacks.onLiveFormChange) {
-      broadcastRoom = broadcastRoom.on(
-        'broadcast',
-        { event: 'form_cell_change' },
-        (payload) => {
-          callbacks.onLiveFormChange?.(payload);
-        }
-      );
-    }
-
-    if (callbacks.onTableSyncChange) {
-      broadcastRoom = broadcastRoom.on(
-        'broadcast',
-        { event: 'table_sync_event' },
-        (payload) => {
-          const tbl = payload?.payload?.table;
-          if (tbl) {
-            callbacks.onTableSyncChange?.(tbl, payload.payload);
+    let broadcastRoom = getSharedBroadcastChannel();
+    if (broadcastRoom) {
+      if (callbacks.onLiveFormChange) {
+        broadcastRoom.on(
+          'broadcast',
+          { event: 'form_cell_change' },
+          (payload: any) => {
+            // Lọc bỏ tin nhắn do chính tab này gửi ra để tránh gián đoạn nhập liệu
+            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+            callbacks.onLiveFormChange?.(payload);
           }
-        }
-      );
-    }
-
-    broadcastRoom.subscribe((status) => {
-      if (status === 'SUBSCRIBED') {
-        console.log('[Realtime] Kênh Broadcast liên tab đã sẵn sàng');
+        );
       }
-    });
+
+      if (callbacks.onTableSyncChange) {
+        broadcastRoom.on(
+          'broadcast',
+          { event: 'table_sync_event' },
+          (payload: any) => {
+            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+            const tbl = payload?.payload?.table;
+            if (tbl) {
+              callbacks.onTableSyncChange?.(tbl, payload.payload);
+            }
+          }
+        );
+      }
+    }
 
     // Cleanup function để hủy kết nối channel khi unmount
     return () => {
       try {
         supabase?.removeChannel(channel);
-        supabase?.removeChannel(broadcastRoom);
       } catch (err) {
         console.warn('[Realtime] Lỗi dọn dẹp kênh kết nối:', err);
       }

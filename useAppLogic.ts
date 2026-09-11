@@ -32,13 +32,11 @@ export const useAppLogic = () => {
   });
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveAllWorkers(workers);
+    localStorage.setItem("sunhouse_workers", JSON.stringify(workers));
   }, [workers]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveAllAttendanceLogs(attendanceLogs);
+    localStorage.setItem("sunhouse_attendance_logs", JSON.stringify(attendanceLogs));
   }, [attendanceLogs]);
 
 
@@ -243,20 +241,16 @@ const [isScrolled, setIsScrolled] = useState(false);
   });
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveMonthlyScrapReport(monthlyScrap);
+    localStorage.setItem("sunhouse_monthly_scrap_v2", JSON.stringify(monthlyScrap));
   }, [monthlyScrap]);
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveWeeklyScrapReport(weeklyScrap);
+    localStorage.setItem("sunhouse_weekly_scrap_v2", JSON.stringify(weeklyScrap));
   }, [weeklyScrap]);
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveWeeklyDclrErrorRate(weeklyDclrError);
+    localStorage.setItem("sunhouse_weekly_dclr_error_v2", JSON.stringify(weeklyDclrError));
   }, [weeklyDclrError]);
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveMonthlyDclrErrorRate(monthlyDclrError);
+    localStorage.setItem("sunhouse_monthly_dclr_error_v2", JSON.stringify(monthlyDclrError));
   }, [monthlyDclrError]);
 
   const [products, setProducts] = useState<ProductDefinition[]>(() => {
@@ -538,6 +532,16 @@ const [isScrolled, setIsScrolled] = useState(false);
     }, 8000);
   }, []);
 
+  // Trạng thái Toast thông báo thành công (ví dụ: đã lưu lên Supabase khi nhấn Enter)
+  const [toastSuccess, setToastSuccess] = useState<string | null>(null);
+  const showToastSuccess = useCallback((msg: string) => {
+    if (!msg) return;
+    setToastSuccess(msg);
+    setTimeout(() => {
+      setToastSuccess((prev) => (prev === msg ? null : prev));
+    }, 3000);
+  }, []);
+
   // Vệ sinh dữ liệu một lần khi khởi động: Loại bỏ vĩnh viễn các slot lỗi (như "Ca HC (08:00 - 17:00)")
   useEffect(() => {
     setFormSlots((prev) => {
@@ -588,8 +592,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     return [];
   });
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveDeclaredImeis(declaredImeis);
+    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
   }, [declaredImeis]);
 
   const [scannedImeis, setScannedImeis] = useState<ScannedImei[]>(() => {
@@ -607,8 +610,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   });
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveScannedImeis(scannedImeis);
+    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
   }, [scannedImeis]);
 
   const [imeiSearchTerm, setImeiSearchTerm] = useState("");
@@ -1228,6 +1230,11 @@ const [isScrolled, setIsScrolled] = useState(false);
   formShiftRef.current = formShift;
   const isSyncingFromExternalRef = useRef(false);
   const lastLoadedDateShiftRef = useRef<string>("");
+  const activeEditingCellRef = useRef<{ id: string; slotName: string; timestamp: number } | null>(null);
+  const broadcastDebounceRef = useRef<any>(null);
+  const monthlyPlanRef = useRef(monthlyPlan);
+  monthlyPlanRef.current = monthlyPlan;
+  const lastFetchedDateDeptRef = useRef<string>("");
 
   // Tự động nạp dữ liệu ca từ productionLogs / drafts / KHSX tháng khi chuyển ngày hoặc ca
   useEffect(() => {
@@ -1407,6 +1414,8 @@ const [isScrolled, setIsScrolled] = useState(false);
         });
 
         const activeSlots = new Set<string>(formSlotsRef.current.filter(isValidHourlySlot));
+        const active = activeEditingCellRef.current;
+        const isRecentEdit = active && Date.now() - active.timestamp < 3000;
 
         rows.forEach((row: any) => {
           const code = row.product_code || row.productId || row.product_id;
@@ -1426,7 +1435,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             const [year, month, day] = selectedDate.split('-');
             const ym = `${year}-${month}`;
             const dayNum = parseInt(day, 10);
-            const planVal = (monthlyPlan[ym]?.[prodId]?.[dayNum]) || 0;
+            const planVal = (monthlyPlanRef.current[ym]?.[prodId]?.[dayNum]) || 0;
             item = {
               id: `item-${prodId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
               productId: prodId,
@@ -1442,8 +1451,9 @@ const [isScrolled, setIsScrolled] = useState(false);
             const slot = matchSlotName(row.shift, Array.from(activeSlots));
             if (isValidHourlySlot(slot)) {
               activeSlots.add(slot);
-              // Giữ lại số người dùng đang gõ dở nếu ô đã có giá trị > 0
-              if (item.hourlyActuals[slot] === undefined || item.hourlyActuals[slot] === 0) {
+              // Giữ lại số người dùng đang gõ dở nếu ô đang được sửa gần đây
+              const isCellActive = isRecentEdit && active && (active.id === item.id || active.id === item.productId) && active.slotName === slot;
+              if (!isCellActive && (item.hourlyActuals[slot] === undefined || item.hourlyActuals[slot] === 0)) {
                 item.hourlyActuals[slot] = Number(row.quantity ?? row.actual_units ?? 0);
               }
             }
@@ -1456,7 +1466,8 @@ const [isScrolled, setIsScrolled] = useState(false);
                 const slot = matchSlotName(slotKey, Array.from(activeSlots));
                 if (isValidHourlySlot(slot)) {
                   activeSlots.add(slot);
-                  if (item!.hourlyActuals[slot] === undefined || item!.hourlyActuals[slot] === 0) {
+                  const isCellActive = isRecentEdit && active && (active.id === item!.id || active.id === item!.productId) && active.slotName === slot;
+                  if (!isCellActive && (item!.hourlyActuals[slot] === undefined || item!.hourlyActuals[slot] === 0)) {
                     item!.hourlyActuals[slot] = Number(val || 0);
                   }
                 }
@@ -1481,15 +1492,17 @@ const [isScrolled, setIsScrolled] = useState(false);
     } catch (err: any) {
       console.error("[storage] Ngoại lệ khi fetchShiftLogsAndMapToMatrix:", err);
     }
-  }, [products, monthlyPlan, showToastError]);
+  }, [products, showToastError]);
 
-  // Tự động tải lại ma trận khi chọn Ngày hoặc Bộ phận
+  // Tự động tải lại ma trận khi chọn Ngày hoặc Bộ phận (chỉ khi giá trị thay đổi thực sự)
   useEffect(() => {
+    const fetchKey = `${formDate}_${filterDivision}`;
+    if (lastFetchedDateDeptRef.current === fetchKey) return;
+    lastFetchedDateDeptRef.current = fetchKey;
     fetchShiftLogsAndMapToMatrix(formDate, filterDivision);
   }, [formDate, filterDivision, fetchShiftLogsAndMapToMatrix]);
 
-  // Tự động Auto-Save Draft & Realtime Broadcast khi có bất kỳ thao tác nhập liệu ô nào
-  const draftSaveTimeoutRef = useRef<any>(null);
+  // Lưu trữ LocalStorage tức thì để đảm bảo an toàn dữ liệu máy cục bộ (không gửi mạng Supabase khi đang gõ phím)
   useEffect(() => {
     if (!isLoadedRef.current || !formDate || !formShift || isSyncingFromExternalRef.current) return;
 
@@ -1508,22 +1521,11 @@ const [isScrolled, setIsScrolled] = useState(false);
       updatedAt: new Date().toISOString(),
     };
 
-    // 1. Lưu LocalStorage tức thì (cả key ngày/ca lẫn active draft)
+    // 1. Lưu LocalStorage tức thì (cả key ngày/ca lẫn active draft) - độ trễ 0ms
     localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
     localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
 
-    // 2. Gửi Realtime Broadcast đến các thiết bị / tab khác
-    storage.sendLiveFormBroadcast(draftData);
-
-    // 3. Debounce 300ms lưu lên Supabase Cloud (Daily Reports / Drafts)
-    if (draftSaveTimeoutRef.current) clearTimeout(draftSaveTimeoutRef.current);
-    draftSaveTimeoutRef.current = setTimeout(() => {
-      storage.saveFormDraft(draftData);
-    }, 300);
-
-    return () => {
-      if (draftSaveTimeoutRef.current) clearTimeout(draftSaveTimeoutRef.current);
-    };
+    // Supabase chỉ được ghi khi người dùng sửa số và nhấn Enter (hoặc hoàn tất ô)
   }, [
     formDate,
     formShift,
@@ -1538,40 +1540,33 @@ const [isScrolled, setIsScrolled] = useState(false);
     formTechnician,
   ]);
 
-  // Lưu trữ dữ liệu khi có thay đổi (Local + Supabase Cloud)
+  // Lưu trữ dữ liệu khi có thay đổi (LocalStorage cache phản hồi tức thì 0ms, tiết kiệm 100% Egress mạng)
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveMonthlyMetrics(2025, metrics2025);
+    localStorage.setItem("sunhouse_metrics_2025", JSON.stringify(metrics2025));
   }, [metrics2025]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveMonthlyMetrics(2026, metrics2026);
+    localStorage.setItem("sunhouse_metrics_2026", JSON.stringify(metrics2026));
   }, [metrics2026]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveMonthlyTargets(monthlyTargets);
+    localStorage.setItem("sunhouse_monthly_targets", JSON.stringify(monthlyTargets));
   }, [monthlyTargets]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveGasDailyReports(gasDailyReports);
+    localStorage.setItem("sunhouse_gas_daily_reports_v2", JSON.stringify(gasDailyReports));
   }, [gasDailyReports]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveAssemblyDailyReports(assemblyDailyReports);
+    localStorage.setItem("sunhouse_assembly_daily_reports_v2", JSON.stringify(assemblyDailyReports));
   }, [assemblyDailyReports]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveAllProductionLogs(productionLogs);
+    localStorage.setItem("sunhouse_production_logs_v2", JSON.stringify(productionLogs));
   }, [productionLogs]);
 
   useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveAllProducts(products);
+    localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
   }, [products]);
 
   // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
@@ -1666,31 +1661,17 @@ const [isScrolled, setIsScrolled] = useState(false);
         loadedTargets,
         loaded2025,
         loaded2026,
-        loadedGas,
-        loadedAssembly,
-        loadedDeclaredImeis,
-        loadedScannedImeis,
-        loadedMonthlyScrap,
-        loadedWeeklyScrap,
-        loadedWeeklyDclr,
-        loadedMonthlyDclr,
+        allDaily,
       ] = await Promise.all([
         storage.getWorkers(),
-        storage.getAttendanceLogs(),
+        storage.getAttendanceLogs(1000),
         storage.getProducts(),
-        storage.getProductionLogs(),
+        storage.getProductionLogs(1000),
         storage.getMonthlyPlan(),
         storage.getMonthlyTargets(),
         storage.getMonthlyMetrics(2025),
         storage.getMonthlyMetrics(2026),
-        storage.getGasDailyReports(),
-        storage.getAssemblyDailyReports(),
-        storage.getDeclaredImeis(),
-        storage.getScannedImeis(),
-        storage.getMonthlyScrapReport(),
-        storage.getWeeklyScrapReport(),
-        storage.getWeeklyDclrErrorRate(),
-        storage.getMonthlyDclrErrorRate(),
+        storage.getAllDailyReports(),
       ]);
 
       if (loadedWorkers && loadedWorkers.length > 0) setWorkers(loadedWorkers);
@@ -1701,14 +1682,14 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (loadedTargets && Object.keys(loadedTargets).length > 0) setMonthlyTargets(loadedTargets);
       if (loaded2025 && loaded2025.length > 0) setMetrics2025(loaded2025);
       if (loaded2026 && loaded2026.length > 0) setMetrics2026(loaded2026);
-      if (loadedGas && loadedGas.length > 0) setGasDailyReports(loadedGas);
-      if (loadedAssembly && loadedAssembly.length > 0) setAssemblyDailyReports(loadedAssembly);
-      if (loadedDeclaredImeis && loadedDeclaredImeis.length > 0) setDeclaredImeis(loadedDeclaredImeis);
-      if (loadedScannedImeis && loadedScannedImeis.length > 0) setScannedImeis(loadedScannedImeis);
-      if (loadedMonthlyScrap && loadedMonthlyScrap.length > 0) setMonthlyScrap(loadedMonthlyScrap);
-      if (loadedWeeklyScrap && loadedWeeklyScrap.length > 0) setWeeklyScrap(loadedWeeklyScrap);
-      if (loadedWeeklyDclr && loadedWeeklyDclr.length > 0) setWeeklyDclrError(loadedWeeklyDclr);
-      if (loadedMonthlyDclr && loadedMonthlyDclr.length > 0) setMonthlyDclrError(loadedMonthlyDclr);
+      if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
+      if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
+      if (allDaily.declaredImeis && allDaily.declaredImeis.length > 0) setDeclaredImeis(allDaily.declaredImeis);
+      if (allDaily.scannedImeis && allDaily.scannedImeis.length > 0) setScannedImeis(allDaily.scannedImeis);
+      if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
+      if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
+      if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
+      if (allDaily.monthlyDclr && allDaily.monthlyDclr.length > 0) setMonthlyDclrError(allDaily.monthlyDclr);
 
       // Để React hoàn tất render dữ liệu mới tải từ Cloud trước khi kích hoạt cờ lưu trữ tự động
       setTimeout(() => {
@@ -1904,62 +1885,106 @@ const [isScrolled, setIsScrolled] = useState(false);
           const rowShift = row.shift;
           const rowQty = Number(row.quantity ?? row.actual_units ?? 0);
 
-          if (rowDate === formDateRef.current && rowProdCode && rowShift && isValidHourlySlot(rowShift)) {
-            const cleanShift = rowShift.replace(/\s+/g, '').toUpperCase();
+          if (rowDate === formDateRef.current && rowProdCode) {
+            const cleanShift = rowShift ? rowShift.replace(/\s+/g, '').toUpperCase() : '';
             const matchedProd = products.find(
               (p) => p.code === rowProdCode || getProductModelCode(p.name) === rowProdCode || p.id === rowProdCode
             );
             const targetProdId = matchedProd?.id || rowProdCode;
 
-            // Đảm bảo slot hiển thị trong formSlots nếu là slot mới và hợp lệ
-            setFormSlots((prevSlots) => {
-              const cleanPrev = prevSlots.filter(isValidHourlySlot);
-              const hasSlot = cleanPrev.some((s) => s.replace(/\s+/g, '').toUpperCase() === cleanShift);
-              if (!hasSlot) {
-                return [...cleanPrev, rowShift].sort((a, b) => {
-                  const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
-                  const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
-                  return hourA - hourB;
-                });
-              }
-              return cleanPrev;
-            });
+            // Xử lý cập nhật granular theo dòng đơn (work_date, product_code, shift, quantity)
+            if (rowShift && isValidHourlySlot(rowShift)) {
+              setFormSlots((prevSlots) => {
+                const cleanPrev = prevSlots.filter(isValidHourlySlot);
+                const hasSlot = cleanPrev.some((s) => s.replace(/\s+/g, '').toUpperCase() === cleanShift);
+                if (!hasSlot) {
+                  return [...cleanPrev, rowShift].sort((a, b) => {
+                    const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
+                    const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
+                    return hourA - hourB;
+                  });
+                }
+                return cleanPrev;
+              });
 
-            // Chỉ cập nhật đúng ô khung giờ đó trong State local chứ không fetch lại cả ma trận
-            setFormModelItems((prevItems) => {
-              const itemIdx = prevItems.findIndex((it) => it.productId === targetProdId);
-              if (itemIdx !== -1) {
+              setFormModelItems((prevItems) => {
+                const itemIdx = prevItems.findIndex((it) => it.productId === targetProdId);
+                if (itemIdx !== -1) {
+                  return prevItems.map((it, idx) => {
+                    if (idx !== itemIdx) return it;
+                    // Bỏ qua nếu ô này đang được người dùng thao tác trong vòng 3s
+                    const active = activeEditingCellRef.current;
+                    if (
+                      active &&
+                      (active.id === it.id || active.id === it.productId) &&
+                      active.slotName.replace(/\s+/g, '').toUpperCase() === cleanShift &&
+                      Date.now() - active.timestamp < 3000
+                    ) {
+                      return it;
+                    }
+
+                    const actualKey = Object.keys(it.hourlyActuals).find(
+                      (k) => k.replace(/\s+/g, '').toUpperCase() === cleanShift
+                    ) || rowShift;
+
+                    if (it.hourlyActuals[actualKey] === rowQty) return it;
+
+                    return {
+                      ...it,
+                      hourlyActuals: {
+                        ...it.hourlyActuals,
+                        [actualKey]: rowQty,
+                      },
+                    };
+                  });
+                } else {
+                  return [
+                    ...prevItems,
+                    {
+                      id: `item-${targetProdId}-${Date.now()}`,
+                      productId: targetProdId,
+                      dailyPlan: 0,
+                      hourlyActuals: {
+                        [rowShift]: rowQty,
+                      },
+                    },
+                  ];
+                }
+              });
+            }
+
+            // Xử lý cập nhật standard hourly_actuals JSONB
+            if (row.hourly_actuals && typeof row.hourly_actuals === 'object') {
+              setFormModelItems((prevItems) => {
+                const itemIdx = prevItems.findIndex((it) => it.productId === targetProdId);
+                if (itemIdx === -1) return prevItems;
                 return prevItems.map((it, idx) => {
                   if (idx !== itemIdx) return it;
-                  // Tìm key slot khớp trong item.hourlyActuals
-                  const actualKey = Object.keys(it.hourlyActuals).find(
-                    (k) => k.replace(/\s+/g, '').toUpperCase() === cleanShift
-                  ) || rowShift;
-
-                  if (it.hourlyActuals[actualKey] === rowQty) return it;
-
-                  return {
-                    ...it,
-                    hourlyActuals: {
-                      ...it.hourlyActuals,
-                      [actualKey]: rowQty,
-                    },
-                  };
+                  const nextHourly = { ...it.hourlyActuals };
+                  let changed = false;
+                  Object.entries(row.hourly_actuals).forEach(([slotK, slotVal]) => {
+                    if (isValidHourlySlot(slotK)) {
+                      const cleanK = slotK.replace(/\s+/g, '').toUpperCase();
+                      const active = activeEditingCellRef.current;
+                      if (
+                        active &&
+                        (active.id === it.id || active.id === it.productId) &&
+                        active.slotName.replace(/\s+/g, '').toUpperCase() === cleanK &&
+                        Date.now() - active.timestamp < 3000
+                      ) {
+                        return;
+                      }
+                      const numVal = Number(slotVal) || 0;
+                      if (nextHourly[slotK] !== numVal) {
+                        nextHourly[slotK] = numVal;
+                        changed = true;
+                      }
+                    }
+                  });
+                  return changed ? { ...it, hourlyActuals: nextHourly } : it;
                 });
-              } else {
-                return [
-                  ...prevItems,
-                  {
-                    id: `item-${targetProdId}-${Date.now()}`,
-                    productId: targetProdId,
-                    dailyPlan: 0,
-                    hourlyActuals: {
-                      [rowShift]: rowQty,
-                    },
-                  },
-                ];
-              }
-            });
+              });
+            }
           }
         }
       },
@@ -2060,9 +2085,12 @@ const [isScrolled, setIsScrolled] = useState(false);
       onLiveFormChange: (payload) => {
         const data = payload?.payload;
         if (!data || !data.date || !data.shift) return;
+        // Bỏ qua nếu tin nhắn xuất phát từ chính phiên trình duyệt / tab này
+        if (data.senderId === storage.CLIENT_SESSION_ID) return;
+
         if (data.date === formDateRef.current && data.shift === formShiftRef.current) {
           isSyncingFromExternalRef.current = true;
-          if (data.items) {
+          if (data.items && Array.isArray(data.items)) {
             const cleanItems = (data.items as FormModelItem[]).map(it => {
               const cleanHourly: Record<string, number> = {};
               Object.entries(it.hourlyActuals || {}).forEach(([k, v]) => {
@@ -2070,11 +2098,41 @@ const [isScrolled, setIsScrolled] = useState(false);
               });
               return { ...it, hourlyActuals: cleanHourly };
             });
-            setFormModelItems(cleanItems);
+
+            // Đồng bộ thông minh không ghi đè: Giữ nguyên ô người dùng đang gõ nếu có thao tác gần đây (< 3s)
+            setFormModelItems((prev) => {
+              const active = activeEditingCellRef.current;
+              const isRecentLocalEdit = active && Date.now() - active.timestamp < 3000;
+
+              return prev.map((localItem) => {
+                const incoming = cleanItems.find(
+                  (ci) => ci.productId === localItem.productId || ci.id === localItem.id
+                );
+                if (!incoming) return localItem;
+
+                const mergedHourly = { ...incoming.hourlyActuals };
+                if (isRecentLocalEdit && active && (active.id === localItem.id || active.id === localItem.productId)) {
+                  if (localItem.hourlyActuals[active.slotName] !== undefined) {
+                    mergedHourly[active.slotName] = localItem.hourlyActuals[active.slotName];
+                  }
+                }
+
+                return {
+                  ...localItem,
+                  dailyPlan: incoming.dailyPlan !== undefined ? incoming.dailyPlan : localItem.dailyPlan,
+                  hourlyActuals: mergedHourly,
+                };
+              });
+            });
           }
           if (data.slots) {
             const cleanSlots = (data.slots as string[]).filter(isValidHourlySlot);
-            if (cleanSlots.length > 0) setFormSlots(cleanSlots);
+            if (cleanSlots.length > 0) {
+              setFormSlots((prev) => {
+                const isDiff = cleanSlots.some((s) => !prev.includes(s)) || prev.some((s) => !cleanSlots.includes(s));
+                return isDiff ? cleanSlots : prev;
+              });
+            }
           }
           if (data.officialRO) setFormOfficialWorkersRO(data.officialRO);
           if (data.seasonalRO) setFormSeasonalWorkersRO(data.seasonalRO);
@@ -2085,58 +2143,49 @@ const [isScrolled, setIsScrolled] = useState(false);
           if (data.technician) setFormTechnician(data.technician);
           setTimeout(() => {
             isSyncingFromExternalRef.current = false;
-          }, 100);
+          }, 150);
         }
       },
 
       // (10) Lắng nghe broadcast đồng bộ tức thì các bảng khi có thay đổi từ máy/tab khác
+      // TỐI ƯU HÓA: Tuyệt đối KHÔNG query lại toàn bộ bảng để tiết kiệm tối đa Egress và không giật lag!
+      // Các bảng production_logs, attendance_records, workers, products đã được cập nhật từng hàng tức thì qua CDC.
       onTableSyncChange: async (table, extraPayload) => {
         try {
-          if (table === 'production_logs') {
-            // Nếu là cập nhật theo từng ô sản lượng (hourly_upsert), KHÔNG fetch lại toàn bộ danh sách production_logs
-            // để bảo đảm giao diện phản hồi tức thì 100% như LocalStorage, không bị trễ hay nhảy số loạn.
-            if (extraPayload?.data?.action === 'hourly_upsert') {
-              return;
-            }
-            const logs = await storage.getProductionLogs();
-            if (logs && logs.length > 0) setProductionLogs(logs);
-          } else if (table === 'attendance_records') {
-            const att = await storage.getAttendanceLogs();
-            if (att && att.length > 0) setAttendanceLogs(att);
-          } else if (table === 'workers') {
-            const w = await storage.getWorkers();
-            if (w && w.length > 0) setWorkers(w);
-          } else if (table === 'products') {
-            const p = await storage.getProducts();
-            if (p && p.length > 0) setProducts(p);
+          if (extraPayload?.senderId === storage.CLIENT_SESSION_ID) return;
+
+          if (
+            table === 'production_logs' ||
+            table === 'attendance_records' ||
+            table === 'workers' ||
+            table === 'products'
+          ) {
+            // Đã được xử lý từng phần tử trực tiếp từ Postgres CDC, bỏ qua tải lại toàn bảng
+            return;
           } else if (table === 'monthly_plan') {
-            const mp = await storage.getMonthlyPlan();
-            if (mp && Object.keys(mp).length > 0) setMonthlyPlan(mp);
+            if (extraPayload?.data) {
+              setMonthlyPlan(extraPayload.data);
+            }
           } else if (table === 'monthly_targets') {
-            const mt = await storage.getMonthlyTargets();
-            if (mt && Object.keys(mt).length > 0) setMonthlyTargets(mt);
+            if (extraPayload?.data) {
+              setMonthlyTargets(extraPayload.data);
+            }
           } else if (table === 'monthly_metrics') {
-            const m25 = await storage.getMonthlyMetrics(2025);
-            const m26 = await storage.getMonthlyMetrics(2026);
-            if (m25 && m25.length > 0) setMetrics2025(m25);
-            if (m26 && m26.length > 0) setMetrics2026(m26);
+            if (extraPayload?.year && extraPayload?.data) {
+              if (extraPayload.year === 2025) setMetrics2025(extraPayload.data);
+              if (extraPayload.year === 2026) setMetrics2026(extraPayload.data);
+            }
           } else if (table === 'daily_reports') {
-            const gas = await storage.getGasDailyReports();
-            const ass = await storage.getAssemblyDailyReports();
-            const scrapM = await storage.getMonthlyScrapReport();
-            const scrapW = await storage.getWeeklyScrapReport();
-            const dclrW = await storage.getWeeklyDclrErrorRate();
-            const dclrM = await storage.getMonthlyDclrErrorRate();
-            const decImeis = await storage.getDeclaredImeis();
-            const scnImeis = await storage.getScannedImeis();
-            if (gas && gas.length > 0) setGasDailyReports(gas);
-            if (ass && ass.length > 0) setAssemblyDailyReports(ass);
-            if (scrapM && scrapM.length > 0) setMonthlyScrap(scrapM);
-            if (scrapW && scrapW.length > 0) setWeeklyScrap(scrapW);
-            if (dclrW && dclrW.length > 0) setWeeklyDclrError(dclrW);
-            if (dclrM && dclrM.length > 0) setMonthlyDclrError(dclrM);
-            if (decImeis && decImeis.length > 0) setDeclaredImeis(decImeis);
-            if (scnImeis && scnImeis.length > 0) setScannedImeis(scnImeis);
+            // 1 query duy nhất gom toàn bộ 8 bảng báo cáo
+            const allDaily = await storage.getAllDailyReports();
+            if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
+            if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
+            if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
+            if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
+            if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
+            if (allDaily.monthlyDclr && allDaily.monthlyDclr.length > 0) setMonthlyDclrError(allDaily.monthlyDclr);
+            if (allDaily.declaredImeis && allDaily.declaredImeis.length > 0) setDeclaredImeis(allDaily.declaredImeis);
+            if (allDaily.scannedImeis && allDaily.scannedImeis.length > 0) setScannedImeis(allDaily.scannedImeis);
           }
         } catch (err) {
           console.warn('[Realtime] Lỗi đồng bộ bảng từ broadcast:', table, err);
@@ -4684,66 +4733,162 @@ const [isScrolled, setIsScrolled] = useState(false);
   };
 
   const handleUpdateItemHourly = (id: string, slotName: string, qty: number) => {
-    let updatedHourlyForSync: Record<string, number> = {};
-    let targetModelCode = id;
-    let targetDept = "RO";
-    let targetProdId = id;
-    let targetProdName = "";
+    // Đánh dấu ô đang được chỉnh sửa để không bị bất kỳ tiến trình nền hay broadcast nào ghi đè
+    activeEditingCellRef.current = { id, slotName, timestamp: Date.now() };
 
+    // Cập nhật state cục bộ ngay lập tức (0ms delay), không gửi request Supabase khi đang gõ phím
     setFormModelItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
-        const newHourly = {
-          ...item.hourlyActuals,
-          [slotName]: qty,
-        };
-        updatedHourlyForSync = newHourly;
-        const p = products.find((x) => x.id === item.productId);
-        targetProdId = p?.id || item.productId;
-        targetProdName = p?.name || "";
-        targetModelCode = p ? (getProductModelCode(p.name) || p.code || p.id) : item.productId;
-        targetDept = p?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
-
         return {
           ...item,
-          hourlyActuals: newHourly,
+          hourlyActuals: {
+            ...item.hourlyActuals,
+            [slotName]: qty,
+          },
         };
       })
     );
+  };
 
+  // Cơ chế mới: Sửa số nào, chỉ khi nhấn ENTER (hoặc blur khỏi ô) mới lưu lên database Supabase
+  const handleCommitItemHourly = async (id: string, slotName: string, customQty?: number) => {
+    // Giải phóng đánh dấu ô chỉnh sửa sau một khoảng ngắn
+    setTimeout(() => {
+      if (activeEditingCellRef.current?.id === id && activeEditingCellRef.current?.slotName === slotName) {
+        activeEditingCellRef.current = null;
+      }
+    }, 1200);
+
+    const item = formModelItems.find((it) => it.id === id);
+    if (!item) return;
+
+    const qty = customQty !== undefined ? customQty : (item.hourlyActuals[slotName] || 0);
+    const p = products.find((x) => x.id === item.productId);
+    const targetProdId = p?.id || item.productId;
+    const targetProdName = p?.name || "";
+    const targetModelCode = p ? (getProductModelCode(p.name) || p.code || p.id) : item.productId;
+    const targetDept = p?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
     const timeSlot = slotName.replace(/\s+/g, '');
-    const timerKey = `${formDate}_${targetProdId}_${timeSlot}`;
 
-    // Hủy debounce cũ nếu người dùng đang nhập liên tục
-    const oldTimer = hourlySyncDebounceRef.current.get(timerKey);
-    if (oldTimer) {
-      clearTimeout(oldTimer);
+    const updatedHourly = {
+      ...item.hourlyActuals,
+      [slotName]: qty,
+    };
+
+    try {
+      const { error } = await storage.upsertHourlyProductionLog({
+        work_date: formDate,
+        department: targetDept,
+        product_code: targetModelCode,
+        shift: timeSlot,
+        quantity: qty,
+        status: 'OK',
+        productId: targetProdId,
+        productName: targetProdName,
+        allHourlyActuals: updatedHourly,
+      });
+
+      if (error) {
+        showToastError(error.message || 'Lỗi lưu lên database Supabase');
+      } else {
+        showToastSuccess(`Đã lưu [${targetModelCode} • ${slotName}: ${qty}] lên Supabase ✓`);
+
+        // Phát realtime broadcast tới các máy / tab khác
+        const updatedItems = formModelItems.map((it) =>
+          it.id === id ? { ...it, hourlyActuals: updatedHourly } : it
+        );
+        storage.sendLiveFormBroadcast({
+          date: formDate,
+          shift: formShift,
+          slots: formSlots,
+          items: updatedItems,
+          officialRO: formOfficialWorkersRO,
+          seasonalRO: formSeasonalWorkersRO,
+          officialBG: formOfficialWorkersBG,
+          seasonalBG: formSeasonalWorkersBG,
+          officialRMA: formOfficialWorkersRMA,
+          seasonalRMA: formSeasonalWorkersRMA,
+          technician: formTechnician,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    } catch (err: any) {
+      console.warn('Lỗi khi lưu ô sản lượng lên Supabase:', err);
+    }
+  };
+
+  const handleCommitItemDailyPlan = async (id: string, planVal: number) => {
+    const item = formModelItems.find(it => it.id === id);
+    if (!item) return;
+
+    const p = products.find(x => x.id === item.productId);
+    const targetProdId = p?.id || item.productId;
+    const targetModelCode = p ? (getProductModelCode(p.name) || p.code || p.id) : item.productId;
+
+    if (formDate) {
+      const [year, month, day] = formDate.split("-");
+      const ym = `${year}-${month}`;
+      const dayNum = parseInt(day, 10);
+      if (!isNaN(dayNum)) {
+        setMonthlyPlan(prev => {
+          const next = { ...prev };
+          if (!next[ym]) next[ym] = {};
+          if (!next[ym][targetProdId]) next[ym][targetProdId] = {};
+          next[ym][targetProdId] = {
+            ...next[ym][targetProdId],
+            [dayNum]: planVal
+          };
+          storage.saveMonthlyPlan(next);
+          return next;
+        });
+      }
     }
 
-    const timer = setTimeout(async () => {
-      hourlySyncDebounceRef.current.delete(timerKey);
-      try {
-        const { error } = await storage.upsertHourlyProductionLog({
-          work_date: formDate,
-          department: targetDept,
-          product_code: targetModelCode,
-          shift: timeSlot,
-          quantity: qty,
-          status: 'OK',
-          productId: targetProdId,
-          productName: targetProdName,
-          allHourlyActuals: updatedHourlyForSync,
-        });
+    const updatedItems = formModelItems.map(it => it.id === id ? { ...it, dailyPlan: planVal } : it);
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: updatedItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
 
-        if (error) {
-          showToastError(error.message || 'Lỗi đồng bộ Supabase');
-        }
-      } catch (err: any) {
-        console.warn('Lỗi khi đồng bộ ô giờ lên Supabase:', err);
-      }
-    }, 450);
+    await storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
+    showToastSuccess(`Đã lưu KHSX [${targetModelCode}: ${planVal}] lên Supabase ✓`);
+  };
 
-    hourlySyncDebounceRef.current.set(timerKey, timer);
+  const handleCommitWorkerDraft = async () => {
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: formModelItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    try {
+      await storage.saveFormDraft(draftData);
+      showToastSuccess("Đã lưu nhân sự ca lên Supabase ✓");
+      storage.sendLiveFormBroadcast(draftData);
+    } catch (err: any) {
+      showToastError(err?.message || 'Lỗi lưu nhân sự lên Supabase');
+    }
   };
 
   // === XỬ LÝ LƯU EXCEL BÁO CÁO HÀNG NGÀY CHUYÊN NGHIỆP ===
@@ -6288,6 +6433,12 @@ const [isScrolled, setIsScrolled] = useState(false);
     toastError,
     setToastError,
     showToastError,
+    toastSuccess,
+    setToastSuccess,
+    showToastSuccess,
+    handleCommitItemHourly,
+    handleCommitItemDailyPlan,
+    handleCommitWorkerDraft,
     fetchShiftLogsAndMapToMatrix
   };
 };
