@@ -84,7 +84,9 @@ export const LoggingTab = ({
   displayDailySummaries,
   setFormDate,
   setFormModelItems,
-  setFormMessage
+  setFormMessage,
+  toastError,
+  setToastError
 }: any) => {
   return (
     <motion.div
@@ -129,10 +131,27 @@ export const LoggingTab = ({
                   {/* New Excel-like Form Layout */}
                   <div className="space-y-3">
                     {/* Header Controls */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-900/50 p-3 rounded-lg border border-slate-800/80">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 bg-slate-900/50 p-3 rounded-lg border border-slate-800/80">
                       <div className="space-y-1.5">
                         <label className="text-[11px] text-slate-400 font-mono uppercase">Ngày ghi nhận</label>
                         <input type="date" value={formDate} onChange={handleDateChange} className="w-full bg-slate-950/40 border border-slate-700/60 rounded p-1.5 text-white font-mono focus:border-rose-500 outline-none" required />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-[11px] text-sky-400 font-mono uppercase flex items-center justify-between">
+                          <span>Bộ phận sản xuất</span>
+                          <span className="text-[10px] text-emerald-400 font-normal">Đồng bộ Cloud</span>
+                        </label>
+                        <select
+                          value={filterDivision}
+                          onChange={(e) => setFilterDivision(e.target.value)}
+                          className="w-full bg-slate-950/40 border border-slate-700/60 rounded p-1.5 text-white font-medium focus:border-rose-500 outline-none cursor-pointer text-xs"
+                        >
+                          <option value="ALL" className="bg-slate-950">🌐 Tất cả bộ phận</option>
+                          <option value="MLN" className="bg-slate-950">💧 Máy lọc nước (RO)</option>
+                          <option value="BG" className="bg-slate-950">🔥 Bếp Gas (BG)</option>
+                          <option value="RMA" className="bg-slate-950">🛠️ Bảo hành (RMA)</option>
+                        </select>
                       </div>
                       
                       {/* Hidden fields as requested */}
@@ -1367,6 +1386,24 @@ export const LoggingTab = ({
                   </button>
                 </div>
               </div>
+
+              {/* Toast thông báo lỗi Supabase màu đỏ */}
+              {toastError && (
+                <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-rose-950/95 border border-rose-600 text-rose-100 px-4 py-3 rounded-xl shadow-2xl backdrop-blur-md max-w-md animate-in fade-in slide-in-from-bottom-5">
+                  <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                  <div className="flex-1 text-xs">
+                    <p className="font-bold text-rose-200">Lỗi đồng bộ Supabase</p>
+                    <p className="font-mono text-rose-300 mt-0.5 break-all">{toastError}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setToastError && setToastError(null)}
+                    className="p-1 hover:bg-rose-900 rounded text-rose-300 hover:text-white transition cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
 
             </motion.div>
   );

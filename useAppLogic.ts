@@ -509,6 +509,15 @@ const [isScrolled, setIsScrolled] = useState(false);
   const [newSlotInput, setNewSlotInput] = useState<string>("20H - 21H");
   const [scanInput, setScanInput] = useState<string>("");
 
+  // Trạng thái Toast thông báo lỗi Supabase (hiển thị Toast đỏ chứa error.message)
+  const [toastError, setToastError] = useState<string | null>(null);
+  const showToastError = useCallback((msg: string) => {
+    setToastError(msg);
+    setTimeout(() => {
+      setToastError((prev) => (prev === msg ? null : prev));
+    }, 8000);
+  }, []);
+
   interface ScannedImei {
     id: string;
     imei: string;
@@ -795,10 +804,30 @@ const [isScrolled, setIsScrolled] = useState(false);
       hourlyActuals: { ...existingActuals }
     };
     const currentQty = parseInt(updatedItems[itemIndex].hourlyActuals[currentSlot] as any) || 0;
-    updatedItems[itemIndex].hourlyActuals[currentSlot] = currentQty + 1;
+    const updatedQty = currentQty + 1;
+    updatedItems[itemIndex].hourlyActuals[currentSlot] = updatedQty;
     
     setFormModelItems(updatedItems);
     
+    // ĐỒNG BỘ SUPABASE KHI QUÉT MÃ IMEI:
+    const targetProd = products.find(p => p.id === targetModelId);
+    const modelCode = targetProd ? (getProductModelCode(targetProd.name) || targetProd.code || targetProd.id) : targetModelId;
+    const selectedDept = targetProd?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
+    const timeSlot = currentSlot.replace(/\s+/g, ''); // '8H-9H'
+
+    storage.upsertHourlyProductionLog({
+      work_date: formDate,
+      department: selectedDept,
+      product_code: modelCode,
+      shift: timeSlot,
+      quantity: updatedQty,
+      status: 'OK'
+    }).then(({ error }) => {
+      if (error) {
+        showToastError(error.message || 'Lỗi đồng bộ Supabase khi quét mã');
+      }
+    });
+
     const newImei: ScannedImei = {
       id: `imei-${Date.now()}-${Math.random().toString(36).substring(2,9)}`,
       imei: val,
@@ -1259,6 +1288,103 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   }, [formDate, formShift, productionLogs]);
 
+  // --------------------------------------------------------------------
+  // 1. KHỞI TẠO VÀ TẢI DỮ LIỆU BAN ĐẦU TỪ SUPABASE CHO TAB 'GHI NHẬT KÝ CA'
+  // --------------------------------------------------------------------
+  const fetchShiftLogsAndMapToMatrix = useCallback(async (selectedDate: string, selectedDept: string) => {
+    if (!supabase || !isSupabaseConfigured) return;
+
+    try {
+      const { data: rows, error } = await storage.fetchShiftProductionLogs(selectedDate, selectedDept);
+      if (error) {
+        console.warn("[storage] Lỗi query production_logs theo ngày:", error);
+        showToastError(error.message || "Lỗi tải dữ liệu nhật ký ca từ Supabase");
+        return;
+      }
+
+      if (!rows || rows.length === 0) return;
+
+      const matchSlotName = (shiftStr: string, currentSlots: string[]) => {
+        const clean = shiftStr.replace(/\s+/g, '').toUpperCase();
+        const found = currentSlots.find(s => s.replace(/\s+/g, '').toUpperCase() === clean);
+        return found || shiftStr;
+      };
+
+      setFormModelItems((prevItems) => {
+        const itemMap = new Map<string, FormModelItem>();
+        prevItems.forEach((it) => {
+          itemMap.set(it.productId, {
+            ...it,
+            hourlyActuals: { ...it.hourlyActuals }
+          });
+        });
+
+        const activeSlots = new Set<string>(formSlots);
+
+        rows.forEach((row: any) => {
+          const code = row.product_code || row.productId || row.product_id;
+          const matchedProd = products.find(
+            (p) => p.code === code || getProductModelCode(p.name) === code || p.id === code
+          );
+          if (!matchedProd) return;
+
+          if (selectedDept !== 'ALL') {
+            const rowDept = row.department || row.product_group || matchedProd.group;
+            if (rowDept && rowDept !== selectedDept) return;
+          }
+
+          const prodId = matchedProd.id;
+          let item = itemMap.get(prodId);
+          if (!item) {
+            const [year, month, day] = selectedDate.split('-');
+            const ym = `${year}-${month}`;
+            const dayNum = parseInt(day, 10);
+            const planVal = (monthlyPlan[ym]?.[prodId]?.[dayNum]) || 0;
+            item = {
+              id: `item-${prodId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              productId: prodId,
+              dailyPlan: planVal,
+              hourlyActuals: {},
+            };
+            itemMap.set(prodId, item);
+          }
+
+          // Granular row (work_date, product_code, shift, quantity)
+          if (row.shift && (row.quantity !== undefined || row.actual_units !== undefined)) {
+            const slot = matchSlotName(row.shift, Array.from(activeSlots));
+            activeSlots.add(slot);
+            item.hourlyActuals[slot] = Number(row.quantity ?? row.actual_units ?? 0);
+          }
+
+          // Legacy hourly_actuals JSONB
+          if (row.hourly_actuals && typeof row.hourly_actuals === 'object') {
+            Object.entries(row.hourly_actuals).forEach(([slotKey, val]) => {
+              const slot = matchSlotName(slotKey, Array.from(activeSlots));
+              activeSlots.add(slot);
+              item!.hourlyActuals[slot] = Number(val || 0);
+            });
+          }
+        });
+
+        const sortedSlots = Array.from(activeSlots).sort((a, b) => {
+          const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
+          const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
+          return hourA - hourB;
+        });
+        setFormSlots(sortedSlots);
+
+        return Array.from(itemMap.values());
+      });
+    } catch (err: any) {
+      console.error("[storage] Ngoại lệ khi fetchShiftLogsAndMapToMatrix:", err);
+    }
+  }, [products, monthlyPlan, formSlots, showToastError]);
+
+  // Tự động tải lại ma trận khi chọn Ngày hoặc Bộ phận
+  useEffect(() => {
+    fetchShiftLogsAndMapToMatrix(formDate, filterDivision);
+  }, [formDate, filterDivision, fetchShiftLogsAndMapToMatrix]);
+
   // Tự động Auto-Save Draft & Realtime Broadcast khi có bất kỳ thao tác nhập liệu ô nào
   const draftSaveTimeoutRef = useRef<any>(null);
   useEffect(() => {
@@ -1664,6 +1790,72 @@ const [isScrolled, setIsScrolled] = useState(false);
           const deleteId = String(payload.old?.id || '');
           if (deleteId) {
             setProductionLogs((prev) => prev.filter((l) => l.id !== deleteId));
+          }
+        }
+
+        // 3. ĐỒNG BỘ REALTIME GRANULAR CHO MA TRẬN NHẬT KÝ CA (CHỈ CẬP NHẬT ĐÚNG Ô ĐÓ, KHÔNG FETCH LẠI CẢ MA TRẬN):
+        if ((payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') && payload.new) {
+          const row = payload.new;
+          const rowDate = row.work_date || row.date;
+          const rowProdCode = row.product_code || row.productId || row.product_id;
+          const rowShift = row.shift;
+          const rowQty = Number(row.quantity ?? row.actual_units ?? 0);
+
+          if (rowDate === formDateRef.current && rowProdCode && rowShift) {
+            const cleanShift = rowShift.replace(/\s+/g, '').toUpperCase();
+            const matchedProd = products.find(
+              (p) => p.code === rowProdCode || getProductModelCode(p.name) === rowProdCode || p.id === rowProdCode
+            );
+            const targetProdId = matchedProd?.id || rowProdCode;
+
+            // Đảm bảo slot hiển thị trong formSlots nếu là slot mới
+            setFormSlots((prevSlots) => {
+              const hasSlot = prevSlots.some((s) => s.replace(/\s+/g, '').toUpperCase() === cleanShift);
+              if (!hasSlot) {
+                return [...prevSlots, rowShift].sort((a, b) => {
+                  const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
+                  const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
+                  return hourA - hourB;
+                });
+              }
+              return prevSlots;
+            });
+
+            // Chỉ cập nhật đúng ô khung giờ đó trong State local chứ không fetch lại cả ma trận
+            setFormModelItems((prevItems) => {
+              const itemIdx = prevItems.findIndex((it) => it.productId === targetProdId);
+              if (itemIdx !== -1) {
+                return prevItems.map((it, idx) => {
+                  if (idx !== itemIdx) return it;
+                  // Tìm key slot khớp trong item.hourlyActuals
+                  const actualKey = Object.keys(it.hourlyActuals).find(
+                    (k) => k.replace(/\s+/g, '').toUpperCase() === cleanShift
+                  ) || rowShift;
+
+                  if (it.hourlyActuals[actualKey] === rowQty) return it;
+
+                  return {
+                    ...it,
+                    hourlyActuals: {
+                      ...it.hourlyActuals,
+                      [actualKey]: rowQty,
+                    },
+                  };
+                });
+              } else {
+                return [
+                  ...prevItems,
+                  {
+                    id: `item-${targetProdId}-${Date.now()}`,
+                    productId: targetProdId,
+                    dailyPlan: 0,
+                    hourlyActuals: {
+                      [rowShift]: rowQty,
+                    },
+                  },
+                ];
+              }
+            });
           }
         }
       },
@@ -4362,7 +4554,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     );
   };
 
-  const handleUpdateItemHourly = (id: string, slotName: string, qty: number) => {
+  const handleUpdateItemHourly = async (id: string, slotName: string, qty: number) => {
     setFormModelItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
@@ -4375,6 +4567,27 @@ const [isScrolled, setIsScrolled] = useState(false);
         };
       })
     );
+
+    const targetItem = formModelItems.find(it => it.id === id);
+    if (!targetItem) return;
+
+    const prod = products.find(p => p.id === targetItem.productId);
+    const modelCode = prod ? (getProductModelCode(prod.name) || prod.code || prod.id) : targetItem.productId;
+    const selectedDept = prod?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
+    const timeSlot = slotName.replace(/\s+/g, ''); // '8H-9H'
+
+    const { error } = await storage.upsertHourlyProductionLog({
+      work_date: formDate,
+      department: selectedDept,
+      product_code: modelCode,
+      shift: timeSlot,
+      quantity: qty,
+      status: 'OK'
+    });
+
+    if (error) {
+      showToastError(error.message || 'Lỗi đồng bộ Supabase');
+    }
   };
 
   // === XỬ LÝ LƯU EXCEL BÁO CÁO HÀNG NGÀY CHUYÊN NGHIỆP ===
@@ -5909,6 +6122,10 @@ const [isScrolled, setIsScrolled] = useState(false);
     refreshFromCloud,
     isSupabaseConfigured,
     syncHistoryFromLogs,
-    syncEntireSystem
+    syncEntireSystem,
+    toastError,
+    setToastError,
+    showToastError,
+    fetchShiftLogsAndMapToMatrix
   };
 };

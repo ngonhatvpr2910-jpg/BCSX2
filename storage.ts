@@ -667,6 +667,93 @@ export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void
   }
 }
 
+// --------------------------------------------------------------------
+// ĐỒNG BỘ RIÊNG CHO TAB 'GHI NHẬT KÝ CA' (SHIFT LOG / HOURLY LOGS)
+// --------------------------------------------------------------------
+export interface HourlyLogPayload {
+  work_date: string;
+  department: string;
+  product_code: string;
+  shift: string;
+  quantity: number;
+  status?: string;
+}
+
+export async function fetchShiftProductionLogs(
+  selectedDate: string,
+  selectedDept?: string
+): Promise<{ data: any[] | null; error: any }> {
+  if (!supabase || !isSupabaseConfigured) {
+    return { data: null, error: new Error('Supabase chưa được cấu hình') };
+  }
+
+  try {
+    let query = supabase.from('production_logs').select('*');
+    // Truy vấn theo work_date đúng như yêu cầu: supabase.from('production_logs').select('*').eq('work_date', selectedDate)
+    let res = await query.eq('work_date', selectedDate);
+    
+    // Nếu bảng cũ chưa có cột work_date, tự động fallback sang cột date
+    if (res.error && (res.error.message?.includes('work_date') || res.error.code === '42703')) {
+      res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+    }
+
+    if (res.error) {
+      console.warn('[storage] Lỗi query production_logs theo ngày:', res.error);
+      return { data: null, error: res.error };
+    }
+
+    let rows = res.data || [];
+    if (selectedDept && selectedDept !== 'ALL') {
+      rows = rows.filter((r: any) => {
+        const d = r.department || r.product_group;
+        return !d || d === selectedDept;
+      });
+    }
+
+    return { data: rows, error: null };
+  } catch (err: any) {
+    console.error('[storage] Ngoại lệ khi fetch shift production logs:', err);
+    return { data: null, error: err };
+  }
+}
+
+export async function upsertHourlyProductionLog(
+  payload: HourlyLogPayload
+): Promise<{ data: any; error: any }> {
+  if (!supabase || !isSupabaseConfigured) {
+    return { data: null, error: new Error('Supabase chưa được cấu hình. Dữ liệu đang được lưu vào bộ nhớ cục bộ.') };
+  }
+
+  const cleanSlot = payload.shift.replace(/\s+/g, ''); // Ví dụ: '8H-9H'
+  const record = {
+    work_date: payload.work_date,
+    department: payload.department,
+    product_code: payload.product_code,
+    shift: cleanSlot,
+    quantity: Number(payload.quantity || 0),
+    status: payload.status || 'OK'
+  };
+
+  try {
+    // Gọi lệnh UPSERT lên Supabase với onConflict 'work_date,product_code,shift'
+    const res = await supabase.from('production_logs').upsert(record, {
+      onConflict: 'work_date,product_code,shift'
+    });
+
+    if (res.error) {
+      console.error('[storage] Lỗi UPSERT production_logs:', res.error);
+      return { data: null, error: res.error };
+    }
+
+    console.log("✅ Đã đồng bộ Nhật ký ca lên Supabase");
+    broadcastTableUpdate('production_logs');
+    return { data: res.data, error: null };
+  } catch (err: any) {
+    console.error('[storage] Ngoại lệ khi UPSERT production_logs:', err);
+    return { data: null, error: err };
+  }
+}
+
 // ==========================================
 // 5. KẾ HOẠCH THÁNG (MONTHLY PLAN)
 // ==========================================

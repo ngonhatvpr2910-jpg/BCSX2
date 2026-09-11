@@ -338,7 +338,9 @@ export default function App() {
     refreshFromCloud,
     isSupabaseConfigured,
     syncHistoryFromLogs,
-    syncEntireSystem
+    syncEntireSystem,
+    toastError,
+    setToastError
   } = useAppLogic();
 
   return (
@@ -818,6 +820,8 @@ export default function App() {
       setFormDate={setFormDate}
       setFormModelItems={setFormModelItems}
       setFormMessage={setFormMessage}
+      toastError={toastError}
+      setToastError={setToastError}
     />
   )}
 
@@ -1264,6 +1268,24 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Global Toast Thông báo Lỗi Supabase */}
+      {toastError && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-rose-950/95 border border-rose-600 text-rose-100 px-4 py-3 rounded-xl shadow-2xl backdrop-blur-md max-w-md animate-in fade-in slide-in-from-bottom-5 duration-200">
+          <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+          <div className="flex-1 text-xs">
+            <p className="font-bold text-rose-200">Lỗi đồng bộ Supabase</p>
+            <p className="font-mono text-rose-300 mt-0.5 break-all">{toastError}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastError(null)}
+            className="p-1 hover:bg-rose-900 rounded text-rose-300 hover:text-white transition cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 

@@ -48,8 +48,14 @@ CREATE TABLE IF NOT EXISTS public.products (
 
 -- 4. BẢNG NHẬT KÝ SẢN XUẤT CA LÀM VIỆC (PRODUCTION LOGS)
 CREATE TABLE IF NOT EXISTS public.production_logs (
-    id TEXT PRIMARY KEY,                       -- ID bản ghi
-    date TEXT NOT NULL,                        -- Ngày sản xuất (YYYY-MM-DD)
+    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text, -- ID bản ghi
+    work_date TEXT,                            -- Ngày làm việc (YYYY-MM-DD)
+    department TEXT DEFAULT 'RO',              -- Bộ phận ('RO', 'BG', 'RMA')
+    product_code TEXT,                         -- Mã model sản phẩm (ví dụ: 'MH8896L')
+    shift TEXT,                                -- Ca / Khung giờ (ví dụ: '8H-9H')
+    quantity NUMERIC NOT NULL DEFAULT 0,       -- Số lượng sản phẩm
+    status TEXT DEFAULT 'OK',                  -- Trạng thái ('OK')
+    date TEXT,                                 -- Cột tương thích cũ (YYYY-MM-DD)
     line_id TEXT,                              -- ID dây chuyền
     line_name TEXT,                            -- Tên dây chuyền ('DCRO', 'DCBG',...)
     product_id TEXT,                           -- ID sản phẩm lắp ráp
@@ -62,7 +68,6 @@ CREATE TABLE IF NOT EXISTS public.production_logs (
     equivalent_factor NUMERIC NOT NULL DEFAULT 1.0, -- Hệ số quy đổi
     equivalent_products NUMERIC NOT NULL DEFAULT 0, -- Sản lượng quy đổi = actual_units * factor
     labor_productivity_percent NUMERIC NOT NULL DEFAULT 0, -- NSLĐ (%)
-    shift TEXT,                                -- Ca làm việc
     technician_name TEXT,                      -- Tên KSV / Kỹ thuật viên
     hourly_actuals JSONB DEFAULT '{}'::jsonb,  -- Sản lượng theo từng khung giờ { "08:00 - 09:00": 25, ... }
     hourly_workers JSONB DEFAULT '{}'::jsonb,  -- Số công theo từng khung giờ
@@ -72,7 +77,34 @@ CREATE TABLE IF NOT EXISTS public.production_logs (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Tự động bổ sung các cột nếu bảng production_logs đã được tạo từ trước
+ALTER TABLE public.production_logs ADD COLUMN IF NOT EXISTS work_date TEXT;
+ALTER TABLE public.production_logs ADD COLUMN IF NOT EXISTS department TEXT DEFAULT 'RO';
+ALTER TABLE public.production_logs ADD COLUMN IF NOT EXISTS product_code TEXT;
+ALTER TABLE public.production_logs ADD COLUMN IF NOT EXISTS shift TEXT;
+ALTER TABLE public.production_logs ADD COLUMN IF NOT EXISTS quantity NUMERIC DEFAULT 0;
+ALTER TABLE public.production_logs ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'OK';
+
+-- Tạo Unique Constraint trên (work_date, product_code, shift) để phục vụ lệnh UPSERT onConflict
+CREATE UNIQUE INDEX IF NOT EXISTS idx_prod_logs_workdate_product_shift 
+ON public.production_logs (work_date, product_code, shift);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'production_logs_work_date_product_code_shift_key'
+    ) THEN
+        ALTER TABLE public.production_logs 
+        ADD CONSTRAINT production_logs_work_date_product_code_shift_key 
+        UNIQUE USING INDEX idx_prod_logs_workdate_product_shift;
+    END IF;
+EXCEPTION
+    WHEN OTHERS THEN
+        NULL;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_production_logs_date ON public.production_logs(date);
+CREATE INDEX IF NOT EXISTS idx_production_logs_work_date ON public.production_logs(work_date);
 CREATE INDEX IF NOT EXISTS idx_production_logs_line ON public.production_logs(line_name);
 
 -- 5. BẢNG KẾ HOẠCH SẢN XUẤT THÁNG (MONTHLY PLAN)
