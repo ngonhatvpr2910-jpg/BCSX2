@@ -72,6 +72,24 @@ function setLocal<T>(key: string, data: T): void {
   }
 }
 
+// Helper phát broadcast đồng bộ tức thì cho tất cả các máy/tab đang mở
+export function broadcastTableUpdate(tableName: string, extraData?: any): void {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    if (!liveBroadcastChannel) {
+      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room');
+      liveBroadcastChannel.subscribe();
+    }
+    liveBroadcastChannel.send({
+      type: 'broadcast',
+      event: 'table_sync_event',
+      payload: { table: tableName, data: extraData, timestamp: Date.now() },
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi broadcast đồng bộ bảng thất bại:', err);
+  }
+}
+
 // ==========================================
 // 1. QUẢN LÝ NHÂN SỰ (WORKERS)
 // ==========================================
@@ -82,14 +100,16 @@ export async function getWorkers(): Promise<Worker[]> {
       let res: any = await supabase
         .from('workers')
         .select('id, name, division, type, qr_code, image_url')
-        .order('id', { ascending: true });
+        .order('id', { ascending: true })
+        .limit(5000);
 
       // Hỗ trợ trường hợp bảng dùng tên cột biến thể (worker_code, full_name, department, status)
       if (res.error && res.error.message?.includes('does not exist')) {
         res = await supabase
           .from('workers')
           .select('id, worker_code, full_name, department, status')
-          .order('id', { ascending: true });
+          .order('id', { ascending: true })
+          .limit(5000);
       }
 
       if (res.error) throw res.error;
@@ -198,6 +218,7 @@ export async function saveWorker(worker: Worker): Promise<void> {
       } else {
         await insertWorker(worker);
       }
+      broadcastTableUpdate('workers');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu worker:', err?.message || err);
     }
@@ -219,6 +240,7 @@ export async function saveAllWorkers(workers: Worker[]): Promise<void> {
       }));
       const { error } = await supabase.from('workers').upsert(rows);
       if (error) console.warn('[storage] Lưu trữ workers lên Supabase:', error.message || error);
+      broadcastTableUpdate('workers');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu workers lên Supabase:', err?.message || err);
     }
@@ -235,7 +257,7 @@ export async function getAttendanceLogs(): Promise<AttendanceRecord[]> {
         .from('attendance_records')
         .select('id, worker_id, date, slot, check_in_time, check_out_time, scanned_division')
         .order('date', { ascending: false })
-        .limit(100);
+        .limit(10000);
 
       if (error) throw error;
 
@@ -278,6 +300,7 @@ export async function saveAttendanceLog(record: AttendanceRecord): Promise<void>
         scanned_division: record.scannedDivision || null,
       });
       if (error) console.warn('[storage] Lưu attendance_record lên Supabase:', error.message || error);
+      broadcastTableUpdate('attendance_records');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu attendance_record:', err?.message || err);
     }
@@ -292,6 +315,7 @@ export async function deleteAttendanceLog(id: string): Promise<void> {
     try {
       const { error } = await supabase.from('attendance_records').delete().eq('id', id);
       if (error) console.warn('[storage] Xóa attendance_record trên Supabase:', error.message || error);
+      broadcastTableUpdate('attendance_records');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi xóa attendance_record:', err?.message || err);
     }
@@ -314,6 +338,7 @@ export async function saveAllAttendanceLogs(logs: AttendanceRecord[]): Promise<v
       }));
       const { error } = await supabase.from('attendance_records').upsert(rows);
       if (error) console.warn('[storage] Lưu trữ attendance_records lên Supabase:', error.message || error);
+      broadcastTableUpdate('attendance_records');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu attendance lên Supabase:', err?.message || err);
     }
@@ -378,6 +403,7 @@ export async function saveProduct(product: ProductDefinition): Promise<void> {
         price: product.price ?? null,
       });
       if (error) console.warn('[storage] Lưu product lên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu product:', err?.message || err);
     }
@@ -392,6 +418,7 @@ export async function deleteProduct(id: string): Promise<void> {
     try {
       const { error } = await supabase.from('products').delete().eq('id', id);
       if (error) console.warn('[storage] Xóa product trên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi xóa product:', err?.message || err);
     }
@@ -418,6 +445,7 @@ export async function upsertProducts(products: ProductDefinition[]): Promise<voi
       }));
       const { error } = await supabase.from('products').upsert(rows);
       if (error) console.warn('[storage] Upsert products lên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi upsert products:', err?.message || err);
     }
@@ -440,6 +468,7 @@ export async function saveAllProducts(products: ProductDefinition[]): Promise<vo
       }));
       const { error } = await supabase.from('products').upsert(rows);
       if (error) console.warn('[storage] Lưu trữ products lên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu products lên Supabase:', err?.message || err);
     }
@@ -461,7 +490,7 @@ export async function getProductionLogs(): Promise<ProductionLog[]> {
           'hourly_actuals, hourly_workers, hourly_official_workers, hourly_seasonal_workers'
         )
         .order('date', { ascending: false })
-        .limit(100);
+        .limit(10000);
 
       if (error) throw error;
 
@@ -540,6 +569,7 @@ export async function saveProductionLog(log: ProductionLog): Promise<void> {
         hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
       });
       if (error) console.warn('[storage] Lưu production_log lên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu production_log:', err?.message || err);
     }
@@ -554,6 +584,7 @@ export async function deleteProductionLog(id: string): Promise<void> {
     try {
       const { error } = await supabase.from('production_logs').delete().eq('id', id);
       if (error) console.warn('[storage] Xóa production_log trên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi xóa production_log:', err?.message || err);
     }
@@ -593,6 +624,7 @@ export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void>
       }));
       const { error } = await supabase.from('production_logs').upsert(rows);
       if (error) console.warn('[storage] Upsert production_logs lên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi upsert production_logs:', err?.message || err);
     }
@@ -628,6 +660,7 @@ export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void
       }));
       const { error } = await supabase.from('production_logs').upsert(rows);
       if (error) console.warn('[storage] Lưu trữ production_logs lên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu production_logs lên Supabase:', err?.message || err);
     }
@@ -676,6 +709,7 @@ export async function saveMonthlyPlan(plan: MonthlyPlanData): Promise<void> {
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu monthly_plan lên Supabase:', error.message || error);
+      broadcastTableUpdate('monthly_plan');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu monthly_plan:', err?.message || err);
     }
@@ -723,6 +757,7 @@ export async function saveMonthlyTargets(targets: Record<string, number>): Promi
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu monthly_targets lên Supabase:', error.message || error);
+      broadcastTableUpdate('monthly_targets');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu monthly_targets:', err?.message || err);
     }
@@ -768,6 +803,7 @@ export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetr
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn(`[storage] Lưu metrics ${year} lên Supabase:`, error.message || error);
+      broadcastTableUpdate('monthly_metrics');
     } catch (err: any) {
       console.warn(`[storage] Trạng thái kết nối khi lưu metrics ${year}:`, err?.message || err);
     }
@@ -809,6 +845,7 @@ export async function saveGasDailyReports(reports: DailyReportRowGas[]): Promise
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu gas_daily_reports lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu gas_daily_reports:', err?.message || err);
     }
@@ -847,6 +884,7 @@ export async function saveAssemblyDailyReports(reports: DailyReportRowAssembly[]
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu assembly_daily_reports lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu assembly_daily_reports:', err?.message || err);
     }
@@ -887,6 +925,7 @@ export async function saveMonthlyScrapReport(reports: MonthlyScrapReport[]): Pro
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu monthly_scrap lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu monthly_scrap:', err?.message || err);
     }
@@ -924,6 +963,7 @@ export async function saveWeeklyScrapReport(reports: WeeklyScrapReport[]): Promi
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu weekly_scrap lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu weekly_scrap:', err?.message || err);
     }
@@ -961,6 +1001,7 @@ export async function saveWeeklyDclrErrorRate(reports: WeeklyDclreErrorRate[]): 
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu weekly_dclr_error lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu weekly_dclr_error:', err?.message || err);
     }
@@ -998,6 +1039,7 @@ export async function saveMonthlyDclrErrorRate(reports: MonthlyDclreErrorRate[])
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu monthly_dclr_error lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu monthly_dclr_error:', err?.message || err);
     }
@@ -1038,6 +1080,7 @@ export async function saveDeclaredImeis(records: any[]): Promise<void> {
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu declared_imeis lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu declared_imeis:', err?.message || err);
     }
@@ -1075,6 +1118,7 @@ export async function saveScannedImeis(records: any[]): Promise<void> {
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu scanned_imeis lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu scanned_imeis:', err?.message || err);
     }
@@ -1271,6 +1315,7 @@ export interface RealtimeCallbacks {
   onMonthlyMetricsChange?: (payload: any) => void;
   onDailyReportsChange?: (payload: any) => void;
   onLiveFormChange?: (payload: any) => void;
+  onTableSyncChange?: (table: string, payload: any) => void;
 }
 
 /**
@@ -1399,9 +1444,16 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
       );
     }
 
-    // 3. Lắng nghe kênh live broadcast thay đổi ô nhập liệu trực tiếp
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Kênh đồng bộ postgres_changes đã sẵn sàng');
+      }
+    });
+
+    // 3. Đăng ký phòng Broadcast chung (sunhouse_live_form_room) để đồng bộ tức thì các tab/thiết bị
+    let broadcastRoom = supabase.channel('sunhouse_live_form_room');
     if (callbacks.onLiveFormChange) {
-      channel = channel.on(
+      broadcastRoom = broadcastRoom.on(
         'broadcast',
         { event: 'form_cell_change' },
         (payload) => {
@@ -1410,9 +1462,22 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
       );
     }
 
-    channel.subscribe((status) => {
+    if (callbacks.onTableSyncChange) {
+      broadcastRoom = broadcastRoom.on(
+        'broadcast',
+        { event: 'table_sync_event' },
+        (payload) => {
+          const tbl = payload?.payload?.table;
+          if (tbl) {
+            callbacks.onTableSyncChange?.(tbl, payload.payload);
+          }
+        }
+      );
+    }
+
+    broadcastRoom.subscribe((status) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[Realtime] Kênh đồng bộ thời gian thực đa bảng đã sẵn sàng');
+        console.log('[Realtime] Kênh Broadcast liên tab đã sẵn sàng');
       }
     });
 
@@ -1420,6 +1485,7 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
     return () => {
       try {
         supabase?.removeChannel(channel);
+        supabase?.removeChannel(broadcastRoom);
       } catch (err) {
         console.warn('[Realtime] Lỗi dọn dẹp kênh kết nối:', err);
       }

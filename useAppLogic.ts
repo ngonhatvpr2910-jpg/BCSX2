@@ -1780,6 +1780,55 @@ const [isScrolled, setIsScrolled] = useState(false);
           }, 100);
         }
       },
+
+      // (10) Lắng nghe broadcast đồng bộ tức thì các bảng khi có thay đổi từ máy/tab khác
+      onTableSyncChange: async (table) => {
+        try {
+          if (table === 'production_logs') {
+            const logs = await storage.getProductionLogs();
+            if (logs && logs.length > 0) setProductionLogs(logs);
+          } else if (table === 'attendance_records') {
+            const att = await storage.getAttendanceLogs();
+            if (att && att.length > 0) setAttendanceLogs(att);
+          } else if (table === 'workers') {
+            const w = await storage.getWorkers();
+            if (w && w.length > 0) setWorkers(w);
+          } else if (table === 'products') {
+            const p = await storage.getProducts();
+            if (p && p.length > 0) setProducts(p);
+          } else if (table === 'monthly_plan') {
+            const mp = await storage.getMonthlyPlan();
+            if (mp && Object.keys(mp).length > 0) setMonthlyPlan(mp);
+          } else if (table === 'monthly_targets') {
+            const mt = await storage.getMonthlyTargets();
+            if (mt && Object.keys(mt).length > 0) setMonthlyTargets(mt);
+          } else if (table === 'monthly_metrics') {
+            const m25 = await storage.getMonthlyMetrics(2025);
+            const m26 = await storage.getMonthlyMetrics(2026);
+            if (m25 && m25.length > 0) setMetrics2025(m25);
+            if (m26 && m26.length > 0) setMetrics2026(m26);
+          } else if (table === 'daily_reports') {
+            const gas = await storage.getGasDailyReports();
+            const ass = await storage.getAssemblyDailyReports();
+            const scrapM = await storage.getMonthlyScrapReport();
+            const scrapW = await storage.getWeeklyScrapReport();
+            const dclrW = await storage.getWeeklyDclrErrorRate();
+            const dclrM = await storage.getMonthlyDclrErrorRate();
+            const decImeis = await storage.getDeclaredImeis();
+            const scnImeis = await storage.getScannedImeis();
+            if (gas && gas.length > 0) setGasDailyReports(gas);
+            if (ass && ass.length > 0) setAssemblyDailyReports(ass);
+            if (scrapM && scrapM.length > 0) setMonthlyScrap(scrapM);
+            if (scrapW && scrapW.length > 0) setWeeklyScrap(scrapW);
+            if (dclrW && dclrW.length > 0) setWeeklyDclrError(dclrW);
+            if (dclrM && dclrM.length > 0) setMonthlyDclrError(dclrM);
+            if (decImeis && decImeis.length > 0) setDeclaredImeis(decImeis);
+            if (scnImeis && scnImeis.length > 0) setScannedImeis(scnImeis);
+          }
+        } catch (err) {
+          console.warn('[Realtime] Lỗi đồng bộ bảng từ broadcast:', table, err);
+        }
+      },
     });
 
     return () => {
