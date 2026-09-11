@@ -1089,8 +1089,85 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
+    storage.saveAllProductionLogs(productionLogs);
+  }, [productionLogs]);
+
+  useEffect(() => {
+    if (!isLoadedRef.current) return;
     localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
   }, [products]);
+
+  // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
+  const syncHistoricalMetricsWithLogs = useCallback((currentLogs: ProductionLog[]) => {
+    const yearMonthMap: { [year: number]: { [month: number]: ProductionLog[] } } = {
+      2025: {},
+      2026: {},
+    };
+
+    currentLogs.forEach((log) => {
+      const parts = log.date.split("-");
+      if (parts.length >= 2) {
+        const yr = parseInt(parts[0], 10);
+        const mo = parseInt(parts[1], 10);
+        if (yr === 2025 || yr === 2026) {
+          if (!yearMonthMap[yr][mo]) {
+            yearMonthMap[yr][mo] = [];
+          }
+          yearMonthMap[yr][mo].push(log);
+        }
+      }
+    });
+
+    const updateYearMetrics = (year: 2025 | 2026, setMetrics: React.Dispatch<React.SetStateAction<MonthlyMetric[]>>) => {
+      setMetrics((prevMetrics) => {
+        const updated = prevMetrics.map((m) => {
+          const monthLogs = yearMonthMap[year]?.[m.month];
+          if (!monthLogs || monthLogs.length === 0) {
+            return m;
+          }
+          const totalActual = monthLogs.reduce((acc, curr) => acc + (curr.actualUnits || 0), 0);
+          const totalEq = monthLogs.reduce((acc, curr) => acc + (curr.equivalentProducts || 0), 0);
+
+          // Tính công lao động thực tế duy nhất theo ca và chuyền
+          const uniqueShiftWorkersMap: { [key: string]: number } = {};
+          monthLogs.forEach((log) => {
+            const key = `${log.date}_${log.shift}_${log.lineId}`;
+            uniqueShiftWorkersMap[key] = Math.max(uniqueShiftWorkersMap[key] || 0, log.workersCount || 0);
+          });
+          const totalMandays = Object.values(uniqueShiftWorkersMap).reduce((acc, val) => acc + (val || 0), 0);
+
+          const calculatedProductivity = (totalMandays > 0 && !Number.isNaN(Number(totalEq)))
+            ? Number(((totalEq / totalMandays) / INDUSTRIAL_STANDARDS.standardQtyPerManday * 100).toFixed(2))
+            : (m.laborProductivityPercent || 100);
+
+          return {
+            ...m,
+            actualProducts: totalActual,
+            equivalentProducts: totalEq,
+            productionMandays: totalMandays,
+            laborProductivityPercent: calculatedProductivity,
+          };
+        });
+        storage.saveMonthlyMetrics(year, updated);
+        return updated;
+      });
+    };
+
+    if (Object.keys(yearMonthMap[2026]).length > 0) {
+      updateYearMetrics(2026, setMetrics2026);
+    }
+    if (Object.keys(yearMonthMap[2025]).length > 0) {
+      updateYearMetrics(2025, setMetrics2025);
+    }
+  }, []);
+
+  const syncHistoryFromLogs = useCallback(() => {
+    syncHistoricalMetricsWithLogs(productionLogs);
+    setFormMessage("✅ Đã đồng bộ toàn bộ dữ liệu lịch sử và chỉ tiêu từ Nhật ký ca!");
+    setTimeout(() => {
+      setFormMessage("");
+    }, 3500);
+  }, [productionLogs, syncHistoricalMetricsWithLogs]);
 
   // Hàm tải / làm mới dữ liệu từ Supabase Cloud
   const refreshFromCloud = useCallback(async () => {
@@ -3581,12 +3658,23 @@ const [isScrolled, setIsScrolled] = useState(false);
     });
 
     storage.upsertProductionLogs(newLogs);
+    let updatedLogs: ProductionLog[] = [];
     setProductionLogs((prev) => {
       const filtered = prev.filter((log) => log.date !== formDate || log.shift !== formShift);
-      return [...newLogs, ...filtered];
+      updatedLogs = [...newLogs, ...filtered];
+      return updatedLogs;
     });
 
-    setFormMessage(`✅ Đã lưu ${newLogs.length} bản ghi nhật ký ca thành công & cập nhật KPI!`);
+    // Tự động đồng bộ số liệu vào dữ liệu lịch sử các tháng
+    setTimeout(() => {
+      if (updatedLogs.length > 0) {
+        syncHistoricalMetricsWithLogs(updatedLogs);
+      }
+    }, 50);
+
+    const logMonth = parseInt(formDate.split("-")[1], 10) || 1;
+    const logYear = parseInt(formDate.split("-")[0], 10) || 2026;
+    setFormMessage(`✅ Đã lưu ${newLogs.length} bản ghi nhật ký ca & đồng bộ thành công dữ liệu lịch sử (Tháng ${logMonth}/${logYear})!`);
 
     // Reset form fields
     resetFormFields();
@@ -3594,7 +3682,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     // Xóa thông báo sau 4 giây
     setTimeout(() => {
       setFormMessage("");
-    }, 4000);
+    }, 4500);
   };
 
   const resetFormFields = () => {
@@ -3617,8 +3705,17 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   const handleDeleteLog = (id: string) => {
     storage.deleteProductionLog(id);
-    setProductionLogs((prev) => prev.filter((log) => log.id !== id));
-    setFormMessage("❌ Đã xóa bản ghi nhật ký ca thành công.");
+    let remainingLogs: ProductionLog[] = [];
+    setProductionLogs((prev) => {
+      remainingLogs = prev.filter((log) => log.id !== id);
+      return remainingLogs;
+    });
+
+    setTimeout(() => {
+      syncHistoricalMetricsWithLogs(remainingLogs);
+    }, 50);
+
+    setFormMessage("❌ Đã xóa bản ghi nhật ký ca & cập nhật lại dữ liệu lịch sử.");
     setTimeout(() => {
       setFormMessage("");
     }, 3500);
@@ -4558,6 +4655,39 @@ const [isScrolled, setIsScrolled] = useState(false);
     XLSX.writeFile(wb, `KHSX_Thang_${month}_${year}_${filterDivision}.xlsx`);
   };
 
+  const syncEntireSystem = async () => {
+    try {
+      setSyncStatus('syncing');
+      setSyncMessage('Đang đồng bộ toàn bộ dữ liệu hệ thống...');
+
+      // 1. Đồng bộ dữ liệu lịch sử từ nhật ký ca
+      const currentLogs = productionLogs;
+      syncHistoricalMetricsWithLogs(currentLogs);
+
+      // 2. Lưu trữ toàn bộ dữ liệu vào Storage & Cloud nếu có kết nối
+      await Promise.allSettled([
+        storage.saveAllProductionLogs(productionLogs),
+        storage.saveMonthlyMetrics(2025, metrics2025),
+        storage.saveMonthlyMetrics(2026, metrics2026),
+        storage.saveMonthlyPlan(monthlyPlan),
+        storage.saveMonthlyTargets(monthlyTargets),
+        storage.saveGasDailyReports(gasDailyReports),
+        storage.saveAssemblyDailyReports(assemblyDailyReports),
+        storage.saveDeclaredImeis(declaredImeis),
+        storage.saveScannedImeis(scannedImeis),
+      ]);
+
+      setSyncStatus(isSupabaseConfigured ? 'synced' : 'local');
+      setSyncMessage(isSupabaseConfigured ? 'Đã đồng bộ toàn bộ hệ thống lên Cloud' : 'Đã đồng bộ toàn bộ hệ thống (Bộ nhớ máy)');
+      setFormMessage('🎉 Đã đồng bộ liên kết toàn bộ dữ liệu và tính năng thành công!');
+      setTimeout(() => setFormMessage(''), 4000);
+    } catch (error) {
+      console.error('Lỗi khi đồng bộ toàn hệ thống:', error);
+      setSyncStatus('error');
+      setSyncMessage('Lỗi khi đồng bộ dữ liệu');
+    }
+  };
+
   const handleExportFullBackup = () => {
     const wb = XLSX.utils.book_new();
 
@@ -4573,7 +4703,20 @@ const [isScrolled, setIsScrolled] = useState(false);
     const wsProducts = XLSX.utils.json_to_sheet(products);
     XLSX.utils.book_append_sheet(wb, wsProducts, "Products");
 
-    // 3. Monthly Plan (Flattened)
+    // 3. Workers (Nhân sự)
+    const wsWorkers = XLSX.utils.json_to_sheet(workers);
+    XLSX.utils.book_append_sheet(wb, wsWorkers, "Workers");
+
+    // 4. Attendance Logs (Điểm danh)
+    const wsAttendance = XLSX.utils.json_to_sheet(attendanceLogs);
+    XLSX.utils.book_append_sheet(wb, wsAttendance, "Attendance_Logs");
+
+    // 5. Monthly Targets (Mục tiêu NSLĐ)
+    const targetsArray = Object.entries(monthlyTargets).map(([key, val]) => ({ key, targetValue: val }));
+    const wsTargets = XLSX.utils.json_to_sheet(targetsArray);
+    XLSX.utils.book_append_sheet(wb, wsTargets, "Monthly_Targets");
+
+    // 6. Monthly Plan (Flattened)
     const flattenedPlan: any[] = [];
     Object.keys(monthlyPlan).forEach(ym => {
       Object.keys(monthlyPlan[ym]).forEach(prodId => {
@@ -4587,21 +4730,21 @@ const [isScrolled, setIsScrolled] = useState(false);
     const wsPlan = XLSX.utils.json_to_sheet(flattenedPlan);
     XLSX.utils.book_append_sheet(wb, wsPlan, "Monthly_Plan");
 
-    // 4. Gas Daily Reports
+    // 7. Gas Daily Reports
     const wsGas = XLSX.utils.json_to_sheet(gasDailyReports);
     XLSX.utils.book_append_sheet(wb, wsGas, "Gas_Daily_Reports");
 
-    // 5. Assembly Daily Reports
+    // 8. Assembly Daily Reports
     const wsAssembly = XLSX.utils.json_to_sheet(assemblyDailyReports);
     XLSX.utils.book_append_sheet(wb, wsAssembly, "Assembly_Daily_Reports");
 
-    // 6. Metrics 2025 & 2026
+    // 9. Metrics 2025 & 2026
     const wsMetrics2025 = XLSX.utils.json_to_sheet(metrics2025);
     XLSX.utils.book_append_sheet(wb, wsMetrics2025, "Metrics_2025");
     const wsMetrics2026 = XLSX.utils.json_to_sheet(metrics2026);
     XLSX.utils.book_append_sheet(wb, wsMetrics2026, "Metrics_2026");
 
-    // 7. Other Metrics
+    // 10. Scrap & Quality Reports
     const wsMonthlyScrap = XLSX.utils.json_to_sheet(monthlyScrap);
     XLSX.utils.book_append_sheet(wb, wsMonthlyScrap, "Monthly_Scrap");
     const wsWeeklyScrap = XLSX.utils.json_to_sheet(weeklyScrap);
@@ -4611,8 +4754,18 @@ const [isScrolled, setIsScrolled] = useState(false);
     const wsMonthlyDclrError = XLSX.utils.json_to_sheet(monthlyDclrError);
     XLSX.utils.book_append_sheet(wb, wsMonthlyDclrError, "Monthly_DCLR_Error");
 
-    XLSX.writeFile(wb, `Sao_Luu_Toan_Bo_Bao_Cao_Sunhouse_${new Date().toISOString().split('T')[0]}.xlsx`);
-    setFormMessage("✅ Đã xuất toàn bộ dữ liệu báo cáo ra file Excel thành công!");
+    // 11. Declared & Scanned IMEIs
+    if (declaredImeis.length > 0) {
+      const wsDeclaredImei = XLSX.utils.json_to_sheet(declaredImeis);
+      XLSX.utils.book_append_sheet(wb, wsDeclaredImei, "Declared_IMEIs");
+    }
+    if (scannedImeis.length > 0) {
+      const wsScannedImei = XLSX.utils.json_to_sheet(scannedImeis);
+      XLSX.utils.book_append_sheet(wb, wsScannedImei, "Scanned_IMEIs");
+    }
+
+    XLSX.writeFile(wb, `Sao_Luu_Toan_Bo_He_Thong_Sunhouse_${new Date().toISOString().split('T')[0]}.xlsx`);
+    setFormMessage("✅ Đã xuất toàn bộ dữ liệu hệ thống (11 bảng) ra file Excel thành công!");
     setTimeout(() => setFormMessage(""), 3500);
   };
 
@@ -4635,11 +4788,12 @@ const [isScrolled, setIsScrolled] = useState(false);
 
         // 1. Production Logs
         const logsData = getSheetData("Production_Logs");
+        let importedLogs: ProductionLog[] = [];
         if (logsData) {
-          const importedLogs = (logsData as any[]).map(log => ({
+          importedLogs = (logsData as any[]).map(log => ({
             ...log,
-            hourlyActuals: log.hourlyActuals ? JSON.parse(log.hourlyActuals) : {},
-            hourlyWorkers: log.hourlyWorkers ? JSON.parse(log.hourlyWorkers) : {}
+            hourlyActuals: log.hourlyActuals ? (typeof log.hourlyActuals === 'string' ? JSON.parse(log.hourlyActuals) : log.hourlyActuals) : {},
+            hourlyWorkers: log.hourlyWorkers ? (typeof log.hourlyWorkers === 'string' ? JSON.parse(log.hourlyWorkers) : log.hourlyWorkers) : {}
           }));
           setProductionLogs(importedLogs);
         }
@@ -4648,7 +4802,27 @@ const [isScrolled, setIsScrolled] = useState(false);
         const productsData = getSheetData("Products");
         if (productsData) setProducts(productsData as ProductDefinition[]);
 
-        // 3. Monthly Plan
+        // 3. Workers
+        const workersData = getSheetData("Workers");
+        if (workersData) setWorkers(workersData as Worker[]);
+
+        // 4. Attendance Logs
+        const attendanceData = getSheetData("Attendance_Logs");
+        if (attendanceData) setAttendanceLogs(attendanceData as AttendanceRecord[]);
+
+        // 5. Monthly Targets
+        const targetsData = getSheetData("Monthly_Targets");
+        if (targetsData) {
+          const newTargets: Record<string, number> = {};
+          (targetsData as any[]).forEach(item => {
+            if (item.key && item.targetValue !== undefined) {
+              newTargets[item.key] = Number(item.targetValue);
+            }
+          });
+          setMonthlyTargets(newTargets);
+        }
+
+        // 6. Monthly Plan
         const planData = getSheetData("Monthly_Plan");
         if (planData) {
           const newPlan: any = {};
@@ -4667,21 +4841,21 @@ const [isScrolled, setIsScrolled] = useState(false);
           setMonthlyPlan(newPlan);
         }
 
-        // 4. Gas Reports
+        // 7. Gas Reports
         const gasData = getSheetData("Gas_Daily_Reports");
         if (gasData) setGasDailyReports(gasData as DailyReportRowGas[]);
 
-        // 5. Assembly Reports
+        // 8. Assembly Reports
         const assemblyData = getSheetData("Assembly_Daily_Reports");
         if (assemblyData) setAssemblyDailyReports(assemblyData as DailyReportRowAssembly[]);
 
-        // 6. Metrics
+        // 9. Metrics
         const m2025Data = getSheetData("Metrics_2025");
         if (m2025Data) setMetrics2025(m2025Data as MonthlyMetric[]);
         const m2026Data = getSheetData("Metrics_2026");
         if (m2026Data) setMetrics2026(m2026Data as MonthlyMetric[]);
 
-        // 7. Others
+        // 10. Others
         const mScrapData = getSheetData("Monthly_Scrap");
         if (mScrapData) setMonthlyScrap(mScrapData as MonthlyScrapReport[]);
         const wScrapData = getSheetData("Weekly_Scrap");
@@ -4691,7 +4865,18 @@ const [isScrolled, setIsScrolled] = useState(false);
         const mErrorData = getSheetData("Monthly_DCLR_Error");
         if (mErrorData) setMonthlyDclrError(mErrorData as MonthlyDclreErrorRate[]);
 
-        setFormMessage("✅ Đã khôi phục toàn bộ dữ liệu báo cáo từ file Excel thành công!");
+        // 11. IMEIs
+        const declaredData = getSheetData("Declared_IMEIs");
+        if (declaredData) setDeclaredImeis(declaredData as DeclaredImei[]);
+        const scannedData = getSheetData("Scanned_IMEIs");
+        if (scannedData) setScannedImeis(scannedData as ScannedImei[]);
+
+        // Tự động đồng bộ lại lịch sử từ nhật ký đã nhập
+        if (importedLogs.length > 0) {
+          syncHistoricalMetricsWithLogs(importedLogs);
+        }
+
+        setFormMessage("✅ Đã khôi phục và đồng bộ toàn bộ dữ liệu hệ thống từ file Excel thành công!");
         setTimeout(() => setFormMessage(""), 4000);
 
       } catch (err) {
@@ -5071,6 +5256,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     syncStatus,
     syncMessage,
     refreshFromCloud,
-    isSupabaseConfigured
+    isSupabaseConfigured,
+    syncHistoryFromLogs,
+    syncEntireSystem
   };
 };

@@ -333,7 +333,9 @@ export default function App() {
     syncStatus,
     syncMessage,
     refreshFromCloud,
-    isSupabaseConfigured
+    isSupabaseConfigured,
+    syncHistoryFromLogs,
+    syncEntireSystem
   } = useAppLogic();
 
   return (
@@ -889,23 +891,25 @@ export default function App() {
   )}
 
           {activeTab === "history-data" && (
-    <HistoryDataTab
-      setHistoryYear={setHistoryYear}
-      historyYear={historyYear}
-      metrics2025={metrics2025}
-      processedMetrics2026={processedMetrics2026}
-      updateHistoryMetric={updateHistoryMetric}
-      setFocusedField={setFocusedField}
-      simulatedHistoryMetrics={simulatedHistoryMetrics}
-      selectedYear={selectedYear}
-      yearlyCumulativeCompareData={yearlyCumulativeCompareData}
-      selectedTargetMonth={selectedTargetMonth}
-      setSelectedTargetMonth={setSelectedTargetMonth}
-      monthlyTargets={monthlyTargets}
-      updateMonthlyTarget={updateMonthlyTarget}
-      setMonthlyTargets={setMonthlyTargets}
-    />
-  )}
+            <HistoryDataTab
+              setHistoryYear={setHistoryYear}
+              historyYear={historyYear}
+              metrics2025={metrics2025}
+              processedMetrics2026={processedMetrics2026}
+              updateHistoryMetric={updateHistoryMetric}
+              setFocusedField={setFocusedField}
+              simulatedHistoryMetrics={simulatedHistoryMetrics}
+              selectedYear={selectedYear}
+              yearlyCumulativeCompareData={yearlyCumulativeCompareData}
+              selectedTargetMonth={selectedTargetMonth}
+              setSelectedTargetMonth={setSelectedTargetMonth}
+              monthlyTargets={monthlyTargets}
+              updateMonthlyTarget={updateMonthlyTarget}
+              setMonthlyTargets={setMonthlyTargets}
+              productionLogs={productionLogs}
+              syncHistoryFromLogs={syncHistoryFromLogs}
+            />
+          )}
 
           {activeTab === "personnel" && (
             <PersonnelTab 
@@ -928,11 +932,16 @@ export default function App() {
   )}
 
           {activeTab === "system-data" && (
-    <SystemDataTab
-      handleExportFullBackup={handleExportFullBackup}
-      handleImportFullBackup={handleImportFullBackup}
-    />
-  )}
+            <SystemDataTab
+              handleExportFullBackup={handleExportFullBackup}
+              handleImportFullBackup={handleImportFullBackup}
+              syncEntireSystem={syncEntireSystem}
+              syncStatus={syncStatus}
+              syncMessage={syncMessage}
+              isSupabaseConfigured={isSupabaseConfigured}
+              refreshFromCloud={refreshFromCloud}
+            />
+          )}
         </AnimatePresence>
 
       </main>
