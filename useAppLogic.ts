@@ -6,7 +6,7 @@ import {
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
-import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem } from './appUtils';
+import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot } from './appUtils';
 import * as storage from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -503,20 +503,73 @@ const [isScrolled, setIsScrolled] = useState(false);
   });
   const [formSlots, setFormSlots] = useState<string[]>(() => {
     const draft = getInitialActiveDraft();
-    if (draft && Array.isArray(draft.slots) && draft.slots.length > 0) return draft.slots;
+    if (draft && Array.isArray(draft.slots) && draft.slots.length > 0) {
+      const valid = draft.slots.filter(isValidHourlySlot);
+      if (valid.length > 0) return valid;
+    }
     return getShiftSlots("Ca HC (08:00 - 17:00)");
   });
+  const formSlotsRef = useRef(formSlots);
+  formSlotsRef.current = formSlots;
   const [newSlotInput, setNewSlotInput] = useState<string>("20H - 21H");
   const [scanInput, setScanInput] = useState<string>("");
 
   // Trạng thái Toast thông báo lỗi Supabase (hiển thị Toast đỏ chứa error.message)
   const [toastError, setToastError] = useState<string | null>(null);
   const showToastError = useCallback((msg: string) => {
+    if (!msg) return;
+    // Bỏ qua lỗi gián đoạn mạng hoặc timeout tạm thời để tránh làm phiền người dùng khi dữ liệu đã lưu an toàn vào LocalStorage
+    const isTransient =
+      msg.includes('Failed to fetch') ||
+      msg.includes('NetworkError') ||
+      msg.includes('Load failed') ||
+      msg.includes('timeout') ||
+      msg.includes('57014') ||
+      msg.includes('AbortError');
+
+    if (isTransient) {
+      console.warn('[Network] Kết nối máy chủ tạm thời gián đoạn. Dữ liệu đã được lưu an toàn tại máy cục bộ.');
+      return;
+    }
+
     setToastError(msg);
     setTimeout(() => {
       setToastError((prev) => (prev === msg ? null : prev));
     }, 8000);
   }, []);
+
+  // Vệ sinh dữ liệu một lần khi khởi động: Loại bỏ vĩnh viễn các slot lỗi (như "Ca HC (08:00 - 17:00)")
+  useEffect(() => {
+    setFormSlots((prev) => {
+      const cleaned = prev.filter(isValidHourlySlot);
+      if (cleaned.length === 0) return getShiftSlots("Ca HC (08:00 - 17:00)");
+      return cleaned.length !== prev.length ? cleaned : prev;
+    });
+
+    setFormModelItems((prev) => {
+      let changed = false;
+      const next = prev.map((item) => {
+        const cleanedHourly: Record<string, number> = {};
+        let itemChanged = false;
+        Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
+          if (isValidHourlySlot(k)) {
+            cleanedHourly[k] = Number(v) || 0;
+          } else {
+            itemChanged = true;
+          }
+        });
+        if (itemChanged) {
+          changed = true;
+          return { ...item, hourlyActuals: cleanedHourly };
+        }
+        return item;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
+
+  // Debounce ref cho cập nhật khung giờ để tránh spam mạng và khóa hàng trên Supabase
+  const hourlySyncDebounceRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
   interface ScannedImei {
     id: string;
@@ -1174,18 +1227,38 @@ const [isScrolled, setIsScrolled] = useState(false);
   formDateRef.current = formDate;
   formShiftRef.current = formShift;
   const isSyncingFromExternalRef = useRef(false);
+  const lastLoadedDateShiftRef = useRef<string>("");
 
-  // Tự động nạp dữ liệu ca từ productionLogs / drafts / KHSX tháng khi chuyển ngày hoặc khi nhận dữ liệu từ Cloud
+  // Tự động nạp dữ liệu ca từ productionLogs / drafts / KHSX tháng khi chuyển ngày hoặc ca
   useEffect(() => {
     if (!formDate || !formShift || isSyncingFromExternalRef.current) return;
+
+    const dateShiftKey = `${formDate}_${formShift}`;
+    const isDateShiftChanged = lastLoadedDateShiftRef.current !== dateShiftKey;
+
+    // Nếu ngày và ca không đổi, và form đã có dữ liệu người dùng đang thao tác,
+    // TUYỆT ĐỐI KHÔNG ghi đè lại formModelItems khi productionLogs thay đổi trong nền
+    // để dữ liệu tính toán tức thì như LocalStorage và không bao giờ bị nhảy số loạn.
+    if (!isDateShiftChanged && formModelItems.length > 0) {
+      return;
+    }
+    lastLoadedDateShiftRef.current = dateShiftKey;
 
     // 1. Kiểm tra Bản Nháp (Draft) chưa lưu trước tiên để giữ lại toàn bộ số liệu vừa gõ dở
     const draft = getDraftForDateAndShift(formDate, formShift);
     if (draft && Array.isArray(draft.items) && draft.items.length > 0) {
       if (draft.slots && Array.isArray(draft.slots) && draft.slots.length > 0) {
-        setFormSlots(draft.slots);
+        const cleanSlots = draft.slots.filter(isValidHourlySlot);
+        if (cleanSlots.length > 0) setFormSlots(cleanSlots);
       }
-      setFormModelItems(draft.items);
+      const cleanItems = draft.items.map(it => {
+        const cleanHourly: Record<string, number> = {};
+        Object.entries(it.hourlyActuals || {}).forEach(([k, v]) => {
+          if (isValidHourlySlot(k)) cleanHourly[k] = Number(v) || 0;
+        });
+        return { ...it, hourlyActuals: cleanHourly };
+      });
+      setFormModelItems(cleanItems);
       if (draft.officialRO) setFormOfficialWorkersRO(draft.officialRO);
       if (draft.seasonalRO) setFormSeasonalWorkersRO(draft.seasonalRO);
       if (draft.officialBG) setFormOfficialWorkersBG(draft.officialBG);
@@ -1207,25 +1280,37 @@ const [isScrolled, setIsScrolled] = useState(false);
       const allSlots = new Set<string>();
       logsForDate.forEach(log => {
         if (log.hourlyActuals) {
-          Object.keys(log.hourlyActuals).forEach(slot => allSlots.add(slot));
+          Object.keys(log.hourlyActuals).forEach(slot => {
+            if (isValidHourlySlot(slot)) allSlots.add(slot);
+          });
         }
       });
       const defaultSlots = getShiftSlots(formShift);
-      defaultSlots.forEach(s => allSlots.add(s));
+      defaultSlots.forEach(s => {
+        if (isValidHourlySlot(s)) allSlots.add(s);
+      });
       const sortedSlots = Array.from(allSlots).sort((a, b) => {
         const hA = parseInt(a.split("H")[0]) || 0;
         const hB = parseInt(b.split("H")[0]) || 0;
         return hA - hB;
       });
-      setFormSlots(sortedSlots);
+      if (sortedSlots.length > 0) {
+        setFormSlots(sortedSlots);
+      }
 
       const items: FormModelItem[] = logsForDate.map(log => {
         const planVal = (!isNaN(dayNum) && monthlyPlan[ym]?.[log.productId]?.[dayNum]) || 0;
+        const cleanHourly: Record<string, number> = {};
+        if (log.hourlyActuals) {
+          Object.entries(log.hourlyActuals).forEach(([k, v]) => {
+            if (isValidHourlySlot(k)) cleanHourly[k] = Number(v) || 0;
+          });
+        }
         return {
           id: `item-${log.productId}-${log.id}`,
           productId: log.productId,
           dailyPlan: planVal,
-          hourlyActuals: log.hourlyActuals || {},
+          hourlyActuals: cleanHourly,
         };
       });
       setFormModelItems(items);
@@ -1272,7 +1357,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (!isNaN(dayNum) && monthlyPlan[ym]) {
         const plannedProducts = products.filter(p => (monthlyPlan[ym]?.[p.id]?.[dayNum] || 0) > 0);
         if (plannedProducts.length > 0) {
-          const shiftSlots = getShiftSlots(formShift);
+          const shiftSlots = getShiftSlots(formShift).filter(isValidHourlySlot);
           setFormSlots(shiftSlots);
           const newItems: FormModelItem[] = plannedProducts.map(p => {
             const initialHrs: Record<string, number> = {};
@@ -1321,7 +1406,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           });
         });
 
-        const activeSlots = new Set<string>(formSlots);
+        const activeSlots = new Set<string>(formSlotsRef.current.filter(isValidHourlySlot));
 
         rows.forEach((row: any) => {
           const code = row.product_code || row.productId || row.product_id;
@@ -1352,36 +1437,51 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
 
           // Granular row (work_date, product_code, shift, quantity)
-          const isHourlySlotShift = Boolean(row.shift && /\d+\s*H/i.test(row.shift));
-          if (row.quantity !== undefined || (isHourlySlotShift && row.actual_units !== undefined)) {
+          const isHourlySlotShift = Boolean(row.shift && isValidHourlySlot(row.shift));
+          if (isHourlySlotShift && (row.quantity !== undefined || row.actual_units !== undefined)) {
             const slot = matchSlotName(row.shift, Array.from(activeSlots));
-            activeSlots.add(slot);
-            item.hourlyActuals[slot] = Number(row.quantity ?? row.actual_units ?? 0);
+            if (isValidHourlySlot(slot)) {
+              activeSlots.add(slot);
+              // Giữ lại số người dùng đang gõ dở nếu ô đã có giá trị > 0
+              if (item.hourlyActuals[slot] === undefined || item.hourlyActuals[slot] === 0) {
+                item.hourlyActuals[slot] = Number(row.quantity ?? row.actual_units ?? 0);
+              }
+            }
           }
 
           // Legacy / Standard hourly_actuals JSONB
           if (row.hourly_actuals && typeof row.hourly_actuals === 'object') {
             Object.entries(row.hourly_actuals).forEach(([slotKey, val]) => {
-              const slot = matchSlotName(slotKey, Array.from(activeSlots));
-              activeSlots.add(slot);
-              item!.hourlyActuals[slot] = Number(val || 0);
+              if (isValidHourlySlot(slotKey)) {
+                const slot = matchSlotName(slotKey, Array.from(activeSlots));
+                if (isValidHourlySlot(slot)) {
+                  activeSlots.add(slot);
+                  if (item!.hourlyActuals[slot] === undefined || item!.hourlyActuals[slot] === 0) {
+                    item!.hourlyActuals[slot] = Number(val || 0);
+                  }
+                }
+              }
             });
           }
         });
 
-        const sortedSlots = Array.from(activeSlots).sort((a, b) => {
-          const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
-          const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
-          return hourA - hourB;
-        });
-        setFormSlots(sortedSlots);
+        const sortedSlots = Array.from(activeSlots)
+          .filter(isValidHourlySlot)
+          .sort((a, b) => {
+            const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
+            const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
+            return hourA - hourB;
+          });
+        if (sortedSlots.length > 0) {
+          setFormSlots(sortedSlots);
+        }
 
         return Array.from(itemMap.values());
       });
     } catch (err: any) {
       console.error("[storage] Ngoại lệ khi fetchShiftLogsAndMapToMatrix:", err);
     }
-  }, [products, monthlyPlan, formSlots, showToastError]);
+  }, [products, monthlyPlan, showToastError]);
 
   // Tự động tải lại ma trận khi chọn Ngày hoặc Bộ phận
   useEffect(() => {
@@ -1804,24 +1904,25 @@ const [isScrolled, setIsScrolled] = useState(false);
           const rowShift = row.shift;
           const rowQty = Number(row.quantity ?? row.actual_units ?? 0);
 
-          if (rowDate === formDateRef.current && rowProdCode && rowShift) {
+          if (rowDate === formDateRef.current && rowProdCode && rowShift && isValidHourlySlot(rowShift)) {
             const cleanShift = rowShift.replace(/\s+/g, '').toUpperCase();
             const matchedProd = products.find(
               (p) => p.code === rowProdCode || getProductModelCode(p.name) === rowProdCode || p.id === rowProdCode
             );
             const targetProdId = matchedProd?.id || rowProdCode;
 
-            // Đảm bảo slot hiển thị trong formSlots nếu là slot mới
+            // Đảm bảo slot hiển thị trong formSlots nếu là slot mới và hợp lệ
             setFormSlots((prevSlots) => {
-              const hasSlot = prevSlots.some((s) => s.replace(/\s+/g, '').toUpperCase() === cleanShift);
+              const cleanPrev = prevSlots.filter(isValidHourlySlot);
+              const hasSlot = cleanPrev.some((s) => s.replace(/\s+/g, '').toUpperCase() === cleanShift);
               if (!hasSlot) {
-                return [...prevSlots, rowShift].sort((a, b) => {
+                return [...cleanPrev, rowShift].sort((a, b) => {
                   const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
                   const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
                   return hourA - hourB;
                 });
               }
-              return prevSlots;
+              return cleanPrev;
             });
 
             // Chỉ cập nhật đúng ô khung giờ đó trong State local chứ không fetch lại cả ma trận
@@ -1961,8 +2062,20 @@ const [isScrolled, setIsScrolled] = useState(false);
         if (!data || !data.date || !data.shift) return;
         if (data.date === formDateRef.current && data.shift === formShiftRef.current) {
           isSyncingFromExternalRef.current = true;
-          if (data.items) setFormModelItems(data.items);
-          if (data.slots) setFormSlots(data.slots);
+          if (data.items) {
+            const cleanItems = (data.items as FormModelItem[]).map(it => {
+              const cleanHourly: Record<string, number> = {};
+              Object.entries(it.hourlyActuals || {}).forEach(([k, v]) => {
+                if (isValidHourlySlot(k)) cleanHourly[k] = Number(v) || 0;
+              });
+              return { ...it, hourlyActuals: cleanHourly };
+            });
+            setFormModelItems(cleanItems);
+          }
+          if (data.slots) {
+            const cleanSlots = (data.slots as string[]).filter(isValidHourlySlot);
+            if (cleanSlots.length > 0) setFormSlots(cleanSlots);
+          }
           if (data.officialRO) setFormOfficialWorkersRO(data.officialRO);
           if (data.seasonalRO) setFormSeasonalWorkersRO(data.seasonalRO);
           if (data.officialBG) setFormOfficialWorkersBG(data.officialBG);
@@ -1977,9 +2090,14 @@ const [isScrolled, setIsScrolled] = useState(false);
       },
 
       // (10) Lắng nghe broadcast đồng bộ tức thì các bảng khi có thay đổi từ máy/tab khác
-      onTableSyncChange: async (table) => {
+      onTableSyncChange: async (table, extraPayload) => {
         try {
           if (table === 'production_logs') {
+            // Nếu là cập nhật theo từng ô sản lượng (hourly_upsert), KHÔNG fetch lại toàn bộ danh sách production_logs
+            // để bảo đảm giao diện phản hồi tức thì 100% như LocalStorage, không bị trễ hay nhảy số loạn.
+            if (extraPayload?.data?.action === 'hourly_upsert') {
+              return;
+            }
             const logs = await storage.getProductionLogs();
             if (logs && logs.length > 0) setProductionLogs(logs);
           } else if (table === 'attendance_records') {
@@ -2215,8 +2333,16 @@ const [isScrolled, setIsScrolled] = useState(false);
     const currentHour = new Date().getHours();
 
     const activeSlots = formSlots.filter(slot => {
+      if (!isValidHourlySlot(slot)) return false;
+      const wRO = (formOfficialWorkersRO[slot] || 0) + (formSeasonalWorkersRO[slot] || 0);
+      const wRMA = (formOfficialWorkersRMA[slot] || 0) + (formSeasonalWorkersRMA[slot] || 0);
+      const wBG = (formOfficialWorkersBG[slot] || 0) + (formSeasonalWorkersBG[slot] || 0);
+      if (wRO > 0 || wRMA > 0 || wBG > 0) return true;
+      const hasActual = formModelItems.some(item => (item.hourlyActuals[slot] || 0) > 0);
+      if (hasActual) return true;
+
       if (isPast) return true;
-      if (!isToday) return false;
+      if (!isToday) return true;
       const slotStartHour = parseInt(slot.split("H")[0]);
       return !isNaN(slotStartHour) && slotStartHour <= currentHour;
     });
@@ -4557,42 +4683,67 @@ const [isScrolled, setIsScrolled] = useState(false);
     );
   };
 
-  const handleUpdateItemHourly = async (id: string, slotName: string, qty: number) => {
+  const handleUpdateItemHourly = (id: string, slotName: string, qty: number) => {
+    let updatedHourlyForSync: Record<string, number> = {};
+    let targetModelCode = id;
+    let targetDept = "RO";
+    let targetProdId = id;
+    let targetProdName = "";
+
     setFormModelItems((prev) =>
       prev.map((item) => {
         if (item.id !== id) return item;
+        const newHourly = {
+          ...item.hourlyActuals,
+          [slotName]: qty,
+        };
+        updatedHourlyForSync = newHourly;
+        const p = products.find((x) => x.id === item.productId);
+        targetProdId = p?.id || item.productId;
+        targetProdName = p?.name || "";
+        targetModelCode = p ? (getProductModelCode(p.name) || p.code || p.id) : item.productId;
+        targetDept = p?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
+
         return {
           ...item,
-          hourlyActuals: {
-            ...item.hourlyActuals,
-            [slotName]: qty,
-          },
+          hourlyActuals: newHourly,
         };
       })
     );
 
-    const targetItem = formModelItems.find(it => it.id === id);
-    if (!targetItem) return;
+    const timeSlot = slotName.replace(/\s+/g, '');
+    const timerKey = `${formDate}_${targetProdId}_${timeSlot}`;
 
-    const prod = products.find(p => p.id === targetItem.productId);
-    const modelCode = prod ? (getProductModelCode(prod.name) || prod.code || prod.id) : targetItem.productId;
-    const selectedDept = prod?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
-    const timeSlot = slotName.replace(/\s+/g, ''); // '8H-9H'
-
-    const { error } = await storage.upsertHourlyProductionLog({
-      work_date: formDate,
-      department: selectedDept,
-      product_code: modelCode,
-      shift: timeSlot,
-      quantity: qty,
-      status: 'OK',
-      productId: prod?.id || targetItem.productId,
-      productName: prod?.name
-    });
-
-    if (error) {
-      showToastError(error.message || 'Lỗi đồng bộ Supabase');
+    // Hủy debounce cũ nếu người dùng đang nhập liên tục
+    const oldTimer = hourlySyncDebounceRef.current.get(timerKey);
+    if (oldTimer) {
+      clearTimeout(oldTimer);
     }
+
+    const timer = setTimeout(async () => {
+      hourlySyncDebounceRef.current.delete(timerKey);
+      try {
+        const { error } = await storage.upsertHourlyProductionLog({
+          work_date: formDate,
+          department: targetDept,
+          product_code: targetModelCode,
+          shift: timeSlot,
+          quantity: qty,
+          status: 'OK',
+          productId: targetProdId,
+          productName: targetProdName,
+          allHourlyActuals: updatedHourlyForSync,
+        });
+
+        if (error) {
+          showToastError(error.message || 'Lỗi đồng bộ Supabase');
+        }
+      } catch (err: any) {
+        console.warn('Lỗi khi đồng bộ ô giờ lên Supabase:', err);
+      }
+    }, 450);
+
+    hourlySyncDebounceRef.current.set(timerKey, timer);
   };
 
   // === XỬ LÝ LƯU EXCEL BÁO CÁO HÀNG NGÀY CHUYÊN NGHIỆP ===
@@ -5803,8 +5954,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   }, [activeTab]);
 
-  // Keep track of the last processed date to detect when the date changes (initially empty so it triggers on mount)
-  const lastProcessedDateRef = useRef<string>("");
+  // Keep track of the last processed date to detect when the date changes
+  const lastProcessedDateRef = useRef<string>(formDate);
 
   // Auto-fill/update production models when formDate or monthlyPlan changes
   useEffect(() => {
@@ -5829,10 +5980,16 @@ const [isScrolled, setIsScrolled] = useState(false);
 
     const combinedProductIds = Array.from(new Set([...plannedProductIds, ...leftoverPrevProductIds]));
 
-    // If the user changed the date, we fully update/populate the production models based on that day's plan
+    // If the user changed the date, we check if there's already a draft or logs for that day before auto-populating
     if (dateChanged) {
+      const hasDraft = Boolean(getDraftForDateAndShift(formDate, formShift));
+      const hasLogs = productionLogs.some(l => l.date === formDate && l.shift === formShift);
+      if (hasDraft || hasLogs) {
+        return;
+      }
+
       // Reset workers counts to 0 for unsaved days to avoid mixing days
-      const resetSlots = formSlots;
+      const resetSlots = formSlotsRef.current.filter(isValidHourlySlot);
       const initialWorkers: { [slotName: string]: number } = {};
       resetSlots.forEach(s => {
         initialWorkers[s] = 0;
@@ -5847,7 +6004,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           return combinedProductIds.map((prodId, idx) => {
             const planVal = (monthlyPlan[currentYearMonth]?.[prodId]?.[dayNum]) || 0;
             const initialHrs: { [slotName: string]: number } = {};
-            formSlots.forEach(s => {
+            resetSlots.forEach(s => {
               initialHrs[s] = 0;
             });
             return {
@@ -5861,7 +6018,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       } else {
         // Fallback default row
         const initialHrs: { [slotName: string]: number } = {};
-        formSlots.forEach(s => {
+        resetSlots.forEach(s => {
           initialHrs[s] = 0;
         });
         setFormModelItems([
@@ -5875,7 +6032,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     } else {
       // If the date is the same (e.g. they edited plans or something changed in monthlyPlan),
-      // or if there are no planned products, we just synchronize the dailyPlan field for the existing list of items.
+      // we just synchronize the dailyPlan field for the existing list of items.
       setFormModelItems(prev => {
         let changed = false;
         const next = prev.map(item => {
@@ -5889,7 +6046,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         return changed ? next : prev;
       });
     }
-  }, [formDate, monthlyPlan, products, formSlots, productionLogs]);
+  }, [formDate, formShift, monthlyPlan, products]);
 
   const displayTotalActualQty = filterDivision === "MLN" ? formAggregates.totalActualQtyRO : (filterDivision === "BG" ? formAggregates.totalActualQtyBG : formAggregates.totalActualQty);
   const displayTotalEqQty = filterDivision === "MLN" ? formAggregates.totalEqQtyRO : (filterDivision === "BG" ? formAggregates.totalEqQtyBG : formAggregates.totalEqQty);

@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { isValidHourlySlot } from './appUtils';
 import {
   Worker,
   WorkerDivision,
@@ -77,7 +78,9 @@ export function broadcastTableUpdate(tableName: string, extraData?: any): void {
   if (!supabase || !isSupabaseConfigured) return;
   try {
     if (!liveBroadcastChannel) {
-      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room');
+      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
+        config: { broadcast: { self: false } },
+      });
       liveBroadcastChannel.subscribe();
     }
     liveBroadcastChannel.send({
@@ -670,7 +673,7 @@ export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void
 // --------------------------------------------------------------------
 // ĐỒNG BỘ RIÊNG CHO TAB 'GHI NHẬT KÝ CA' (SHIFT LOG / HOURLY LOGS)
 // --------------------------------------------------------------------
-let hasGranularSchema: boolean | null = null;
+let hasGranularSchema: boolean | null = false; // Mặc định dùng schema tiêu chuẩn (hourly_actuals JSONB) để đạt hiệu năng cao nhất và tương thích 100%
 
 export interface HourlyLogPayload {
   work_date: string;
@@ -681,6 +684,55 @@ export interface HourlyLogPayload {
   status?: string;
   productId?: string;
   productName?: string;
+  allHourlyActuals?: Record<string, number>;
+}
+
+// Helper phát hiện lỗi kết nối / timeout mạng tạm thời (Failed to fetch, timeout, 57014, NetworkError)
+export function isTransientNetworkError(err: any): boolean {
+  if (!err) return false;
+  const msg = (typeof err === 'string' ? err : err.message || err.details || '') + '';
+  const code = (err.code || '') + '';
+  return (
+    msg.includes('Failed to fetch') ||
+    msg.includes('NetworkError') ||
+    msg.includes('Load failed') ||
+    msg.includes('timeout') ||
+    msg.includes('AbortError') ||
+    msg.includes('socket') ||
+    msg.includes('offline') ||
+    code === '57014'
+  );
+}
+
+// Background queue để tự động đồng bộ lại khi có mạng
+const pendingOfflineRecords = new Map<string, any>();
+
+async function flushPendingOfflineQueue() {
+  if (!supabase || !isSupabaseConfigured || pendingOfflineRecords.size === 0) return;
+  const records = Array.from(pendingOfflineRecords.values());
+  console.info(`[storage] Đang đồng bộ lại ${records.length} bản ghi chờ lên Supabase...`);
+  try {
+    const { error } = await supabase.from('production_logs').upsert(records);
+    if (!error) {
+      console.info('✅ Đã đồng bộ thành công các bản ghi ngoại tuyến lên Supabase.');
+      pendingOfflineRecords.clear();
+      broadcastTableUpdate('production_logs');
+    }
+  } catch (e) {
+    console.warn('[storage] Thử đồng bộ ngoại tuyến chưa thành công, sẽ thử lại sau:', e);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    console.info('[storage] Trình duyệt đã kết nối mạng trở lại, kích hoạt đồng bộ.');
+    flushPendingOfflineQueue();
+  });
+  setInterval(() => {
+    if (pendingOfflineRecords.size > 0 && navigator.onLine !== false) {
+      flushPendingOfflineQueue();
+    }
+  }, 25000);
 }
 
 export async function fetchShiftProductionLogs(
@@ -695,28 +747,55 @@ export async function fetchShiftProductionLogs(
     let rows: any[] = [];
 
     // Nếu chưa xác định hoặc đã xác nhận database hỗ trợ cột work_date
-    if (hasGranularSchema !== false) {
-      let res = await supabase.from('production_logs').select('*').eq('work_date', selectedDate);
+    if (hasGranularSchema === true) {
+      let res: any = null;
+      try {
+        res = await supabase.from('production_logs').select('*').eq('work_date', selectedDate);
+      } catch (e: any) {
+        res = { error: e };
+      }
       
       // Nếu bảng chưa có cột work_date (lỗi PGRST204 hoặc 42703), fallback sang cột date
-      if (res.error && (res.error.code === 'PGRST204' || res.error.code === '42703' || res.error.message?.includes('work_date') || res.error.message?.includes('schema cache'))) {
+      if (res?.error && (res.error.code === 'PGRST204' || res.error.code === '42703' || res.error.message?.includes('work_date') || res.error.message?.includes('schema cache'))) {
         hasGranularSchema = false;
-        res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+        try {
+          res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+        } catch (e: any) {
+          res = { error: e };
+        }
       }
 
-      if (res.error) {
+      if (res?.error) {
+        if (isTransientNetworkError(res.error)) {
+          console.warn('[storage] Mạng gián đoạn khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
+          const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+          rows = localLogs.filter((l) => l.date === selectedDate);
+          return { data: rows, error: null };
+        }
         console.warn('[storage] Lỗi query production_logs theo ngày:', res.error);
         return { data: null, error: res.error };
       }
-      rows = res.data || [];
+      rows = res?.data || [];
     } else {
       // Schema tiêu chuẩn (cột date)
-      const res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
-      if (res.error) {
+      let res: any = null;
+      try {
+        res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+      } catch (e: any) {
+        res = { error: e };
+      }
+
+      if (res?.error) {
+        if (isTransientNetworkError(res.error)) {
+          console.warn('[storage] Mạng gián đoạn khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
+          const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+          rows = localLogs.filter((l) => l.date === selectedDate);
+          return { data: rows, error: null };
+        }
         console.warn('[storage] Lỗi query production_logs theo date:', res.error);
         return { data: null, error: res.error };
       }
-      rows = res.data || [];
+      rows = res?.data || [];
     }
 
     if (selectedDept && selectedDept !== 'ALL') {
@@ -728,10 +807,19 @@ export async function fetchShiftProductionLogs(
 
     return { data: rows, error: null };
   } catch (err: any) {
+    if (isTransientNetworkError(err)) {
+      console.warn('[storage] Ngoại lệ mạng khi fetch shift production logs, nạp từ local storage:', err?.message || err);
+      const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+      const rows = localLogs.filter((l) => l.date === selectedDate);
+      return { data: rows, error: null };
+    }
     console.error('[storage] Ngoại lệ khi fetch shift production logs:', err);
     return { data: null, error: err };
   }
 }
+
+// Hàng đợi đơn chuyến (Single-flight Queue) để chống xung đột khóa hàng (Row Lock Contention / Deadlock)
+const inFlightHourlyUpserts = new Map<string, Promise<any>>();
 
 export async function upsertHourlyProductionLog(
   payload: HourlyLogPayload
@@ -740,11 +828,35 @@ export async function upsertHourlyProductionLog(
     return { data: null, error: new Error('Supabase chưa được cấu hình. Dữ liệu đang được lưu vào bộ nhớ cục bộ.') };
   }
 
+  const queueKey = `${payload.work_date}_${payload.productId || payload.product_code}`;
+  const previousOp = inFlightHourlyUpserts.get(queueKey) || Promise.resolve();
+
+  const currentOp = previousOp
+    .catch(() => {})
+    .then(async () => {
+      return executeUpsertHourlyInternal(payload);
+    });
+
+  inFlightHourlyUpserts.set(queueKey, currentOp);
+
+  try {
+    const res = await currentOp;
+    return res;
+  } finally {
+    if (inFlightHourlyUpserts.get(queueKey) === currentOp) {
+      inFlightHourlyUpserts.delete(queueKey);
+    }
+  }
+}
+
+async function executeUpsertHourlyInternal(
+  payload: HourlyLogPayload
+): Promise<{ data: any; error: any }> {
   const cleanSlot = payload.shift.replace(/\s+/g, ''); // Ví dụ: '8H-9H'
   const qty = Number(payload.quantity || 0);
 
-  // 1. Thử ghi theo Granular Schema (nếu database đã chạy migration có các cột work_date, department, product_code,...)
-  if (hasGranularSchema !== false) {
+  // 1. Thử ghi theo Granular Schema (nếu database đã xác nhận có các cột work_date, department, product_code,...)
+  if (hasGranularSchema === true) {
     try {
       const record = {
         work_date: payload.work_date,
@@ -760,35 +872,28 @@ export async function upsertHourlyProductionLog(
       });
 
       if (!res.error) {
-        hasGranularSchema = true;
-        console.log("✅ Đã đồng bộ Nhật ký ca lên Supabase (granular)");
         broadcastTableUpdate('production_logs');
         return { data: res.data, error: null };
       }
 
-      // Kiểm tra nếu lỗi do thiếu cột (PGRST204: department / work_date not found) hoặc thiếu constraint
-      const isMissingColumn = 
+      if (
         res.error.code === 'PGRST204' || 
         res.error.code === '42703' || 
         res.error.code === '42P10' || 
         res.error.message?.includes('department') || 
-        res.error.message?.includes('work_date') || 
-        res.error.message?.includes('schema cache');
-
-      if (isMissingColumn) {
+        res.error.message?.includes('work_date')
+      ) {
         hasGranularSchema = false;
-        console.info('[storage] Database Supabase hiện tại đang dùng schema tiêu chuẩn (bản ghi theo ngày với JSONB hourly_actuals). Tự động lưu theo schema tiêu chuẩn.');
       } else {
-        console.error('[storage] Lỗi UPSERT production_logs:', res.error);
+        console.warn('[storage] Lỗi UPSERT granular:', res.error);
         return { data: null, error: res.error };
       }
-    } catch (err: any) {
-      console.warn('[storage] Ngoại lệ khi thử UPSERT granular, chuyển sang schema tiêu chuẩn:', err);
+    } catch {
       hasGranularSchema = false;
     }
   }
 
-  // 2. Fallback: Lưu theo Schema Tiêu Chuẩn (bảng production_logs có id, date, product_id, hourly_actuals, product_group,...)
+  // 2. Schema Tiêu Chuẩn (Bảng production_logs chuẩn với hourly_actuals JSONB)
   try {
     const localProducts = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, SUNHOUSE_PRODUCTS);
     const prod = localProducts.find(
@@ -803,67 +908,126 @@ export async function upsertHourlyProductionLog(
     const lineId = targetDept === 'BG' ? 'line-bg-02' : targetDept === 'RMA' ? 'line-rma-03' : 'line-mln-01';
     const lineName = targetDept === 'BG' ? 'DCBG' : targetDept === 'RMA' ? 'DCRMA' : 'DCRO';
 
-    // Tìm bản ghi hiện có trên Supabase để merge hourly_actuals
-    const { data: existingRows } = await supabase
-      .from('production_logs')
-      .select('id, hourly_actuals, date, product_id, actual_units, equivalent_factor, line_id, line_name, shift')
-      .eq('date', payload.work_date)
-      .eq('product_id', targetProdId)
-      .limit(1);
+    // Cập nhật Local Storage NGAY LẬP TỨC để đảm bảo 100% dữ liệu không bị mất
+    const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, []);
+    const localIdx = localLogs.findIndex(
+      (l) => l.date === payload.work_date && (l.productId === targetProdId || l.productId === payload.product_code)
+    );
 
     let rowId = `log-${payload.work_date}-${targetProdId}`;
-    let mergedHourly: Record<string, number> = {};
-    let existingShift = "Ca HC (08:00 - 17:00)";
-    let existingFactor = factor;
+    let existingLog: ProductionLog | undefined = localIdx !== -1 ? localLogs[localIdx] : undefined;
+    if (existingLog) {
+      rowId = existingLog.id;
+    }
 
-    if (existingRows && existingRows.length > 0) {
-      const ex = existingRows[0];
-      rowId = ex.id || rowId;
-      mergedHourly = typeof ex.hourly_actuals === 'object' && ex.hourly_actuals ? { ...ex.hourly_actuals } : {};
-      existingShift = ex.shift || existingShift;
-      existingFactor = ex.equivalent_factor || factor;
+    const rawHourly: Record<string, number> = payload.allHourlyActuals
+      ? { ...payload.allHourlyActuals }
+      : { ...(existingLog?.hourlyActuals || {}), [cleanSlot]: qty };
+
+    const sanitizedHourly: Record<string, number> = {};
+    Object.entries(rawHourly).forEach(([k, v]) => {
+      if (isValidHourlySlot(k)) {
+        sanitizedHourly[k] = Number(v) || 0;
+      }
+    });
+
+    const totalUnits = Object.values(sanitizedHourly).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const currentFactor = existingLog?.equivalentFactor || factor;
+    const eqUnits = Math.round(totalUnits * currentFactor);
+
+    const updatedLog: ProductionLog = {
+      id: rowId,
+      date: payload.work_date,
+      lineId: existingLog?.lineId || lineId,
+      lineName: existingLog?.lineName || lineName,
+      productId: targetProdId,
+      productName: existingLog?.productName || targetProdName,
+      productGroup: existingLog?.productGroup || targetDept,
+      actualUnits: totalUnits,
+      workersCount: existingLog?.workersCount || 0,
+      officialWorkers: existingLog?.officialWorkers,
+      seasonalWorkers: existingLog?.seasonalWorkers,
+      equivalentFactor: currentFactor,
+      equivalentProducts: eqUnits,
+      laborProductivityPercent: existingLog?.laborProductivityPercent || 0,
+      shift: existingLog?.shift || "Ca HC (08:00 - 17:00)",
+      technicianName: existingLog?.technicianName || '',
+      hourlyActuals: sanitizedHourly,
+      hourlyWorkers: existingLog?.hourlyWorkers || {},
+      hourlyOfficialWorkers: existingLog?.hourlyOfficialWorkers || {},
+      hourlySeasonalWorkers: existingLog?.hourlySeasonalWorkers || {},
+    };
+
+    if (localIdx !== -1) {
+      localLogs[localIdx] = updatedLog;
     } else {
-      // Thử tìm trong local storage
-      const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, []);
-      const localEx = localLogs.find(l => l.date === payload.work_date && l.productId === targetProdId);
-      if (localEx) {
-        rowId = localEx.id || rowId;
-        mergedHourly = { ...(localEx.hourlyActuals || {}) };
-        existingShift = localEx.shift || existingShift;
-        existingFactor = localEx.equivalentFactor || factor;
+      localLogs.unshift(updatedLog);
+    }
+    setLocal(STORAGE_KEYS.PRODUCTION_LOGS, localLogs);
+
+    // Chuẩn bị payload đồng bộ lên Supabase tương thích chính xác với schema tiêu chuẩn
+    const standardRecord = {
+      id: updatedLog.id,
+      date: updatedLog.date,
+      line_id: updatedLog.lineId,
+      line_name: updatedLog.lineName,
+      product_id: updatedLog.productId,
+      product_name: updatedLog.productName,
+      product_group: updatedLog.productGroup,
+      actual_units: updatedLog.actualUnits,
+      workers_count: updatedLog.workersCount,
+      official_workers: updatedLog.officialWorkers ?? null,
+      seasonal_workers: updatedLog.seasonalWorkers ?? null,
+      equivalent_factor: updatedLog.equivalentFactor,
+      equivalent_products: updatedLog.equivalentProducts,
+      labor_productivity_percent: updatedLog.laborProductivityPercent,
+      shift: updatedLog.shift,
+      technician_name: updatedLog.technicianName,
+      hourly_actuals: updatedLog.hourlyActuals,
+      hourly_workers: updatedLog.hourlyWorkers,
+      hourly_official_workers: updatedLog.hourlyOfficialWorkers,
+      hourly_seasonal_workers: updatedLog.hourlySeasonalWorkers,
+    };
+
+    let res: any = null;
+    try {
+      res = await supabase.from('production_logs').upsert(standardRecord);
+    } catch (e: any) {
+      res = { error: e };
+    }
+
+    // Nếu gặp lỗi mạng tạm thời hoặc timeout (Failed to fetch, 57014), tự động thử gửi lại sau 600ms
+    if (res?.error && isTransientNetworkError(res.error)) {
+      console.warn('[storage] Phát hiện mạng chập chờn hoặc timeout, tự động gửi lại sau 600ms...', res.error?.message || res.error);
+      await new Promise((r) => setTimeout(r, 600));
+      try {
+        res = await supabase.from('production_logs').upsert(standardRecord);
+      } catch (e: any) {
+        res = { error: e };
       }
     }
 
-    mergedHourly[cleanSlot] = qty;
-    const totalUnits = Object.values(mergedHourly).reduce((sum, v) => sum + (Number(v) || 0), 0);
-    const eqUnits = Math.round(totalUnits * existingFactor);
-
-    const standardRecord = {
-      id: rowId,
-      date: payload.work_date,
-      line_id: lineId,
-      line_name: lineName,
-      product_id: targetProdId,
-      product_name: targetProdName,
-      product_group: targetDept,
-      actual_units: totalUnits,
-      shift: existingShift,
-      equivalent_factor: existingFactor,
-      equivalent_products: eqUnits,
-      hourly_actuals: mergedHourly,
-      updated_at: new Date().toISOString()
-    };
-
-    const res = await supabase.from('production_logs').upsert(standardRecord);
-    if (res.error) {
+    if (res?.error) {
+      // Nếu là lỗi mất kết nối mạng hoặc timeout (Failed to fetch, 57014, NetworkError)
+      if (isTransientNetworkError(res.error)) {
+        console.warn('[storage] Mất kết nối mạng tạm thời (Failed to fetch / Timeout). Bản ghi đã được bảo toàn an toàn trên máy cục bộ (LocalStorage) và lưu vào hàng đợi đồng bộ tự động.');
+        pendingOfflineRecords.set(standardRecord.id, standardRecord);
+        broadcastTableUpdate('production_logs', { action: 'hourly_upsert', id: standardRecord.id });
+        return { data: null, error: null }; // Bỏ qua lỗi toast làm phiền người dùng vì đã lưu an toàn vào LocalStorage
+      }
       console.error('[storage] Lỗi lưu production_logs (schema tiêu chuẩn):', res.error);
       return { data: null, error: res.error };
     }
 
-    console.log("✅ Đã đồng bộ Nhật ký ca lên Supabase (schema tiêu chuẩn)");
-    broadcastTableUpdate('production_logs');
-    return { data: res.data, error: null };
+    pendingOfflineRecords.delete(standardRecord.id);
+    broadcastTableUpdate('production_logs', { action: 'hourly_upsert', id: standardRecord.id });
+    return { data: res?.data, error: null };
   } catch (err: any) {
+    if (isTransientNetworkError(err)) {
+      console.warn('[storage] Ngoại lệ mạng (Failed to fetch / Timeout). Dữ liệu đã được bảo toàn an toàn trên máy cục bộ.');
+      broadcastTableUpdate('production_logs', { action: 'hourly_upsert', id: payload.productId || payload.product_code });
+      return { data: null, error: null };
+    }
     console.error('[storage] Ngoại lệ khi lưu production_logs:', err);
     return { data: null, error: err };
   }
@@ -1485,7 +1649,9 @@ export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
   if (!supabase || !isSupabaseConfigured) return;
   try {
     if (!liveBroadcastChannel) {
-      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room');
+      liveBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
+        config: { broadcast: { self: false } },
+      });
       liveBroadcastChannel.subscribe();
     }
     liveBroadcastChannel.send({
@@ -1653,7 +1819,9 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
     });
 
     // 3. Đăng ký phòng Broadcast chung (sunhouse_live_form_room) để đồng bộ tức thì các tab/thiết bị
-    let broadcastRoom = supabase.channel('sunhouse_live_form_room');
+    let broadcastRoom = supabase.channel('sunhouse_live_form_room', {
+      config: { broadcast: { self: false } },
+    });
     if (callbacks.onLiveFormChange) {
       broadcastRoom = broadcastRoom.on(
         'broadcast',
