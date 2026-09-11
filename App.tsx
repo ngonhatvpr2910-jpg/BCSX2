@@ -322,7 +322,10 @@ export default function App() {
     aiError,
     aiAnalysis,
     handleExportFullBackup,
+    handleExportJsonBackup,
     handleImportFullBackup,
+    restoreMode,
+    setRestoreMode,
     deletePlanModal,
     setDeletePlanModal,
     isAddPlanModalOpen,
@@ -934,12 +937,21 @@ export default function App() {
           {activeTab === "system-data" && (
             <SystemDataTab
               handleExportFullBackup={handleExportFullBackup}
+              handleExportJsonBackup={handleExportJsonBackup}
               handleImportFullBackup={handleImportFullBackup}
+              restoreMode={restoreMode}
+              setRestoreMode={setRestoreMode}
               syncEntireSystem={syncEntireSystem}
               syncStatus={syncStatus}
               syncMessage={syncMessage}
               isSupabaseConfigured={isSupabaseConfigured}
               refreshFromCloud={refreshFromCloud}
+              productionLogs={productionLogs}
+              products={products}
+              workers={workers}
+              attendanceLogs={attendanceLogs}
+              declaredImeis={declaredImeis}
+              scannedImeis={scannedImeis}
             />
           )}
         </AnimatePresence>

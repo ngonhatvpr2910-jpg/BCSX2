@@ -854,6 +854,157 @@ export async function saveAssemblyDailyReports(reports: DailyReportRowAssembly[]
 }
 
 // ==========================================
+// 8B. BÁO CÁO PHẾ PHẨM & TỶ LỆ LỖI (SCRAP & DCLR ERROR)
+// ==========================================
+export async function getMonthlyScrapReport(): Promise<MonthlyScrapReport[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'monthly_scrap_report')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_SCRAP, data.report_data);
+        return data.report_data as MonthlyScrapReport[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_scrap từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<MonthlyScrapReport[]>(STORAGE_KEYS.MONTHLY_SCRAP, MONTHLY_SCRAP_REPORT);
+}
+
+export async function saveMonthlyScrapReport(reports: MonthlyScrapReport[]): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_SCRAP, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'monthly_scrap_report',
+        report_type: 'scrap',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_scrap lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_scrap:', err?.message || err);
+    }
+  }
+}
+
+export async function getWeeklyScrapReport(): Promise<WeeklyScrapReport[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'weekly_scrap_report')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.WEEKLY_SCRAP, data.report_data);
+        return data.report_data as WeeklyScrapReport[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải weekly_scrap từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<WeeklyScrapReport[]>(STORAGE_KEYS.WEEKLY_SCRAP, WEEKLY_SCRAP_REPORT);
+}
+
+export async function saveWeeklyScrapReport(reports: WeeklyScrapReport[]): Promise<void> {
+  setLocal(STORAGE_KEYS.WEEKLY_SCRAP, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'weekly_scrap_report',
+        report_type: 'scrap',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu weekly_scrap lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu weekly_scrap:', err?.message || err);
+    }
+  }
+}
+
+export async function getWeeklyDclrErrorRate(): Promise<WeeklyDclreErrorRate[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'weekly_dclr_error')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.WEEKLY_DCLR_ERROR, data.report_data);
+        return data.report_data as WeeklyDclreErrorRate[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải weekly_dclr_error từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<WeeklyDclreErrorRate[]>(STORAGE_KEYS.WEEKLY_DCLR_ERROR, WEEKLY_DCLR_ERROR_RATE);
+}
+
+export async function saveWeeklyDclrErrorRate(reports: WeeklyDclreErrorRate[]): Promise<void> {
+  setLocal(STORAGE_KEYS.WEEKLY_DCLR_ERROR, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'weekly_dclr_error',
+        report_type: 'dclr_error',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu weekly_dclr_error lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu weekly_dclr_error:', err?.message || err);
+    }
+  }
+}
+
+export async function getMonthlyDclrErrorRate(): Promise<MonthlyDclreErrorRate[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'monthly_dclr_error')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, data.report_data);
+        return data.report_data as MonthlyDclreErrorRate[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_dclr_error từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<MonthlyDclreErrorRate[]>(STORAGE_KEYS.MONTHLY_DCLR_ERROR, MONTHLY_DCLR_ERROR_RATE);
+}
+
+export async function saveMonthlyDclrErrorRate(reports: MonthlyDclreErrorRate[]): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'monthly_dclr_error',
+        report_type: 'dclr_error',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_dclr_error lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_dclr_error:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
 // 9. QUẢN LÝ IMEI, GIAO DỊCH & CHẤT LƯỢNG (TRANSACTIONS, LABELS, INVENTORY)
 // ==========================================
 export async function getDeclaredImeis(): Promise<any[]> {

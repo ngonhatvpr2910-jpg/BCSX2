@@ -33,12 +33,12 @@ export const useAppLogic = () => {
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    localStorage.setItem("sunhouse_workers", JSON.stringify(workers));
+    storage.saveAllWorkers(workers);
   }, [workers]);
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    localStorage.setItem("sunhouse_attendance_logs", JSON.stringify(attendanceLogs));
+    storage.saveAllAttendanceLogs(attendanceLogs);
   }, [attendanceLogs]);
 
 
@@ -243,16 +243,20 @@ const [isScrolled, setIsScrolled] = useState(false);
   });
 
   useEffect(() => {
-    localStorage.setItem("sunhouse_monthly_scrap_v2", JSON.stringify(monthlyScrap));
+    if (!isLoadedRef.current) return;
+    storage.saveMonthlyScrapReport(monthlyScrap);
   }, [monthlyScrap]);
   useEffect(() => {
-    localStorage.setItem("sunhouse_weekly_scrap_v2", JSON.stringify(weeklyScrap));
+    if (!isLoadedRef.current) return;
+    storage.saveWeeklyScrapReport(weeklyScrap);
   }, [weeklyScrap]);
   useEffect(() => {
-    localStorage.setItem("sunhouse_weekly_dclr_error_v2", JSON.stringify(weeklyDclrError));
+    if (!isLoadedRef.current) return;
+    storage.saveWeeklyDclrErrorRate(weeklyDclrError);
   }, [weeklyDclrError]);
   useEffect(() => {
-    localStorage.setItem("sunhouse_monthly_dclr_error_v2", JSON.stringify(monthlyDclrError));
+    if (!isLoadedRef.current) return;
+    storage.saveMonthlyDclrErrorRate(monthlyDclrError);
   }, [monthlyDclrError]);
 
   const [products, setProducts] = useState<ProductDefinition[]>(() => {
@@ -486,7 +490,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     return [];
   });
   useEffect(() => {
-    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
+    if (!isLoadedRef.current) return;
+    storage.saveDeclaredImeis(declaredImeis);
   }, [declaredImeis]);
 
   const [scannedImeis, setScannedImeis] = useState<ScannedImei[]>(() => {
@@ -504,7 +509,8 @@ const [isScrolled, setIsScrolled] = useState(false);
   });
 
   useEffect(() => {
-    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
+    if (!isLoadedRef.current) return;
+    storage.saveScannedImeis(scannedImeis);
   }, [scannedImeis]);
 
   const [imeiSearchTerm, setImeiSearchTerm] = useState("");
@@ -1094,7 +1100,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
     if (!isLoadedRef.current) return;
-    localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
+    storage.saveAllProducts(products);
   }, [products]);
 
   // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
@@ -1190,7 +1196,13 @@ const [isScrolled, setIsScrolled] = useState(false);
         loaded2025,
         loaded2026,
         loadedGas,
-        loadedAssembly
+        loadedAssembly,
+        loadedDeclaredImeis,
+        loadedScannedImeis,
+        loadedMonthlyScrap,
+        loadedWeeklyScrap,
+        loadedWeeklyDclr,
+        loadedMonthlyDclr,
       ] = await Promise.all([
         storage.getWorkers(),
         storage.getAttendanceLogs(),
@@ -1202,6 +1214,12 @@ const [isScrolled, setIsScrolled] = useState(false);
         storage.getMonthlyMetrics(2026),
         storage.getGasDailyReports(),
         storage.getAssemblyDailyReports(),
+        storage.getDeclaredImeis(),
+        storage.getScannedImeis(),
+        storage.getMonthlyScrapReport(),
+        storage.getWeeklyScrapReport(),
+        storage.getWeeklyDclrErrorRate(),
+        storage.getMonthlyDclrErrorRate(),
       ]);
 
       if (loadedWorkers && loadedWorkers.length > 0) setWorkers(loadedWorkers);
@@ -1214,6 +1232,12 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (loaded2026 && loaded2026.length > 0) setMetrics2026(loaded2026);
       if (loadedGas && loadedGas.length > 0) setGasDailyReports(loadedGas);
       if (loadedAssembly && loadedAssembly.length > 0) setAssemblyDailyReports(loadedAssembly);
+      if (loadedDeclaredImeis && loadedDeclaredImeis.length > 0) setDeclaredImeis(loadedDeclaredImeis);
+      if (loadedScannedImeis && loadedScannedImeis.length > 0) setScannedImeis(loadedScannedImeis);
+      if (loadedMonthlyScrap && loadedMonthlyScrap.length > 0) setMonthlyScrap(loadedMonthlyScrap);
+      if (loadedWeeklyScrap && loadedWeeklyScrap.length > 0) setWeeklyScrap(loadedWeeklyScrap);
+      if (loadedWeeklyDclr && loadedWeeklyDclr.length > 0) setWeeklyDclrError(loadedWeeklyDclr);
+      if (loadedMonthlyDclr && loadedMonthlyDclr.length > 0) setMonthlyDclrError(loadedMonthlyDclr);
 
       // Để React hoàn tất render dữ liệu mới tải từ Cloud trước khi kích hoạt cờ lưu trữ tự động
       setTimeout(() => {
@@ -3749,13 +3773,20 @@ const [isScrolled, setIsScrolled] = useState(false);
     });
     setFormSlots(sortedSlots);
 
-    // Tái cấu trúc formModelItems
-    const newFormModelItems: FormModelItem[] = logsForDate.map(log => ({
-      id: "item-" + log.productId + "-" + Date.now() + Math.random(),
-      productId: log.productId,
-      dailyPlan: 0,
-      hourlyActuals: log.hourlyActuals || {}
-    }));
+    // Tái cấu trúc formModelItems có liên kết với KHSX ngày từ monthlyPlan
+    const [editYear, editMonth, editDay] = date.split("-");
+    const ym = `${editYear}-${editMonth}`;
+    const dayNum = parseInt(editDay, 10);
+
+    const newFormModelItems: FormModelItem[] = logsForDate.map(log => {
+      const planVal = (!isNaN(dayNum) && monthlyPlan[ym]?.[log.productId]?.[dayNum]) || 0;
+      return {
+        id: "item-" + log.productId + "-" + Date.now() + Math.random(),
+        productId: log.productId,
+        dailyPlan: planVal,
+        hourlyActuals: log.hourlyActuals || {}
+      };
+    });
     setFormModelItems(newFormModelItems);
 
     // Khôi phục nhân sự
@@ -4290,7 +4321,34 @@ const [isScrolled, setIsScrolled] = useState(false);
       };
       storage.saveProduct(updatedProduct);
       setProducts(prev => prev.map(p => p.id === editingProductId ? updatedProduct : p));
-      setProdFormMessage("✅ Đã cập nhật sản phẩm thành công!");
+
+      // Đồng bộ liên kết tự động tới tất cả các bản ghi nhật ký ca có mã sản phẩm này
+      setProductionLogs(prevLogs => {
+        let hasChanges = false;
+        const updatedLogs = prevLogs.map(log => {
+          if (log.productId === editingProductId) {
+            hasChanges = true;
+            const newFactor = Number(prodFormFactor);
+            const newEq = Math.round((log.actualUnits || 0) * newFactor);
+            return {
+              ...log,
+              productName: prodFormName,
+              productGroup: prodFormGroup,
+              equivalentFactor: newFactor,
+              equivalentProducts: newEq
+            };
+          }
+          return log;
+        });
+
+        if (hasChanges) {
+          storage.saveAllProductionLogs(updatedLogs);
+          setTimeout(() => syncHistoricalMetricsWithLogs(updatedLogs), 50);
+        }
+        return updatedLogs;
+      });
+
+      setProdFormMessage("✅ Đã cập nhật sản phẩm & tự động liên kết đồng bộ toàn bộ Nhật ký ca!");
     } else {
       // Add new
       const newId = `prod-new-${Date.now()}`;
@@ -4467,7 +4525,37 @@ const [isScrolled, setIsScrolled] = useState(false);
         }
       });
 
-      return Array.from(existingMap.values());
+      const updatedProductsList = Array.from(existingMap.values());
+      const prodMap = new Map<string, ProductDefinition>(updatedProductsList.map((p) => [p.id, p]));
+      const prodCodeMap = new Map<string, ProductDefinition>(updatedProductsList.map((p) => [p.code.toLowerCase(), p]));
+
+      // Tự động đồng bộ liên kết với productionLogs
+      setProductionLogs((prevLogs) => {
+        let hasLogsUpdated = false;
+        const updatedLogs = prevLogs.map((log) => {
+          const matched = prodMap.get(log.productId) || (log.productName ? prodCodeMap.get(log.productName.toLowerCase()) : undefined);
+          if (matched) {
+            hasLogsUpdated = true;
+            return {
+              ...log,
+              productId: matched.id,
+              productName: matched.name,
+              productGroup: matched.group,
+              equivalentFactor: matched.factor,
+              equivalentProducts: Math.round((log.actualUnits || 0) * matched.factor),
+            };
+          }
+          return log;
+        });
+
+        if (hasLogsUpdated) {
+          storage.saveAllProductionLogs(updatedLogs);
+          setTimeout(() => syncHistoricalMetricsWithLogs(updatedLogs), 50);
+        }
+        return updatedLogs;
+      });
+
+      return updatedProductsList;
     });
 
     setExcelImportSuccess(`🎉 Đã nhập/cập nhật thành công ${parsedExcelProducts.length} sản phẩm từ file Excel!`);
@@ -4688,6 +4776,49 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   };
 
+  const [restoreMode, setRestoreMode] = useState<'overwrite' | 'merge'>('overwrite');
+
+  const handleExportJsonBackup = () => {
+    try {
+      const backupPayload = {
+        version: "2.0",
+        app: "Sunhouse Production Management",
+        exportDate: new Date().toISOString(),
+        productionLogs,
+        products,
+        workers,
+        attendanceLogs,
+        monthlyTargets,
+        monthlyPlan,
+        gasDailyReports,
+        assemblyDailyReports,
+        metrics2025,
+        metrics2026,
+        monthlyScrap,
+        weeklyScrap,
+        weeklyDclrError,
+        monthlyDclrError,
+        declaredImeis,
+        scannedImeis
+      };
+
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(backupPayload, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", `Sao_Luu_Toan_Bo_He_Thong_Sunhouse_${new Date().toISOString().split('T')[0]}.json`);
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+
+      setFormMessage("✅ Đã xuất toàn bộ dữ liệu hệ thống ra file JSON thành công!");
+      setTimeout(() => setFormMessage(""), 3500);
+    } catch (err) {
+      console.error(err);
+      setFormMessage("❌ Lỗi khi xuất dữ liệu JSON!");
+      setTimeout(() => setFormMessage(""), 3500);
+    }
+  };
+
   const handleExportFullBackup = () => {
     const wb = XLSX.utils.book_new();
 
@@ -4773,120 +4904,322 @@ const [isScrolled, setIsScrolled] = useState(false);
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const isJsonFile = file.name.toLowerCase().endsWith('.json');
     const reader = new FileReader();
-    reader.onload = (evt) => {
+
+    reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: "binary" });
-        
-        // Helper to get sheet data
-        const getSheetData = (name: string) => {
-          const ws = wb.Sheets[name];
-          if (!ws) return null;
-          return XLSX.utils.sheet_to_json(ws);
-        };
+        setSyncStatus('syncing');
+        setSyncMessage('Đang nạp và đồng bộ dữ liệu sao lưu...');
 
-        // 1. Production Logs
-        const logsData = getSheetData("Production_Logs");
-        let importedLogs: ProductionLog[] = [];
-        if (logsData) {
-          importedLogs = (logsData as any[]).map(log => ({
-            ...log,
-            hourlyActuals: log.hourlyActuals ? (typeof log.hourlyActuals === 'string' ? JSON.parse(log.hourlyActuals) : log.hourlyActuals) : {},
-            hourlyWorkers: log.hourlyWorkers ? (typeof log.hourlyWorkers === 'string' ? JSON.parse(log.hourlyWorkers) : log.hourlyWorkers) : {}
-          }));
-          setProductionLogs(importedLogs);
-        }
+        let rawBackupData: any = {};
 
-        // 2. Products
-        const productsData = getSheetData("Products");
-        if (productsData) setProducts(productsData as ProductDefinition[]);
+        if (isJsonFile) {
+          // --- Xử lý file JSON Backup ---
+          const text = evt.target?.result as string;
+          rawBackupData = JSON.parse(text);
+        } else {
+          // --- Xử lý file Excel Backup ---
+          const bstr = evt.target?.result;
+          const wb = XLSX.read(bstr, { type: "binary" });
 
-        // 3. Workers
-        const workersData = getSheetData("Workers");
-        if (workersData) setWorkers(workersData as Worker[]);
+          // Helper chuẩn hóa tên Sheet để tìm kiếm linh hoạt (không phân biệt hoa thường, dấu, khoảng trắng)
+          const normalizeSheetName = (s: string) => 
+            s.toLowerCase().replace(/[\s\-_]+/g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
-        // 4. Attendance Logs
-        const attendanceData = getSheetData("Attendance_Logs");
-        if (attendanceData) setAttendanceLogs(attendanceData as AttendanceRecord[]);
-
-        // 5. Monthly Targets
-        const targetsData = getSheetData("Monthly_Targets");
-        if (targetsData) {
-          const newTargets: Record<string, number> = {};
-          (targetsData as any[]).forEach(item => {
-            if (item.key && item.targetValue !== undefined) {
-              newTargets[item.key] = Number(item.targetValue);
-            }
-          });
-          setMonthlyTargets(newTargets);
-        }
-
-        // 6. Monthly Plan
-        const planData = getSheetData("Monthly_Plan");
-        if (planData) {
-          const newPlan: any = {};
-          (planData as any[]).forEach(row => {
-            const ym = row.yearMonth;
-            const pid = row.productId;
-            if (!newPlan[ym]) newPlan[ym] = {};
-            if (!newPlan[ym][pid]) newPlan[ym][pid] = {};
-            for (let d = 1; d <= 31; d++) {
-              const val = row[`day_${d}`];
-              if (val !== undefined && val !== "") {
-                newPlan[ym][pid][d] = Number(val);
+          const findSheet = (keywords: string[]) => {
+            const sheetNames = wb.SheetNames;
+            for (const name of sheetNames) {
+              const norm = normalizeSheetName(name);
+              if (keywords.some(kw => norm.includes(normalizeSheetName(kw)))) {
+                return wb.Sheets[name];
               }
             }
-          });
-          setMonthlyPlan(newPlan);
+            return null;
+          };
+
+          const getSheetData = (keywords: string[]) => {
+            const ws = findSheet(keywords);
+            if (!ws) return null;
+            return XLSX.utils.sheet_to_json(ws);
+          };
+
+          rawBackupData.productionLogs = getSheetData(["production_logs", "productionlogs", "nhat_ky_ca", "nhatky", "logs"]);
+          rawBackupData.products = getSheetData(["products", "san_pham", "sanpham", "danhmuc"]);
+          rawBackupData.workers = getSheetData(["workers", "nhan_su", "nhansu", "congnhan"]);
+          rawBackupData.attendanceLogs = getSheetData(["attendance_logs", "attendance", "diem_danh", "diemdanh", "chamcong"]);
+          rawBackupData.monthlyTargets = getSheetData(["monthly_targets", "targets", "muc_tieu", "muctieu"]);
+          rawBackupData.monthlyPlan = getSheetData(["monthly_plan", "monthlyplan", "ke_hoach", "kehoach", "plan"]);
+          rawBackupData.gasDailyReports = getSheetData(["gas_daily_reports", "gasdailyreports", "gas", "bep_gas", "bepgas"]);
+          rawBackupData.assemblyDailyReports = getSheetData(["assembly_daily_reports", "assemblydailyreports", "assembly", "lap_rap", "laprap", "dcro"]);
+          rawBackupData.metrics2025 = getSheetData(["metrics_2025", "metrics2025", "2025"]);
+          rawBackupData.metrics2026 = getSheetData(["metrics_2026", "metrics2026", "2026"]);
+          rawBackupData.monthlyScrap = getSheetData(["monthly_scrap", "monthlyscrap", "scrap_thang"]);
+          rawBackupData.weeklyScrap = getSheetData(["weekly_scrap", "weeklyscrap", "scrap_tuan"]);
+          rawBackupData.weeklyDclrError = getSheetData(["weekly_dclr_error", "weeklydclr", "loi_tuan"]);
+          rawBackupData.monthlyDclrError = getSheetData(["monthly_dclr_error", "monthlydclr", "loi_thang"]);
+          rawBackupData.declaredImeis = getSheetData(["declared_imeis", "declaredimeis", "khai_bao_imei", "declared"]);
+          rawBackupData.scannedImeis = getSheetData(["scanned_imeis", "scannedimeis", "quet_imei", "scanned"]);
         }
 
-        // 7. Gas Reports
-        const gasData = getSheetData("Gas_Daily_Reports");
-        if (gasData) setGasDailyReports(gasData as DailyReportRowGas[]);
+        const stats = {
+          logs: 0,
+          products: 0,
+          workers: 0,
+          attendance: 0,
+          planDays: 0,
+          imeis: 0
+        };
 
-        // 8. Assembly Reports
-        const assemblyData = getSheetData("Assembly_Daily_Reports");
-        if (assemblyData) setAssemblyDailyReports(assemblyData as DailyReportRowAssembly[]);
+        // 1. Khôi phục Nhật ký sản xuất (Production Logs)
+        let finalLogs = productionLogs;
+        if (rawBackupData.productionLogs && Array.isArray(rawBackupData.productionLogs)) {
+          const parsedLogs: ProductionLog[] = rawBackupData.productionLogs.map((log: any, idx: number) => ({
+            ...log,
+            id: log.id || `restored_log_${Date.now()}_${idx}`,
+            hourlyActuals: log.hourlyActuals 
+              ? (typeof log.hourlyActuals === 'string' ? JSON.parse(log.hourlyActuals) : log.hourlyActuals) 
+              : {},
+            hourlyWorkers: log.hourlyWorkers 
+              ? (typeof log.hourlyWorkers === 'string' ? JSON.parse(log.hourlyWorkers) : log.hourlyWorkers) 
+              : {}
+          }));
 
-        // 9. Metrics
-        const m2025Data = getSheetData("Metrics_2025");
-        if (m2025Data) setMetrics2025(m2025Data as MonthlyMetric[]);
-        const m2026Data = getSheetData("Metrics_2026");
-        if (m2026Data) setMetrics2026(m2026Data as MonthlyMetric[]);
-
-        // 10. Others
-        const mScrapData = getSheetData("Monthly_Scrap");
-        if (mScrapData) setMonthlyScrap(mScrapData as MonthlyScrapReport[]);
-        const wScrapData = getSheetData("Weekly_Scrap");
-        if (wScrapData) setWeeklyScrap(wScrapData as WeeklyScrapReport[]);
-        const wErrorData = getSheetData("Weekly_DCLR_Error");
-        if (wErrorData) setWeeklyDclrError(wErrorData as WeeklyDclreErrorRate[]);
-        const mErrorData = getSheetData("Monthly_DCLR_Error");
-        if (mErrorData) setMonthlyDclrError(mErrorData as MonthlyDclreErrorRate[]);
-
-        // 11. IMEIs
-        const declaredData = getSheetData("Declared_IMEIs");
-        if (declaredData) setDeclaredImeis(declaredData as DeclaredImei[]);
-        const scannedData = getSheetData("Scanned_IMEIs");
-        if (scannedData) setScannedImeis(scannedData as ScannedImei[]);
-
-        // Tự động đồng bộ lại lịch sử từ nhật ký đã nhập
-        if (importedLogs.length > 0) {
-          syncHistoricalMetricsWithLogs(importedLogs);
+          if (restoreMode === 'overwrite') {
+            finalLogs = parsedLogs;
+          } else {
+            // Chế độ Merge: Kết hợp theo ID hoặc (date + shift + line + product)
+            const logMap = new Map<string, ProductionLog>();
+            productionLogs.forEach(l => logMap.set(l.id || `${l.date}_${l.shift}_${l.lineName}_${l.productId}`, l));
+            parsedLogs.forEach(l => logMap.set(l.id || `${l.date}_${l.shift}_${l.lineName}_${l.productId}`, l));
+            finalLogs = Array.from(logMap.values());
+          }
+          setProductionLogs(finalLogs);
+          stats.logs = finalLogs.length;
         }
 
-        setFormMessage("✅ Đã khôi phục và đồng bộ toàn bộ dữ liệu hệ thống từ file Excel thành công!");
-        setTimeout(() => setFormMessage(""), 4000);
+        // 2. Khôi phục Danh mục sản phẩm (Products)
+        let finalProducts = products;
+        if (rawBackupData.products && Array.isArray(rawBackupData.products)) {
+          const parsedProducts: ProductDefinition[] = rawBackupData.products.map((p: any) => ({
+            id: String(p.id || p.code || ''),
+            name: String(p.name || ''),
+            group: (p.group || 'MLN') as any,
+            code: String(p.code || p.id || ''),
+            factor: Number(p.factor ?? 1),
+            description: String(p.description || ''),
+            price: p.price !== undefined && p.price !== null ? Number(p.price) : undefined
+          }));
+
+          if (restoreMode === 'overwrite') {
+            finalProducts = parsedProducts;
+          } else {
+            const prodMap = new Map(products.map(p => [p.id, p]));
+            parsedProducts.forEach(p => prodMap.set(p.id, p));
+            finalProducts = Array.from(prodMap.values());
+          }
+          setProducts(finalProducts);
+          stats.products = finalProducts.length;
+        }
+
+        // 3. Khôi phục Nhân sự (Workers)
+        let finalWorkers = workers;
+        if (rawBackupData.workers && Array.isArray(rawBackupData.workers)) {
+          const parsedWorkers: Worker[] = rawBackupData.workers.map((w: any) => ({
+            id: String(w.id || ''),
+            name: String(w.name || ''),
+            division: (w.division || 'RO') as any,
+            type: (w.type || 'OFFICIAL') as any,
+            qrCode: String(w.qrCode || w.id || ''),
+            imageUrl: w.imageUrl || undefined
+          }));
+
+          if (restoreMode === 'overwrite') {
+            finalWorkers = parsedWorkers;
+          } else {
+            const wMap = new Map(workers.map(w => [w.id, w]));
+            parsedWorkers.forEach(w => wMap.set(w.id, w));
+            finalWorkers = Array.from(wMap.values());
+          }
+          setWorkers(finalWorkers);
+          stats.workers = finalWorkers.length;
+        }
+
+        // 4. Khôi phục Điểm danh (Attendance Logs)
+        let finalAttendance = attendanceLogs;
+        if (rawBackupData.attendanceLogs && Array.isArray(rawBackupData.attendanceLogs)) {
+          const parsedAttendance: AttendanceRecord[] = rawBackupData.attendanceLogs.map((a: any, idx: number) => ({
+            id: a.id || `att_${Date.now()}_${idx}`,
+            workerId: String(a.workerId || a.worker_id || ''),
+            date: String(a.date || ''),
+            slot: a.slot || undefined,
+            checkInTime: a.checkInTime || a.check_in_time || '',
+            checkOutTime: a.checkOutTime || a.check_out_time || undefined,
+            scannedDivision: a.scannedDivision || a.scanned_division || undefined
+          }));
+
+          if (restoreMode === 'overwrite') {
+            finalAttendance = parsedAttendance;
+          } else {
+            const attMap = new Map(attendanceLogs.map(a => [a.id || `${a.workerId}_${a.date}_${a.slot}`, a]));
+            parsedAttendance.forEach(a => attMap.set(a.id || `${a.workerId}_${a.date}_${a.slot}`, a));
+            finalAttendance = Array.from(attMap.values());
+          }
+          setAttendanceLogs(finalAttendance);
+          stats.attendance = finalAttendance.length;
+        }
+
+        // 5. Khôi phục Mục tiêu NSLĐ (Monthly Targets)
+        let finalTargets = monthlyTargets;
+        if (rawBackupData.monthlyTargets) {
+          const newTargets: Record<string, number> = {};
+          if (Array.isArray(rawBackupData.monthlyTargets)) {
+            rawBackupData.monthlyTargets.forEach((item: any) => {
+              if (item.key && item.targetValue !== undefined) {
+                newTargets[item.key] = Number(item.targetValue);
+              }
+            });
+          } else if (typeof rawBackupData.monthlyTargets === 'object') {
+            Object.assign(newTargets, rawBackupData.monthlyTargets);
+          }
+
+          finalTargets = restoreMode === 'overwrite' ? newTargets : { ...monthlyTargets, ...newTargets };
+          setMonthlyTargets(finalTargets);
+        }
+
+        // 6. Khôi phục Kế hoạch tháng (Monthly Plan)
+        let finalPlan = monthlyPlan;
+        if (rawBackupData.monthlyPlan) {
+          let parsedPlan: any = {};
+          if (Array.isArray(rawBackupData.monthlyPlan)) {
+            rawBackupData.monthlyPlan.forEach((row: any) => {
+              const ym = row.yearMonth;
+              const pid = row.productId;
+              if (ym && pid) {
+                if (!parsedPlan[ym]) parsedPlan[ym] = {};
+                if (!parsedPlan[ym][pid]) parsedPlan[ym][pid] = {};
+                for (let d = 1; d <= 31; d++) {
+                  const val = row[`day_${d}`];
+                  if (val !== undefined && val !== "") {
+                    parsedPlan[ym][pid][d] = Number(val);
+                    stats.planDays++;
+                  }
+                }
+              }
+            });
+          } else if (typeof rawBackupData.monthlyPlan === 'object') {
+            parsedPlan = rawBackupData.monthlyPlan;
+          }
+
+          if (restoreMode === 'overwrite') {
+            finalPlan = parsedPlan;
+          } else {
+            finalPlan = { ...monthlyPlan };
+            Object.keys(parsedPlan).forEach(ym => {
+              if (!finalPlan[ym]) finalPlan[ym] = {};
+              Object.keys(parsedPlan[ym]).forEach(pid => {
+                if (!finalPlan[ym][pid]) finalPlan[ym][pid] = {};
+                finalPlan[ym][pid] = { ...finalPlan[ym][pid], ...parsedPlan[ym][pid] };
+              });
+            });
+          }
+          setMonthlyPlan(finalPlan);
+        }
+
+        // 7. Khôi phục Báo cáo Bếp Gas
+        let finalGas = gasDailyReports;
+        if (rawBackupData.gasDailyReports && Array.isArray(rawBackupData.gasDailyReports)) {
+          finalGas = restoreMode === 'overwrite' 
+            ? rawBackupData.gasDailyReports 
+            : [...gasDailyReports, ...rawBackupData.gasDailyReports.filter((g: any) => !gasDailyReports.some(e => e.id === g.id))];
+          setGasDailyReports(finalGas);
+        }
+
+        // 8. Khôi phục Báo cáo Lắp ráp
+        let finalAssembly = assemblyDailyReports;
+        if (rawBackupData.assemblyDailyReports && Array.isArray(rawBackupData.assemblyDailyReports)) {
+          finalAssembly = restoreMode === 'overwrite' 
+            ? rawBackupData.assemblyDailyReports 
+            : [...assemblyDailyReports, ...rawBackupData.assemblyDailyReports.filter((a: any) => !assemblyDailyReports.some(e => e.id === a.id))];
+          setAssemblyDailyReports(finalAssembly);
+        }
+
+        // 9. Khôi phục Metrics 2025 & 2026
+        let finalMetrics2025 = metrics2025;
+        let finalMetrics2026 = metrics2026;
+        if (rawBackupData.metrics2025 && Array.isArray(rawBackupData.metrics2025)) {
+          finalMetrics2025 = rawBackupData.metrics2025;
+          setMetrics2025(finalMetrics2025);
+        }
+        if (rawBackupData.metrics2026 && Array.isArray(rawBackupData.metrics2026)) {
+          finalMetrics2026 = rawBackupData.metrics2026;
+          setMetrics2026(finalMetrics2026);
+        }
+
+        // 10. Khôi phục Báo cáo phế phẩm & lỗi
+        if (rawBackupData.monthlyScrap && Array.isArray(rawBackupData.monthlyScrap)) setMonthlyScrap(rawBackupData.monthlyScrap);
+        if (rawBackupData.weeklyScrap && Array.isArray(rawBackupData.weeklyScrap)) setWeeklyScrap(rawBackupData.weeklyScrap);
+        if (rawBackupData.weeklyDclrError && Array.isArray(rawBackupData.weeklyDclrError)) setWeeklyDclrError(rawBackupData.weeklyDclrError);
+        if (rawBackupData.monthlyDclrError && Array.isArray(rawBackupData.monthlyDclrError)) setMonthlyDclrError(rawBackupData.monthlyDclrError);
+
+        // 11. Khôi phục Dữ liệu IMEI
+        let finalDeclaredImeis = declaredImeis;
+        let finalScannedImeis = scannedImeis;
+        if (rawBackupData.declaredImeis && Array.isArray(rawBackupData.declaredImeis)) {
+          finalDeclaredImeis = restoreMode === 'overwrite'
+            ? rawBackupData.declaredImeis
+            : [...declaredImeis, ...rawBackupData.declaredImeis.filter((d: any) => !declaredImeis.some(e => e.imei === d.imei))];
+          setDeclaredImeis(finalDeclaredImeis);
+          stats.imeis += finalDeclaredImeis.length;
+        }
+        if (rawBackupData.scannedImeis && Array.isArray(rawBackupData.scannedImeis)) {
+          finalScannedImeis = restoreMode === 'overwrite'
+            ? rawBackupData.scannedImeis
+            : [...scannedImeis, ...rawBackupData.scannedImeis.filter((s: any) => !scannedImeis.some(e => e.id === s.id || e.imei === s.imei))];
+          setScannedImeis(finalScannedImeis);
+        }
+
+        // 12. Tự động đồng bộ và tính toán lại các chỉ số lịch sử từ Nhật ký đã phục hồi
+        if (finalLogs.length > 0) {
+          syncHistoricalMetricsWithLogs(finalLogs);
+        }
+
+        // 13. Tự động lưu toàn bộ dữ liệu đã khôi phục vào Storage & Cloud
+        await Promise.allSettled([
+          storage.saveAllProductionLogs(finalLogs),
+          storage.saveAllProducts(finalProducts),
+          storage.saveAllWorkers(finalWorkers),
+          storage.saveAllAttendanceLogs(finalAttendance),
+          storage.saveMonthlyPlan(finalPlan),
+          storage.saveMonthlyTargets(finalTargets),
+          storage.saveMonthlyMetrics(2025, finalMetrics2025),
+          storage.saveMonthlyMetrics(2026, finalMetrics2026),
+          storage.saveGasDailyReports(finalGas),
+          storage.saveAssemblyDailyReports(finalAssembly),
+          storage.saveDeclaredImeis(finalDeclaredImeis),
+          storage.saveScannedImeis(finalScannedImeis)
+        ]);
+
+        setSyncStatus(isSupabaseConfigured ? 'synced' : 'local');
+        setSyncMessage(isSupabaseConfigured ? 'Đã khôi phục và lưu lên Cloud' : 'Đã khôi phục và lưu vào bộ nhớ máy');
+        setFormMessage(`🎉 Khôi phục dữ liệu thành công (${restoreMode === 'overwrite' ? 'Ghi đè' : 'Hợp nhất'}): ${finalLogs.length} nhật ký ca, ${finalProducts.length} sản phẩm, ${finalWorkers.length} nhân sự, ${finalAttendance.length} điểm danh!`);
+        setTimeout(() => setFormMessage(""), 5000);
 
       } catch (err) {
-        console.error(err);
-        setFormMessage("❌ Lỗi khôi phục dữ liệu từ file Excel! Vui lòng kiểm tra định dạng file.");
-        setTimeout(() => setFormMessage(""), 4000);
+        console.error("Lỗi khôi phục backup:", err);
+        setSyncStatus('error');
+        setSyncMessage('Lỗi khôi phục dữ liệu');
+        setFormMessage("❌ Lỗi khôi phục dữ liệu từ file sao lưu! Vui lòng kiểm tra định dạng file (.xlsx, .xls, .json).");
+        setTimeout(() => setFormMessage(""), 4500);
       }
       e.target.value = '';
     };
-    reader.readAsBinaryString(file);
+
+    if (isJsonFile) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsBinaryString(file);
+    }
   };
 
   // --- TRANG PHÂN TÍCH AI (GEMINI BACKEND CALL) ---
@@ -5244,7 +5577,10 @@ const [isScrolled, setIsScrolled] = useState(false);
     aiError,
     aiAnalysis,
     handleExportFullBackup,
+    handleExportJsonBackup,
     handleImportFullBackup,
+    restoreMode,
+    setRestoreMode,
     deletePlanModal,
     setDeletePlanModal,
     isAddPlanModalOpen,
