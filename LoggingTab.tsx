@@ -346,7 +346,7 @@ export const LoggingTab = ({
                                         }}
                                         className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-white placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         placeholder="-"
-                                        title="Nhập số lượng rồi nhấn ENTER để lưu lên database Supabase"
+                                        title="Nhập sản lượng thực tế theo giờ (bấm 'Lưu Nhật Ký Ca' ở cuối ca để lưu chính thức)"
                                       />
                                     </td>
                                   ))}

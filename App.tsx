@@ -339,6 +339,8 @@ export default function App() {
     isSupabaseConfigured,
     syncHistoryFromLogs,
     syncEntireSystem,
+    storageInfo,
+    handleOptimizeStorage,
     toastError,
     setToastError,
     toastSuccess,
@@ -966,6 +968,8 @@ export default function App() {
               attendanceLogs={attendanceLogs}
               declaredImeis={declaredImeis}
               scannedImeis={scannedImeis}
+              storageInfo={storageInfo}
+              handleOptimizeStorage={handleOptimizeStorage}
             />
           )}
         </AnimatePresence>

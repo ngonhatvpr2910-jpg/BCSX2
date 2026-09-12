@@ -95,16 +95,21 @@ export function getSharedBroadcastChannel(): any {
   return sharedBroadcastChannel;
 }
 
-// Helper phát broadcast đồng bộ tức thì cho tất cả các máy/tab đang mở
+// Helper phát broadcast đồng bộ tức thì cho tất cả các máy/tab đang mở (Tối ưu Egress: chỉ gửi tín hiệu nhẹ, không gửi payload lớn)
 export function broadcastTableUpdate(tableName: string, extraData?: any): void {
   if (!supabase || !isSupabaseConfigured) return;
   try {
     const ch = getSharedBroadcastChannel();
     if (!ch) return;
+    // Chỉ gửi thông tin cần thiết và metadata nhẹ, tránh gửi toàn bộ object lớn làm ngốn Egress
+    const payloadToSend: any = { table: tableName, senderId: CLIENT_SESSION_ID, timestamp: Date.now() };
+    if (extraData && typeof extraData === 'object' && extraData.year) {
+      payloadToSend.year = extraData.year;
+    }
     ch.send({
       type: 'broadcast',
       event: 'table_sync_event',
-      payload: { table: tableName, data: extraData, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+      payload: payloadToSend,
     });
   } catch (err) {
     console.warn('[storage] Gửi broadcast đồng bộ bảng thất bại:', err);
@@ -1675,9 +1680,39 @@ export interface FormDraftData {
   updatedAt: string;
 }
 
+
+
+export function getTodayDateString(): string {
+  const d = new Date();
+  return (
+    d.getFullYear() +
+    '-' +
+    String(d.getMonth() + 1).padStart(2, '0') +
+    '-' +
+    String(d.getDate()).padStart(2, '0')
+  );
+}
+
+export function isDraftFromPastDay(draftDate?: string): boolean {
+  if (!draftDate) return false;
+  const todayStr = getTodayDateString();
+  return draftDate < todayStr;
+}
+
 export async function getFormDraft(date: string, shift: string): Promise<FormDraftData | null> {
+  // Nếu ngày của bản nháp nhỏ hơn ngày hôm nay (dữ liệu ca hôm trước không được ghi nhận), tự động xóa bỏ
+  if (isDraftFromPastDay(date)) {
+    clearFormDraft(date, shift);
+    return null;
+  }
+
   const localKey = `sunhouse_draft_${date}_${shift}`;
   const localData = getLocal<FormDraftData | null>(localKey, null);
+
+  if (localData && isDraftFromPastDay(localData.date)) {
+    clearFormDraft(date, shift);
+    return null;
+  }
 
   if (supabase && isSupabaseConfigured) {
     try {
@@ -1689,8 +1724,13 @@ export async function getFormDraft(date: string, shift: string): Promise<FormDra
         .maybeSingle();
 
       if (!error && data?.report_data) {
+        const cloudDraft = data.report_data as FormDraftData;
+        if (cloudDraft && isDraftFromPastDay(cloudDraft.date)) {
+          clearFormDraft(date, shift);
+          return null;
+        }
         setLocal(localKey, data.report_data);
-        return data.report_data as FormDraftData;
+        return cloudDraft;
       }
     } catch (err) {
       console.warn('[storage] Không thể tải form draft từ Supabase:', err);
@@ -1949,3 +1989,121 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
     return () => {};
   }
 }
+
+// ==========================================
+// 10. TỐI ƯU HÓA DUNG LƯỢNG & BẢO VỆ HIỆU NĂNG APP
+// Không lưu file đệm, dọn dẹp khóa cũ, tránh tràn bộ nhớ
+// ==========================================
+export interface StorageUsageInfo {
+  bytes: number;
+  kb: string;
+  mb: string;
+  itemCount: number;
+  percentage: number;
+  status: 'optimal' | 'moderate' | 'heavy';
+}
+
+export function getStorageUsage(): StorageUsageInfo {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { bytes: 0, kb: '0.0', mb: '0.0', itemCount: 0, percentage: 0, status: 'optimal' };
+  }
+  let totalBytes = 0;
+  let itemCount = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key) {
+      const val = localStorage.getItem(key) || '';
+      totalBytes += (key.length + val.length) * 2;
+      itemCount++;
+    }
+  }
+  const kbNum = totalBytes / 1024;
+  const mbNum = kbNum / 1024;
+  const percentage = Math.min(100, Math.round((totalBytes / (5 * 1024 * 1024)) * 100));
+  const status = percentage > 60 ? 'heavy' : percentage > 25 ? 'moderate' : 'optimal';
+  return {
+    bytes: totalBytes,
+    kb: kbNum.toFixed(1),
+    mb: mbNum.toFixed(2),
+    itemCount,
+    percentage,
+    status,
+  };
+}
+
+export function cleanupAndOptimizeStorage(): { freedBytes: number; removedKeys: string[] } {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { freedBytes: 0, removedKeys: [] };
+  }
+  const beforeBytes = getStorageUsage().bytes;
+  const removedKeys: string[] = [];
+
+  // 1. Dọn dẹp triệt để các key phiên bản cũ (v1) và dữ liệu thừa
+  const legacyKeys = [
+    'sunhouse_production_logs',
+    'sunhouse_gas_daily_reports',
+    'sunhouse_assembly_daily_reports',
+    'sunhouse_metrics_2025',
+    'sunhouse_metrics_2026',
+    'sunhouse_monthly_targets',
+  ];
+  for (const k of legacyKeys) {
+    if (localStorage.getItem(k) !== null) {
+      try {
+        localStorage.removeItem(k);
+        removedKeys.push(k);
+      } catch (e) {
+        console.warn('[storage] Không thể xóa legacy key:', k, e);
+      }
+    }
+  }
+
+  // 2. Dọn các bản nháp ca của ngày hôm trước (chưa được ghi nhận vào cuối ca qua ngày sau tự động xóa)
+  // và các nháp cũ/rỗng
+  const todayStr = getTodayDateString();
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('sunhouse_draft_')) {
+      try {
+        const raw = localStorage.getItem(k);
+        const item = raw ? JSON.parse(raw) : null;
+        
+        // Trích xuất ngày từ key: sunhouse_draft_YYYY-MM-DD_shift
+        const parts = k.replace('sunhouse_draft_', '').split('_');
+        const draftDate = item?.date || parts[0];
+
+        // Nếu ngày nhỏ hơn ngày hôm nay (qua ngày sau) hoặc nháp hỏng/rỗng => Xóa ngay
+        if (!item || !draftDate || draftDate < todayStr) {
+          localStorage.removeItem(k);
+          removedKeys.push(k);
+        }
+      } catch {
+        localStorage.removeItem(k);
+        removedKeys.push(k);
+      }
+    }
+  }
+
+  // 3. Kiểm tra và dọn dẹp sunhouse_last_active_form_draft nếu thuộc ngày hôm trước
+  const lastActiveKey = 'sunhouse_last_active_form_draft';
+  const rawLastActive = localStorage.getItem(lastActiveKey);
+  if (rawLastActive) {
+    try {
+      const activeDraft = JSON.parse(rawLastActive);
+      if (!activeDraft || !activeDraft.date || activeDraft.date < todayStr) {
+        localStorage.removeItem(lastActiveKey);
+        removedKeys.push(lastActiveKey);
+      }
+    } catch {
+      localStorage.removeItem(lastActiveKey);
+      removedKeys.push(lastActiveKey);
+    }
+  }
+
+  const afterBytes = getStorageUsage().bytes;
+  return {
+    freedBytes: Math.max(0, beforeBytes - afterBytes),
+    removedKeys,
+  };
+}
+

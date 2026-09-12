@@ -21,6 +21,18 @@ export const useAppLogic = () => {
     isSupabaseConfigured ? 'Đang kết nối Supabase Cloud...' : 'Chế độ Local (Chưa cấu hình Supabase)'
   );
 
+  // Quản lý dung lượng lưu trữ & tối ưu hóa bộ nhớ tránh nặng app
+  const [storageInfo, setStorageInfo] = useState<storage.StorageUsageInfo>(() => storage.getStorageUsage());
+
+  const handleOptimizeStorage = useCallback(() => {
+    const result = storage.cleanupAndOptimizeStorage();
+    const updated = storage.getStorageUsage();
+    setStorageInfo(updated);
+    const freedKb = (result.freedBytes / 1024).toFixed(1);
+    setFormMessage(`🧹 Đã tối ưu dung lượng bộ nhớ thành công! Giải phóng ${freedKb} KB, dọn dẹp ${result.removedKeys.length} khóa đệm cũ. Ứng dụng đã được tối ưu siêu nhẹ.`);
+    setTimeout(() => setFormMessage(''), 4500);
+  }, []);
+
   const [workers, setWorkers] = useState<Worker[]>(() => {
     const saved = localStorage.getItem("sunhouse_workers");
     return saved ? JSON.parse(saved) : INITIAL_WORKERS;
@@ -435,10 +447,21 @@ const [isScrolled, setIsScrolled] = useState(false);
   // Helpers lấy bản nháp chưa lưu (Draft) từ LocalStorage
   const getInitialActiveDraft = (): storage.FormDraftData | null => {
     try {
+      const todayStr = storage.getTodayDateString();
       const raw = localStorage.getItem("sunhouse_last_active_form_draft");
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") return parsed;
+        if (parsed && typeof parsed === "object") {
+          // Nếu dữ liệu ca chưa ghi nhận thuộc về ngày hôm trước -> tự động xóa bỏ khi qua ngày mới
+          if (parsed.date && parsed.date < todayStr) {
+            localStorage.removeItem("sunhouse_last_active_form_draft");
+            if (parsed.shift) {
+              storage.clearFormDraft(parsed.date, parsed.shift);
+            }
+            return null;
+          }
+          return parsed;
+        }
       }
     } catch (e) {}
     return null;
@@ -446,11 +469,24 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   const getDraftForDateAndShift = (date: string, shift: string): storage.FormDraftData | null => {
     try {
+      const todayStr = storage.getTodayDateString();
+      // Nếu ngày được chọn nhỏ hơn ngày hôm nay (dữ liệu ca hôm trước không được ghi nhận), tự động xóa sạch
+      if (date < todayStr) {
+        storage.clearFormDraft(date, shift);
+        return null;
+      }
+
       const key = `sunhouse_draft_${date}_${shift}`;
       const raw = localStorage.getItem(key);
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (parsed && parsed.date === date && parsed.shift === shift) return parsed;
+        if (parsed && parsed.date === date && parsed.shift === shift) {
+          if (parsed.date < todayStr) {
+            storage.clearFormDraft(date, shift);
+            return null;
+          }
+          return parsed;
+        }
       }
       const active = getInitialActiveDraft();
       if (active && active.date === date && active.shift === shift) return active;
@@ -864,27 +900,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     
     setFormModelItems(updatedItems);
     
-    // ĐỒNG BỘ SUPABASE KHI QUÉT MÃ IMEI:
-    const targetProd = products.find(p => p.id === targetModelId);
-    const modelCode = targetProd ? (getProductModelCode(targetProd.name) || targetProd.code || targetProd.id) : targetModelId;
-    const selectedDept = targetProd?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
-    const timeSlot = currentSlot.replace(/\s+/g, ''); // '8H-9H'
-
-    storage.upsertHourlyProductionLog({
-      work_date: formDate,
-      department: selectedDept,
-      product_code: modelCode,
-      shift: timeSlot,
-      quantity: updatedQty,
-      status: 'OK',
-      productId: targetProd?.id || targetModelId,
-      productName: targetProd?.name
-    }).then(({ error }) => {
-      if (error) {
-        showToastError(error.message || 'Lỗi đồng bộ Supabase khi quét mã');
-      }
-    });
-
+    // Lưu ý: Dữ liệu ghi nhận tại thời điểm nạp được lưu trong bản nháp cục bộ (draft),
+    // chỉ chính thức lưu vào database production_logs khi bấm "Lưu Nhật Ký Ca".
     const newImei: ScannedImei = {
       id: `imei-${Date.now()}-${Math.random().toString(36).substring(2,9)}`,
       imei: val,
@@ -1677,7 +1694,10 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (loadedWorkers && loadedWorkers.length > 0) setWorkers(loadedWorkers);
       if (loadedAttendance && loadedAttendance.length > 0) setAttendanceLogs(loadedAttendance);
       if (loadedProducts && loadedProducts.length > 0) setProducts(loadedProducts);
-      if (loadedLogs && loadedLogs.length > 0) setProductionLogs(loadedLogs);
+      if (loadedLogs && loadedLogs.length > 0) {
+        setProductionLogs(loadedLogs);
+        syncHistoricalMetricsWithLogs(loadedLogs);
+      }
       if (loadedPlan && Object.keys(loadedPlan).length > 0) setMonthlyPlan(loadedPlan);
       if (loadedTargets && Object.keys(loadedTargets).length > 0) setMonthlyTargets(loadedTargets);
       if (loaded2025 && loaded2025.length > 0) setMetrics2025(loaded2025);
@@ -1726,6 +1746,9 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   // Khởi chạy khi khởi động ứng dụng & Đăng ký Realtime
   useEffect(() => {
+    // Tự động dọn dẹp các bản nháp chưa ghi nhận của ngày hôm trước
+    storage.cleanupAndOptimizeStorage();
+
     refreshFromCloud();
 
     // 1. Đăng ký Realtime đa bảng với cơ chế Update State trực tiếp từ Payload (Egress = 0 khi nhận thay đổi)
@@ -2158,9 +2181,10 @@ const [isScrolled, setIsScrolled] = useState(false);
             table === 'production_logs' ||
             table === 'attendance_records' ||
             table === 'workers' ||
-            table === 'products'
+            table === 'products' ||
+            table === 'daily_reports'
           ) {
-            // Đã được xử lý từng phần tử trực tiếp từ Postgres CDC, bỏ qua tải lại toàn bảng
+            // Đã được xử lý từng phần tử trực tiếp từ Postgres CDC (Realtime), tránh tải lại toàn bộ bảng gây tốn Egress
             return;
           } else if (table === 'monthly_plan') {
             if (extraPayload?.data) {
@@ -2175,17 +2199,6 @@ const [isScrolled, setIsScrolled] = useState(false);
               if (extraPayload.year === 2025) setMetrics2025(extraPayload.data);
               if (extraPayload.year === 2026) setMetrics2026(extraPayload.data);
             }
-          } else if (table === 'daily_reports') {
-            // 1 query duy nhất gom toàn bộ 8 bảng báo cáo
-            const allDaily = await storage.getAllDailyReports();
-            if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
-            if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
-            if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
-            if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
-            if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
-            if (allDaily.monthlyDclr && allDaily.monthlyDclr.length > 0) setMonthlyDclrError(allDaily.monthlyDclr);
-            if (allDaily.declaredImeis && allDaily.declaredImeis.length > 0) setDeclaredImeis(allDaily.declaredImeis);
-            if (allDaily.scannedImeis && allDaily.scannedImeis.length > 0) setScannedImeis(allDaily.scannedImeis);
           }
         } catch (err) {
           console.warn('[Realtime] Lỗi đồng bộ bảng từ broadcast:', table, err);
@@ -4751,7 +4764,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     );
   };
 
-  // Cơ chế mới: Sửa số nào, chỉ khi nhấn ENTER (hoặc blur khỏi ô) mới lưu lên database Supabase
+  // Khi nhập số lượng theo giờ, chỉ ghi nhận vào bản nháp cục bộ (draft) và broadcast实时.
+  // Dữ liệu chỉ được lưu chính thức vào cơ sở dữ liệu khi bấm "Lưu Nhật Ký Ca".
   const handleCommitItemHourly = async (id: string, slotName: string, customQty?: number) => {
     // Giải phóng đánh dấu ô chỉnh sửa sau một khoảng ngắn
     setTimeout(() => {
@@ -4764,58 +4778,40 @@ const [isScrolled, setIsScrolled] = useState(false);
     if (!item) return;
 
     const qty = customQty !== undefined ? customQty : (item.hourlyActuals[slotName] || 0);
-    const p = products.find((x) => x.id === item.productId);
-    const targetProdId = p?.id || item.productId;
-    const targetProdName = p?.name || "";
-    const targetModelCode = p ? (getProductModelCode(p.name) || p.code || p.id) : item.productId;
-    const targetDept = p?.group || (filterDivision !== "ALL" ? filterDivision : "RO");
-    const timeSlot = slotName.replace(/\s+/g, '');
 
     const updatedHourly = {
       ...item.hourlyActuals,
       [slotName]: qty,
     };
 
-    try {
-      const { error } = await storage.upsertHourlyProductionLog({
-        work_date: formDate,
-        department: targetDept,
-        product_code: targetModelCode,
-        shift: timeSlot,
-        quantity: qty,
-        status: 'OK',
-        productId: targetProdId,
-        productName: targetProdName,
-        allHourlyActuals: updatedHourly,
-      });
+    const updatedItems = formModelItems.map((it) =>
+      it.id === id ? { ...it, hourlyActuals: updatedHourly } : it
+    );
 
-      if (error) {
-        showToastError(error.message || 'Lỗi lưu lên database Supabase');
-      } else {
-        showToastSuccess(`Đã lưu [${targetModelCode} • ${slotName}: ${qty}] lên Supabase ✓`);
+    // Cập nhật state nếu cần đồng bộ
+    setFormModelItems(updatedItems);
 
-        // Phát realtime broadcast tới các máy / tab khác
-        const updatedItems = formModelItems.map((it) =>
-          it.id === id ? { ...it, hourlyActuals: updatedHourly } : it
-        );
-        storage.sendLiveFormBroadcast({
-          date: formDate,
-          shift: formShift,
-          slots: formSlots,
-          items: updatedItems,
-          officialRO: formOfficialWorkersRO,
-          seasonalRO: formSeasonalWorkersRO,
-          officialBG: formOfficialWorkersBG,
-          seasonalBG: formSeasonalWorkersBG,
-          officialRMA: formOfficialWorkersRMA,
-          seasonalRMA: formSeasonalWorkersRMA,
-          technician: formTechnician,
-          updatedAt: new Date().toISOString(),
-        });
-      }
-    } catch (err: any) {
-      console.warn('Lỗi khi lưu ô sản lượng lên Supabase:', err);
-    }
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: updatedItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Lưu vào draft cục bộ ngay lập tức
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+
+    // Phát realtime broadcast tới các máy / tab khác
+    storage.sendLiveFormBroadcast(draftData);
   };
 
   const handleCommitItemDailyPlan = async (id: string, planVal: number) => {
@@ -5572,36 +5568,32 @@ const [isScrolled, setIsScrolled] = useState(false);
     XLSX.writeFile(wb, `KHSX_Thang_${month}_${year}_${filterDivision}.xlsx`);
   };
 
+  // Đồng bộ toàn bộ dữ liệu khi cập nhật dữ liệu hệ thống:
+  // Chỉ đồng bộ lấy lại toàn bộ dữ liệu mới nhất từ Supabase Cloud / Backend,
+  // không cần lưu lại file, tự động dọn dẹp các cache thừa để tối ưu dung lượng và tránh làm nặng app.
   const syncEntireSystem = async () => {
     try {
       setSyncStatus('syncing');
-      setSyncMessage('Đang đồng bộ toàn bộ dữ liệu hệ thống...');
+      setSyncMessage('Đang lấy lại toàn bộ dữ liệu mới nhất từ hệ thống...');
 
-      // 1. Đồng bộ dữ liệu lịch sử từ nhật ký ca
-      const currentLogs = productionLogs;
-      syncHistoricalMetricsWithLogs(currentLogs);
+      // 1. Tải mới và làm mới trực tiếp toàn bộ dữ liệu từ Cloud / Supabase
+      await refreshFromCloud();
 
-      // 2. Lưu trữ toàn bộ dữ liệu vào Storage & Cloud nếu có kết nối
-      await Promise.allSettled([
-        storage.saveAllProductionLogs(productionLogs),
-        storage.saveMonthlyMetrics(2025, metrics2025),
-        storage.saveMonthlyMetrics(2026, metrics2026),
-        storage.saveMonthlyPlan(monthlyPlan),
-        storage.saveMonthlyTargets(monthlyTargets),
-        storage.saveGasDailyReports(gasDailyReports),
-        storage.saveAssemblyDailyReports(assemblyDailyReports),
-        storage.saveDeclaredImeis(declaredImeis),
-        storage.saveScannedImeis(scannedImeis),
-      ]);
+      // 2. Tối ưu dung lượng: dọn dẹp các key phiên bản cũ & dữ liệu tạm không cần thiết
+      const optResult = storage.cleanupAndOptimizeStorage();
+      setStorageInfo(storage.getStorageUsage());
 
       setSyncStatus(isSupabaseConfigured ? 'synced' : 'local');
-      setSyncMessage(isSupabaseConfigured ? 'Đã đồng bộ toàn bộ hệ thống lên Cloud' : 'Đã đồng bộ toàn bộ hệ thống (Bộ nhớ máy)');
-      setFormMessage('🎉 Đã đồng bộ liên kết toàn bộ dữ liệu và tính năng thành công!');
-      setTimeout(() => setFormMessage(''), 4000);
+      setSyncMessage(isSupabaseConfigured ? 'Đã đồng bộ trực tuyến với Supabase (Tối ưu)' : 'Đã đồng bộ dữ liệu hệ thống');
+      const freedText = optResult.freedBytes > 0 ? ` (Giải phóng ${(optResult.freedBytes / 1024).toFixed(1)} KB bộ nhớ)` : '';
+      setFormMessage(`🎉 Đã đồng bộ lấy lại toàn bộ dữ liệu từ hệ thống thành công! Chỉ lấy dữ liệu, không lưu file, ứng dụng đã được tối ưu dung lượng siêu nhẹ.${freedText}`);
+      setTimeout(() => setFormMessage(''), 4500);
     } catch (error) {
       console.error('Lỗi khi đồng bộ toàn hệ thống:', error);
       setSyncStatus('error');
       setSyncMessage('Lỗi khi đồng bộ dữ liệu');
+      setFormMessage('❌ Lỗi kết nối khi đồng bộ dữ liệu. Vui lòng thử lại.');
+      setTimeout(() => setFormMessage(''), 4500);
     }
   };
 
@@ -6029,9 +6021,14 @@ const [isScrolled, setIsScrolled] = useState(false);
           storage.saveScannedImeis(finalScannedImeis)
         ]);
 
+        // Giải phóng bộ nhớ tạm thời của file và tối ưu bộ nhớ
+        rawBackupData = null;
+        storage.cleanupAndOptimizeStorage();
+        setStorageInfo(storage.getStorageUsage());
+
         setSyncStatus(isSupabaseConfigured ? 'synced' : 'local');
         setSyncMessage(isSupabaseConfigured ? 'Đã khôi phục và lưu lên Cloud' : 'Đã khôi phục và lưu vào bộ nhớ máy');
-        setFormMessage(`🎉 Khôi phục dữ liệu thành công (${restoreMode === 'overwrite' ? 'Ghi đè' : 'Hợp nhất'}): ${finalLogs.length} nhật ký ca, ${finalProducts.length} sản phẩm, ${finalWorkers.length} nhân sự, ${finalAttendance.length} điểm danh!`);
+        setFormMessage(`🎉 Khôi phục dữ liệu thành công (${restoreMode === 'overwrite' ? 'Ghi đè' : 'Hợp nhất'}): ${finalLogs.length} nhật ký ca, ${finalProducts.length} sản phẩm, ${finalWorkers.length} nhân sự, ${finalAttendance.length} điểm danh! (Đã tối ưu bộ nhớ, không giữ file)`);
         setTimeout(() => setFormMessage(""), 5000);
 
       } catch (err) {
@@ -6422,7 +6419,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     selectedProductToAdd,
     pendingPastDate,
     setPendingPastDate,
-    // Supabase Cloud Sync
+    // Supabase Cloud Sync & Storage Optimization
     isInitialLoading,
     syncStatus,
     syncMessage,
@@ -6430,6 +6427,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     isSupabaseConfigured,
     syncHistoryFromLogs,
     syncEntireSystem,
+    storageInfo,
+    handleOptimizeStorage,
     toastError,
     setToastError,
     showToastError,
