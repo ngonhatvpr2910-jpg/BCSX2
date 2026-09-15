@@ -119,6 +119,38 @@ export function broadcastTableUpdate(tableName: string, extraData?: any): void {
 // ==========================================
 // 1. QUẢN LÝ NHÂN SỰ (WORKERS)
 // ==========================================
+// Helper dọn dẹp và gộp trùng lặp bản ghi nhật ký ca theo khóa duy nhất (date, shift, productId, lineId)
+export function deduplicateProductionLogs(logs: ProductionLog[]): { deduplicated: ProductionLog[]; duplicateIds: string[] } {
+  if (!logs || logs.length === 0) return { deduplicated: [], duplicateIds: [] };
+
+  const map = new Map<string, ProductionLog>();
+  const duplicateIds: string[] = [];
+
+  // Duyệt qua danh sách. Bản ghi có id xác định theo composite key hoặc id hợp lệ
+  logs.forEach((log) => {
+    // Chuẩn hóa key theo date, shift, productId và lineId
+    const key = `${log.date}_${(log.shift || '').trim()}_${(log.productId || '').trim()}_${(log.lineId || '').trim()}`;
+    if (!map.has(key)) {
+      map.set(key, log);
+    } else {
+      const existing = map.get(key)!;
+      // Thu thập ID của bản ghi trùng lặp để xóa nếu cần
+      if (log.id && log.id !== existing.id) {
+        duplicateIds.push(log.id);
+      }
+      // Ưu tiên giữ bản ghi có actualUnits lớn hơn hoặc có hourlyActuals đầy đủ hơn
+      const existingHourlyKeys = Object.keys(existing.hourlyActuals || {}).length;
+      const logHourlyKeys = Object.keys(log.hourlyActuals || {}).length;
+      if (logHourlyKeys > existingHourlyKeys || (log.actualUnits || 0) > (existing.actualUnits || 0)) {
+        // Giữ id của existing để duy trì tính nhất quán của ID đã lưu
+        map.set(key, { ...log, id: existing.id || log.id });
+      }
+    }
+  });
+
+  return { deduplicated: Array.from(map.values()), duplicateIds };
+}
+
 export async function getWorkers(): Promise<Worker[]> {
   if (supabase && isSupabaseConfigured) {
     try {
@@ -553,46 +585,64 @@ export async function getProductionLogs(limitCount: number = 1000): Promise<Prod
             hourlySeasonalWorkers: seasonal || {},
           };
         });
-        setLocal(STORAGE_KEYS.PRODUCTION_LOGS, mapped);
-        return mapped;
+        // Tự động dọn dẹp các bản ghi trùng lặp (nếu có từ trước)
+        const { deduplicated } = deduplicateProductionLogs(mapped);
+        setLocal(STORAGE_KEYS.PRODUCTION_LOGS, deduplicated);
+        return deduplicated;
       }
     } catch (err) {
       console.warn('[storage] Không thể tải production_logs từ Supabase, dùng local fallback:', err);
     }
   }
-  return getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  const fallback = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  const { deduplicated: cleanFallback } = deduplicateProductionLogs(fallback);
+  return cleanFallback;
 }
 
 export async function saveProductionLog(log: ProductionLog): Promise<void> {
   const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
-  const updated = localList.some((l) => l.id === log.id)
-    ? localList.map((l) => (l.id === log.id ? log : l))
-    : [log, ...localList];
-  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, updated);
+  // Khớp theo composite key (date, shift, productId, lineId) hoặc ID
+  const matchIdx = localList.findIndex(
+    (l) => l.id === log.id || (l.date === log.date && l.shift === log.shift && l.productId === log.productId && l.lineId === log.lineId)
+  );
+
+  let updatedList: ProductionLog[];
+  let finalLog = log;
+  if (matchIdx !== -1) {
+    // Giữ nguyên ID của bản ghi đã tồn tại để tránh tạo ID mới
+    finalLog = { ...log, id: localList[matchIdx].id };
+    updatedList = [...localList];
+    updatedList[matchIdx] = finalLog;
+  } else {
+    updatedList = [finalLog, ...localList];
+  }
+
+  const { deduplicated } = deduplicateProductionLogs(updatedList);
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, deduplicated);
 
   if (supabase && isSupabaseConfigured) {
     try {
       const { error } = await supabase.from('production_logs').upsert({
-        id: log.id,
-        date: log.date,
-        line_id: log.lineId,
-        line_name: log.lineName,
-        product_id: log.productId,
-        product_name: log.productName,
-        product_group: log.productGroup,
-        actual_units: log.actualUnits,
-        workers_count: log.workersCount,
-        official_workers: log.officialWorkers ?? null,
-        seasonal_workers: log.seasonalWorkers ?? null,
-        equivalent_factor: log.equivalentFactor,
-        equivalent_products: log.equivalentProducts,
-        labor_productivity_percent: log.laborProductivityPercent,
-        shift: log.shift,
-        technician_name: log.technicianName,
-        hourly_actuals: log.hourlyActuals || {},
-        hourly_workers: { ...(log.hourlyWorkers || {}), "__official": log.hourlyOfficialWorkers || {}, "__seasonal": log.hourlySeasonalWorkers || {} },
-        hourly_official_workers: log.hourlyOfficialWorkers || {},
-        hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
+        id: finalLog.id,
+        date: finalLog.date,
+        line_id: finalLog.lineId,
+        line_name: finalLog.lineName,
+        product_id: finalLog.productId,
+        product_name: finalLog.productName,
+        product_group: finalLog.productGroup,
+        actual_units: finalLog.actualUnits,
+        workers_count: finalLog.workersCount,
+        official_workers: finalLog.officialWorkers ?? null,
+        seasonal_workers: finalLog.seasonalWorkers ?? null,
+        equivalent_factor: finalLog.equivalentFactor,
+        equivalent_products: finalLog.equivalentProducts,
+        labor_productivity_percent: finalLog.laborProductivityPercent,
+        shift: finalLog.shift,
+        technician_name: finalLog.technicianName,
+        hourly_actuals: finalLog.hourlyActuals || {},
+        hourly_workers: { ...(finalLog.hourlyWorkers || {}), "__official": finalLog.hourlyOfficialWorkers || {}, "__seasonal": finalLog.hourlySeasonalWorkers || {} },
+        hourly_official_workers: finalLog.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: finalLog.hourlySeasonalWorkers || {},
       });
       if (error) console.warn('[storage] Lưu production_log lên Supabase:', error.message || error);
       broadcastTableUpdate('production_logs');
@@ -617,16 +667,53 @@ export async function deleteProductionLog(id: string): Promise<void> {
   }
 }
 
-export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void> {
-  if (!logs || logs.length === 0) return;
+export async function deleteMultipleProductionLogs(ids: string[]): Promise<void> {
+  if (!ids || ids.length === 0) return;
+  const idSet = new Set(ids);
   const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
-  const logMap = new Map<string, ProductionLog>(localList.map((l) => [l.id, l]));
-  logs.forEach((l) => logMap.set(l.id, l));
-  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, Array.from(logMap.values()));
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, localList.filter((l) => !idSet.has(l.id)));
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const rows = logs.map((log) => ({
+      const { error } = await supabase.from('production_logs').delete().in('id', ids);
+      if (error) console.warn('[storage] Xóa danh sách duplicate production_logs trên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa nhiều production_logs:', err?.message || err);
+    }
+  }
+}
+
+export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void> {
+  if (!logs || logs.length === 0) return;
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  
+  // Xây dựng map theo cả ID và composite key
+  const compositeMap = new Map<string, ProductionLog>();
+  localList.forEach((l) => {
+    const key = `${l.date}_${(l.shift || '').trim()}_${(l.productId || '').trim()}_${(l.lineId || '').trim()}`;
+    compositeMap.set(key, l);
+  });
+
+  const normalizedLogs = logs.map((incoming) => {
+    const key = `${incoming.date}_${(incoming.shift || '').trim()}_${(incoming.productId || '').trim()}_${(incoming.lineId || '').trim()}`;
+    const existing = compositeMap.get(key);
+    if (existing) {
+      // Giữ nguyên id của bản ghi đã có để lệnh upsert trên Supabase và local cập nhật chính xác dòng đó
+      return { ...incoming, id: existing.id };
+    }
+    return incoming;
+  });
+
+  const logMap = new Map<string, ProductionLog>(localList.map((l) => [l.id, l]));
+  normalizedLogs.forEach((l) => logMap.set(l.id, l));
+  
+  const { deduplicated } = deduplicateProductionLogs(Array.from(logMap.values()));
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, deduplicated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const rows = normalizedLogs.map((log) => ({
         id: log.id,
         date: log.date,
         line_id: log.lineId,

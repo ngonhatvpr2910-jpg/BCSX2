@@ -91,7 +91,8 @@ export const LoggingTab = ({
   setToastSuccess,
   handleCommitItemHourly,
   handleCommitItemDailyPlan,
-  handleCommitWorkerDraft
+  handleCommitWorkerDraft,
+  handleDeduplicateLogs
 }: any) => {
   return (
     <motion.div
@@ -1013,6 +1014,20 @@ export const LoggingTab = ({
                           </button>
                       ))}
                     </div>
+
+                    {/* Nút lọc trùng lặp & chuẩn hóa NSLĐ */}
+                    {handleDeduplicateLogs && (
+                      <button
+                        type="button"
+                        onClick={handleDeduplicateLogs}
+                        title="Quét, gộp các dòng trùng lặp và tính lại NSLĐ chuẩn xác"
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 hover:text-amber-300 border border-amber-500/30 rounded-lg text-xs font-semibold transition cursor-pointer"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                        <span className="hidden sm:inline">Dọn trùng lặp & Chuẩn hóa NSLĐ</span>
+                        <span className="sm:hidden">Dọn trùng</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 

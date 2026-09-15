@@ -4352,8 +4352,14 @@ const [isScrolled, setIsScrolled] = useState(false);
         laborProductivityPercent = formAggregates.avgProductivityRO;
       }
 
+      // Tìm xem đã tồn tại bản ghi khớp khóa (formDate, formShift, productId, lineId) chưa
+      const existingLog = productionLogs.find(
+        (l) => l.date === formDate && l.shift === formShift && l.productId === item.productId && l.lineId === lineId
+      );
+      const logId = existingLog ? existingLog.id : `log-${formDate}-${lineId}-${item.productId}`;
+
       return {
-        id: "log-" + (productionLogs.length + idx + 1) + "-" + Date.now() + "-" + idx,
+        id: logId,
         date: formDate,
         lineId,
         lineName,
@@ -4380,7 +4386,9 @@ const [isScrolled, setIsScrolled] = useState(false);
     let updatedLogs: ProductionLog[] = [];
     setProductionLogs((prev) => {
       const filtered = prev.filter((log) => log.date !== formDate || log.shift !== formShift);
-      updatedLogs = [...newLogs, ...filtered];
+      const combined = [...newLogs, ...filtered];
+      const { deduplicated } = storage.deduplicateProductionLogs(combined);
+      updatedLogs = deduplicated;
       return updatedLogs;
     });
 
@@ -4441,6 +4449,29 @@ const [isScrolled, setIsScrolled] = useState(false);
     setTimeout(() => {
       setFormMessage("");
     }, 3500);
+  };
+
+  // Hàm chủ động quét và dọn dẹp toàn bộ dữ liệu nhật ký ca bị trùng lặp (trên cả Local và Supabase Cloud)
+  const handleDeduplicateLogs = async () => {
+    const { deduplicated, duplicateIds } = storage.deduplicateProductionLogs(productionLogs);
+    if (duplicateIds.length === 0 && deduplicated.length === productionLogs.length) {
+      setFormMessage("✨ Dữ liệu nhật ký ca hiện tại hoàn toàn chuẩn xác, không phát hiện dòng trùng lặp nào!");
+      setTimeout(() => setFormMessage(""), 4000);
+      return;
+    }
+
+    // Xóa các dòng duplicate trên Supabase
+    if (duplicateIds.length > 0) {
+      await storage.deleteMultipleProductionLogs(duplicateIds);
+    }
+    // Cập nhật lại toàn bộ danh sách chuẩn
+    await storage.saveAllProductionLogs(deduplicated);
+
+    setProductionLogs(deduplicated);
+    syncHistoricalMetricsWithLogs(deduplicated);
+
+    setFormMessage(`🧹 Đã gộp và loại bỏ thành công ${duplicateIds.length} dòng nhật ký ca bị trùng lặp! Chỉ số NSLĐ các tháng đã được chuẩn hóa lại chính xác 100%.`);
+    setTimeout(() => setFormMessage(""), 5000);
   };
 
   const handleEditLog = (date: string, shift: string) => {
@@ -6438,6 +6469,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     handleCommitItemHourly,
     handleCommitItemDailyPlan,
     handleCommitWorkerDraft,
-    fetchShiftLogsAndMapToMatrix
+    fetchShiftLogsAndMapToMatrix,
+    handleDeduplicateLogs,
   };
 };

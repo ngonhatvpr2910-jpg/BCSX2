@@ -347,7 +347,8 @@ export default function App() {
     setToastSuccess,
     handleCommitItemHourly,
     handleCommitItemDailyPlan,
-    handleCommitWorkerDraft
+    handleCommitWorkerDraft,
+    handleDeduplicateLogs
   } = useAppLogic();
 
   return (
@@ -834,6 +835,7 @@ export default function App() {
       handleCommitItemHourly={handleCommitItemHourly}
       handleCommitItemDailyPlan={handleCommitItemDailyPlan}
       handleCommitWorkerDraft={handleCommitWorkerDraft}
+      handleDeduplicateLogs={handleDeduplicateLogs}
     />
   )}
 
