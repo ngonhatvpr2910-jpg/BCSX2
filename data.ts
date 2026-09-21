@@ -214,12 +214,12 @@ export const HISTORICAL_2025: MonthlyMetric[] = Array.from({ length: 12 }).map((
 
 // Số liệu gốc 2026 từ bảng Excel (cho đến tháng 8 hiện tại)
 export const HISTORICAL_2026: MonthlyMetric[] = [
-  { year: 2026, month: 1, laborProductivityPercent: 96.18, productionMandays: 1473, equivalentProducts: 12794, actualProducts: 5669, attendanceRatePercent: null },
-  { year: 2026, month: 2, laborProductivityPercent: 94.56, productionMandays: 1550, equivalentProducts: 13236, actualProducts: 10807, attendanceRatePercent: null },
-  { year: 2026, month: 3, laborProductivityPercent: 91.99, productionMandays: 2197.5, equivalentProducts: 18254, actualProducts: 17890, attendanceRatePercent: null },
-  { year: 2026, month: 4, laborProductivityPercent: 109.89, productionMandays: 1935.6, equivalentProducts: 19206, actualProducts: 16093, attendanceRatePercent: null },
-  { year: 2026, month: 5, laborProductivityPercent: 98.61, productionMandays: 1490.8, equivalentProducts: 13274, actualProducts: 9303, attendanceRatePercent: null },
-  { year: 2026, month: 6, laborProductivityPercent: 135.84, productionMandays: 1699.73, equivalentProducts: 20850, actualProducts: 15414, attendanceRatePercent: null },
+  { year: 2026, month: 1, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747, attendanceRatePercent: null },
+  { year: 2026, month: 2, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704, attendanceRatePercent: null },
+  { year: 2026, month: 3, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609, attendanceRatePercent: null },
+  { year: 2026, month: 4, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070, attendanceRatePercent: null },
+  { year: 2026, month: 5, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311, attendanceRatePercent: null },
+  { year: 2026, month: 6, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000, attendanceRatePercent: null },
   { year: 2026, month: 7, laborProductivityPercent: 135.5, productionMandays: 1408, equivalentProducts: 17233, actualProducts: 13025, attendanceRatePercent: null },
   { year: 2026, month: 8, laborProductivityPercent: 133.6, productionMandays: 1625, equivalentProducts: 19601, actualProducts: 12615, attendanceRatePercent: null },
   { year: 2026, month: 9, laborProductivityPercent: null, productionMandays: null, equivalentProducts: null, attendanceRatePercent: null },

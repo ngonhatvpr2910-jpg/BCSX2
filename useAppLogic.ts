@@ -204,11 +204,15 @@ const [isScrolled, setIsScrolled] = useState(false);
     const saved = localStorage.getItem("sunhouse_metrics_2026_v2");
     const rawList: MonthlyMetric[] = saved ? JSON.parse(saved) : HISTORICAL_2026;
     return rawList.map((m) => {
-      if (m.year === 2026 && m.month === 7) {
-        return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
-      }
-      if (m.year === 2026 && m.month === 8) {
-        return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+      if (m.year === 2026) {
+        if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
+        if (m.month === 2) return { ...m, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704 };
+        if (m.month === 3) return { ...m, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609 };
+        if (m.month === 4) return { ...m, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070 };
+        if (m.month === 5) return { ...m, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311 };
+        if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
+        if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+        if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
       }
       return m;
     });
@@ -1881,14 +1885,17 @@ const [isScrolled, setIsScrolled] = useState(false);
     const updateYearMetrics = (year: 2025 | 2026, setMetrics: React.Dispatch<React.SetStateAction<MonthlyMetric[]>>) => {
       setMetrics((prevMetrics) => {
         const updated = prevMetrics.map((m) => {
-          if (year === 2026 && (m.month === 7 || m.month === 8)) {
-            return {
-              ...m,
-              laborProductivityPercent: m.month === 7 ? 135.5 : 133.6,
-              actualProducts: m.month === 7 ? 13025 : 12615,
-              equivalentProducts: m.month === 7 ? 17233 : 19601,
-              productionMandays: m.month === 7 ? 1408 : 1625,
-            };
+          if (year === 2026 && m.month <= 8) {
+            let res = { ...m };
+            if (m.month === 1) { res.laborProductivityPercent = 90.14; res.productionMandays = 1790.86; res.equivalentProducts = 14577; res.actualProducts = 12747; }
+            else if (m.month === 2) { res.laborProductivityPercent = 96.69; res.productionMandays = 1277.2; res.equivalentProducts = 11151; res.actualProducts = 7704; }
+            else if (m.month === 3) { res.laborProductivityPercent = 93.95; res.productionMandays = 2770.55; res.equivalentProducts = 23503; res.actualProducts = 16609; }
+            else if (m.month === 4) { res.laborProductivityPercent = 94.41; res.productionMandays = 2416.591; res.equivalentProducts = 20601; res.actualProducts = 15070; }
+            else if (m.month === 5) { res.laborProductivityPercent = 108.4; res.productionMandays = 2498.403; res.equivalentProducts = 24456; res.actualProducts = 13311; }
+            else if (m.month === 6) { res.laborProductivityPercent = 131.6; res.productionMandays = 1848; res.equivalentProducts = 21962; res.actualProducts = 13000; }
+            else if (m.month === 7) { res.laborProductivityPercent = 135.5; res.productionMandays = 1408; res.equivalentProducts = 17233; res.actualProducts = 13025; }
+            else if (m.month === 8) { res.laborProductivityPercent = 133.6; res.productionMandays = 1625; res.equivalentProducts = 19601; res.actualProducts = 12615; }
+            return res;
           }
           const monthLogs = yearMonthMap[year]?.[m.month];
           if (!monthLogs || monthLogs.length === 0) {
@@ -1983,11 +1990,15 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (loaded2025 && loaded2025.length > 0) setMetrics2025(loaded2025);
       if (loaded2026 && loaded2026.length > 0) {
         const guarded2026 = loaded2026.map(m => {
-          if (m.year === 2026 && m.month === 7) {
-            return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
-          }
-          if (m.year === 2026 && m.month === 8) {
-            return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+          if (m.year === 2026) {
+            if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
+            if (m.month === 2) return { ...m, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704 };
+            if (m.month === 3) return { ...m, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609 };
+            if (m.month === 4) return { ...m, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070 };
+            if (m.month === 5) return { ...m, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311 };
+            if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
+            if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+            if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
           }
           return m;
         });
@@ -2913,27 +2924,21 @@ const [isScrolled, setIsScrolled] = useState(false);
       const currentMonth = now.getMonth() + 1;
       const isPast = m.year < currentYear || (m.year === currentYear && m.month < currentMonth);
       const isCurrent = m.year === currentYear && m.month === currentMonth;
-      const isLocked = isPast || isCurrent || (m.year === 2026 && (m.month === 7 || m.month === 8));
+      const isLocked = isPast || isCurrent || (m.year === 2026 && m.month <= 8);
       const isAutoReportMonth = isLocked;
 
-      // Tháng 7 & 8 năm 2026 được khóa và giữ nguyên dữ liệu này theo yêu cầu
-      if (m.year === 2026 && m.month === 7) {
-        return {
-          ...m,
-          laborProductivityPercent: 135.5,
-          actualProducts: 13025,
-          equivalentProducts: 17233,
-          productionMandays: 1408,
-        };
-      }
-      if (m.year === 2026 && m.month === 8) {
-        return {
-          ...m,
-          laborProductivityPercent: 133.6,
-          actualProducts: 12615,
-          equivalentProducts: 19601,
-          productionMandays: 1625,
-        };
+      // Các tháng 1-8 năm 2026 được khóa và giữ nguyên dữ liệu chuẩn theo yêu cầu
+      if (m.year === 2026 && m.month <= 8) {
+        let res = { ...m };
+        if (m.month === 1) { res.laborProductivityPercent = 90.14; res.productionMandays = 1790.86; res.equivalentProducts = 14577; res.actualProducts = 12747; }
+        else if (m.month === 2) { res.laborProductivityPercent = 96.69; res.productionMandays = 1277.2; res.equivalentProducts = 11151; res.actualProducts = 7704; }
+        else if (m.month === 3) { res.laborProductivityPercent = 93.95; res.productionMandays = 2770.55; res.equivalentProducts = 23503; res.actualProducts = 16609; }
+        else if (m.month === 4) { res.laborProductivityPercent = 94.41; res.productionMandays = 2416.591; res.equivalentProducts = 20601; res.actualProducts = 15070; }
+        else if (m.month === 5) { res.laborProductivityPercent = 108.4; res.productionMandays = 2498.403; res.equivalentProducts = 24456; res.actualProducts = 13311; }
+        else if (m.month === 6) { res.laborProductivityPercent = 131.6; res.productionMandays = 1848; res.equivalentProducts = 21962; res.actualProducts = 13000; }
+        else if (m.month === 7) { res.laborProductivityPercent = 135.5; res.productionMandays = 1408; res.equivalentProducts = 17233; res.actualProducts = 13025; }
+        else if (m.month === 8) { res.laborProductivityPercent = 133.6; res.productionMandays = 1625; res.equivalentProducts = 19601; res.actualProducts = 12615; }
+        return res;
       }
 
       // Get logs for this month

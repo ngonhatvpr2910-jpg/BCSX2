@@ -1250,12 +1250,14 @@ export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetri
   const enforceLocked2026 = (list: MonthlyMetric[]) => {
     if (year !== 2026 || !Array.isArray(list)) return list;
     return list.map((m) => {
-      if (m.month === 7) {
-        return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
-      }
-      if (m.month === 8) {
-        return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
-      }
+      if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
+      if (m.month === 2) return { ...m, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704 };
+      if (m.month === 3) return { ...m, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609 };
+      if (m.month === 4) return { ...m, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070 };
+      if (m.month === 5) return { ...m, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311 };
+      if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
+      if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+      if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
       return m;
     });
   };
@@ -1284,12 +1286,14 @@ export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetri
 export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetric[]): Promise<void> {
   const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
   const metricsToSave = (year === 2026 && Array.isArray(metrics)) ? metrics.map((m) => {
-    if (m.month === 7) {
-      return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
-    }
-    if (m.month === 8) {
-      return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
-    }
+    if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
+    if (m.month === 2) return { ...m, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704 };
+    if (m.month === 3) return { ...m, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609 };
+    if (m.month === 4) return { ...m, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070 };
+    if (m.month === 5) return { ...m, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311 };
+    if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
+    if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+    if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
     return m;
   }) : metrics;
 

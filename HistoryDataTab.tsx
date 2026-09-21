@@ -113,7 +113,7 @@ export const HistoryDataTab = ({
 
                           const isPast = historyYear < currentYear || (historyYear === currentYear && m.month < currentMonth);
                           const isCurrent = historyYear === currentYear && m.month === currentMonth;
-                          const isLocked = isPast || isCurrent || (historyYear === 2026 && (m.month === 7 || m.month === 8));
+                          const isLocked = isPast || isCurrent || (historyYear === 2026 && m.month <= 8);
                           
                           // Auto report for past and current months
                           const isAutoReportMonth = isLocked;
