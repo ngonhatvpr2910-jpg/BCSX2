@@ -801,87 +801,148 @@ const [isScrolled, setIsScrolled] = useState(false);
 
 
 
+  // Hàm so khớp sản phẩm đa năng (theo ID, Code hoặc Model Tên sản phẩm)
+  const isSameProduct = (id1?: string, id2?: string, prodList: ProductDefinition[] = products): boolean => {
+    if (!id1 || !id2) return false;
+    const c1 = String(id1).trim().toUpperCase();
+    const c2 = String(id2).trim().toUpperCase();
+    if (c1 === c2) return true;
+
+    const p1 = prodList.find(p => 
+      (p.id && p.id.toUpperCase() === c1) || 
+      (p.code && p.code.toUpperCase() === c1) || 
+      (p.name && getProductModelCode(p.name).toUpperCase() === c1)
+    );
+    const p2 = prodList.find(p => 
+      (p.id && p.id.toUpperCase() === c2) || 
+      (p.code && p.code.toUpperCase() === c2) || 
+      (p.name && getProductModelCode(p.name).toUpperCase() === c2)
+    );
+
+    if (p1 && p2 && p1.id === p2.id) return true;
+    if (p1 && (
+      (p1.id && p1.id.toUpperCase() === c2) || 
+      (p1.code && p1.code.toUpperCase() === c2) || 
+      (p1.name && getProductModelCode(p1.name).toUpperCase() === c2)
+    )) return true;
+    if (p2 && (
+      (p2.id && p2.id.toUpperCase() === c1) || 
+      (p2.code && p2.code.toUpperCase() === c1) || 
+      (p2.name && getProductModelCode(p2.name).toUpperCase() === c1)
+    )) return true;
+
+    return false;
+  };
+
   const handleScanSubmit = (scannedValue?: any) => {
     let val = scanInput;
     if (typeof scannedValue === 'string') {
       val = scannedValue;
     }
     if (!val || typeof val !== 'string' || !val.trim()) return;
+    val = val.trim().toUpperCase();
     
+    // (1) Tự động xác định khung giờ làm việc hiện tại
     const currentHour = new Date().getHours();
     let currentSlot = `${currentHour}H - ${currentHour + 1}H`;
     
-    if (formSlots && !formSlots.includes(currentSlot)) {
-      const availableHours = formSlots.map(s => parseInt((s || "").split("H")[0])).filter(h => !isNaN(h));
-      const closestPastHour = availableHours.slice().reverse().find(h => h <= currentHour) || availableHours[0];
+    if (formSlots && formSlots.length > 0 && !formSlots.includes(currentSlot)) {
+      const availableHours = formSlots
+        .map(s => parseInt((s || "").split("H")[0], 10))
+        .filter(h => !isNaN(h));
+      const closestPastHour = availableHours.slice().reverse().find(h => h <= currentHour) ?? availableHours[0];
       if (closestPastHour !== undefined) {
          currentSlot = formSlots.find(s => s.startsWith(`${closestPastHour}H`)) || formSlots[0];
-      }
-      if (!currentSlot) {
-        setFormMessage(`❌ Không tìm thấy khung giờ phù hợp để ghi nhận.`);
-        setScanInput("");
-        return;
+      } else {
+         currentSlot = formSlots[0];
       }
     }
+    if (!currentSlot) {
+      setFormMessage(`❌ Không tìm thấy khung giờ phù hợp để ghi nhận.`);
+      setScanInput("");
+      return;
+    }
     
-    
-    // --- AUTO-DETECT MODEL FROM DECLARED IMEIS ---
-    const declaration = declaredImeis.find(d => d.imei === val && d.date === formDate);
+    // (2) TỰ ĐỘNG NHẬN DIỆN MODEL ĐA TẦNG (MULTI-STRATEGY AUTO-DETECTION)
+    // Chiến lược A: Tìm trong danh sách IMEI đã khai báo (Ưu tiên ngày hiện tại, sau đó toàn bộ)
+    let declaration = declaredImeis.find(d => d.imei.toUpperCase() === val && d.date === formDate);
     if (!declaration) {
-      setFormMessage(`❌ IMEI ${val} chưa được khai báo cho KHSX ngày ${formDate}.`);
-      setScanInput("");
-      return;
-    }
-    const targetModelId = declaration.productId;
-
-    // --- CHECK KHSX PLAN ---
-    const dateParts = formDate.split("-");
-    const checkYearMonth = `${dateParts[0]}-${dateParts[1]}`;
-    const checkDay = parseInt(dateParts[2], 10);
-    const planForToday = monthlyPlan[checkYearMonth]?.[targetModelId]?.[checkDay] || 0;
-
-    if (planForToday <= 0) {
-      setFormMessage(`❌ Mã hàng này chưa có Kế Hoạch Sản Xuất cho ngày ${formDate}. Không thể quét.`);
-      setScanInput("");
-      return;
+      declaration = declaredImeis.find(d => d.imei.toUpperCase() === val);
     }
 
-    // Count already scanned today for this targetModelId
-    const scannedTodayCount = scannedImeis.filter(item => {
-      if (item.productId !== targetModelId) return false;
-      try {
-        const d = new Date(item.timestamp);
-        const itemDateStr = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, '0') + "-" + String(d.getDate()).padStart(2, '0');
-        return itemDateStr === formDate;
-      } catch(e) {
-        return false;
+    let matchedProduct: ProductDefinition | undefined;
+    let targetModelId = "";
+
+    if (declaration) {
+      targetModelId = declaration.productId;
+      matchedProduct = products.find(p => isSameProduct(p.id, declaration!.productId));
+    } else {
+      // Chiến lược B: Quét trực tiếp Mã Model / Barcode / Tên Model sản phẩm
+      matchedProduct = products.find(p => {
+        const modelCode = getProductModelCode(p.name);
+        const codeUpper = (p.code || '').toUpperCase();
+        const idUpper = (p.id || '').toUpperCase();
+        const modelUpper = (modelCode || '').toUpperCase();
+        return (
+          codeUpper === val ||
+          idUpper === val ||
+          (modelUpper && modelUpper === val) ||
+          (val.length >= 4 && codeUpper.includes(val)) ||
+          (val.length >= 4 && modelUpper && val.includes(modelUpper))
+        );
+      });
+
+      // Chiến lược C: So khớp với các hàng Model đang có sẵn trên bảng biểu ca hiện tại
+      if (!matchedProduct) {
+        const existingItem = formModelItems.find(it => {
+          if (it.productId.toUpperCase() === val) return true;
+          const p = products.find(prod => isSameProduct(prod.id, it.productId));
+          if (p && (
+            (p.code && p.code.toUpperCase() === val) || 
+            (p.name && getProductModelCode(p.name).toUpperCase() === val)
+          )) return true;
+          return false;
+        });
+        if (existingItem) {
+          targetModelId = existingItem.productId;
+          matchedProduct = products.find(p => isSameProduct(p.id, existingItem.productId));
+        }
       }
-    }).length;
+    }
 
-    if (scannedTodayCount >= planForToday) {
-      setFormMessage(`❌ Đã đủ KHSX cho model này (${scannedTodayCount}/${planForToday}). Không thể quét thêm.`);
+    if (!matchedProduct && !targetModelId) {
+      setFormMessage(`❌ Không nhận diện được Model từ mã "${val}". Vui lòng kiểm tra mã IMEI hoặc khai báo trước.`);
       setScanInput("");
       return;
     }
 
-    // --- CHECK DUPLICATE SCANNED IMEI ---
-    const isAlreadyScanned = scannedImeis.some(s => s.imei === val);
-    if (isAlreadyScanned) {
+    const resolvedProductId = matchedProduct?.id || targetModelId;
+    const productDisplayName = matchedProduct 
+      ? (getProductModelCode(matchedProduct.name) || matchedProduct.code || matchedProduct.name) 
+      : resolvedProductId;
+
+    // (3) KIỂM TRA TRÙNG LẶP MÃ IMEI (Chỉ cảnh báo nếu là mã IMEI và đã quét rồi)
+    const isAlreadyScanned = scannedImeis.some(s => s.imei.toUpperCase() === val);
+    if (isAlreadyScanned && (!matchedProduct?.code || !matchedProduct.code.toUpperCase().includes(val))) {
       setFormMessage(`❌ IMEI ${val} đã được quét thành công trước đó (trùng lặp).`);
       setScanInput("");
       return;
     }
-    
-    // ------------------
 
+    // (4) CẬP NHẬT HOẶC THÊM MODEL VÀO BẢNG FORM NHẬT KÝ CA
     let updatedItems = [...formModelItems];
-    let itemIndex = updatedItems.findIndex(m => m.productId === targetModelId);
+    let itemIndex = updatedItems.findIndex(m => isSameProduct(m.productId, resolvedProductId));
     
     if (itemIndex === -1) {
-      // Auto-add model to form if not exists
+      // Tự động thêm hàng model mới vào bảng nếu chưa có
+      const dateParts = formDate.split("-");
+      const checkYearMonth = `${dateParts[0]}-${dateParts[1]}`;
+      const checkDay = parseInt(dateParts[2], 10);
+      const planForToday = monthlyPlan[checkYearMonth]?.[resolvedProductId]?.[checkDay] || 0;
+
       const newRow: FormModelItem = {
         id: `row-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-        productId: targetModelId,
+        productId: resolvedProductId,
         dailyPlan: planForToday,
         hourlyActuals: {}
       };
@@ -889,29 +950,60 @@ const [isScrolled, setIsScrolled] = useState(false);
       itemIndex = updatedItems.length - 1;
     }
     
+    // (5) CỘNG DỒN SẢN LƯỢNG THỰC TẾ CHO KHUNG GIỜ HIỆN TẠI
     const existingActuals = updatedItems[itemIndex].hourlyActuals || {};
+    const currentQty = parseInt((existingActuals[currentSlot] ?? 0) as any, 10) || 0;
+    const updatedQty = currentQty + 1;
+    
     updatedItems[itemIndex] = {
       ...updatedItems[itemIndex],
-      hourlyActuals: { ...existingActuals }
+      hourlyActuals: {
+        ...existingActuals,
+        [currentSlot]: updatedQty,
+      }
     };
-    const currentQty = parseInt(updatedItems[itemIndex].hourlyActuals[currentSlot] as any) || 0;
-    const updatedQty = currentQty + 1;
-    updatedItems[itemIndex].hourlyActuals[currentSlot] = updatedQty;
     
     setFormModelItems(updatedItems);
     
-    // Lưu ý: Dữ liệu ghi nhận tại thời điểm nạp được lưu trong bản nháp cục bộ (draft),
-    // chỉ chính thức lưu vào database production_logs khi bấm "Lưu Nhật Ký Ca".
+    // (6) LƯU VÀO DANH SÁCH IMEI ĐÃ QUÉT & ĐỒNG BỘ SUPABASE
     const newImei: ScannedImei = {
       id: `imei-${Date.now()}-${Math.random().toString(36).substring(2,9)}`,
       imei: val,
-      productId: targetModelId,
+      productId: resolvedProductId,
       timestamp: new Date().toISOString(),
       slot: currentSlot
     };
-    setScannedImeis(prev => [newImei, ...prev]);
+    const nextScannedList = [newImei, ...scannedImeis.filter(s => s.imei.toUpperCase() !== val)];
+    setScannedImeis(nextScannedList);
+    storage.saveScannedImeis(nextScannedList);
 
-    setFormMessage(`✅ Đã ghi nhận +1 sản phẩm cho khung giờ ${currentSlot} (Mã quét: ${val})`);
+    // (7) TẠO GÓI DRAFT VÀ PHÁT BROADCAST ĐỒNG THỜI LƯU LÊN SUPABASE (ĐỒNG BỘ 2 CHIỀU ĐA LINK)
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: updatedItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // Lưu cục bộ
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+
+    // Lưu bản nháp lên Supabase Cloud
+    storage.saveFormDraft(draftData);
+
+    // Gửi realtime broadcast đồng bộ lập tức sang máy/link/tab thứ 2
+    storage.sendLiveFormBroadcast(draftData);
+
+    setFormMessage(`✅ Đã ghi nhận +1 sản phẩm [${productDisplayName}] cho khung giờ ${currentSlot} (Mã quét: ${val})`);
     setScanInput("");
   };
 
@@ -932,14 +1024,9 @@ const [isScrolled, setIsScrolled] = useState(false);
     const dNum = parseInt(dateParts[2], 10);
     const planLimit = monthlyPlan[ym]?.[productId]?.[dNum] || 0;
 
-    const currentCount = declaredImeis.filter(d => d.productId === productId && d.date === date).length;
+    const currentCount = declaredImeis.filter(d => isSameProduct(d.productId, productId) && d.date === date).length;
 
-    if (planLimit <= 0) {
-      alert(`❌ Mã hàng này chưa có Kế Hoạch Sản Xuất cho ngày ${date}. Không thể khai báo.`);
-      return;
-    }
-
-    if (currentCount >= planLimit) {
+    if (planLimit > 0 && currentCount >= planLimit) {
       alert(`❌ Đã đạt giới hạn khai báo KHSX (${currentCount}/${planLimit}) cho model này ngày ${date}. Không thể khai báo thêm.`);
       return;
     }
@@ -947,20 +1034,16 @@ const [isScrolled, setIsScrolled] = useState(false);
     const newDecl = { imei: trimmed, productId, date };
     let isDuplicate = false;
     
-    setDeclaredImeis(prev => {
-      const exists = prev.some(p => p.imei === trimmed);
-      if (exists) {
-        isDuplicate = true;
-        return prev;
-      }
-      return [newDecl, ...prev];
-    });
-    
-    if (isDuplicate) {
+    const exists = declaredImeis.some(p => p.imei.toUpperCase() === trimmed);
+    if (exists) {
       alert(`❌ IMEI ${trimmed} đã được khai báo trước đó! Không thể khai báo lại.`);
       setDeclareImeiInput('');
       return;
     }
+
+    const nextDeclaredList = [newDecl, ...declaredImeis];
+    setDeclaredImeis(nextDeclaredList);
+    storage.saveDeclaredImeis(nextDeclaredList);
     
     setDeclareImeiInput('');
     
@@ -2213,19 +2296,20 @@ const [isScrolled, setIsScrolled] = useState(false);
               return { ...it, hourlyActuals: cleanHourly };
             });
 
-            // Đồng bộ thông minh không ghi đè: Giữ nguyên ô người dùng đang gõ nếu có thao tác gần đây (< 3s)
+            // Đồng bộ thông minh không ghi đè: Hợp nhất toàn diện các model mới/hiện có và giữ nguyên ô người dùng đang gõ nếu có thao tác gần đây (< 3s)
             setFormModelItems((prev) => {
               const active = activeEditingCellRef.current;
               const isRecentLocalEdit = active && Date.now() - active.timestamp < 3000;
 
-              return prev.map((localItem) => {
-                const incoming = cleanItems.find(
-                  (ci) => ci.productId === localItem.productId || ci.id === localItem.id
+              // Hợp nhất dữ liệu các model từ máy phát broadcast
+              const mergedList = cleanItems.map((incoming) => {
+                const localItem = prev.find(
+                  (li) => isSameProduct(li.productId, incoming.productId, products) || li.id === incoming.id
                 );
-                if (!incoming) return localItem;
+                if (!localItem) return incoming;
 
                 const mergedHourly = { ...incoming.hourlyActuals };
-                if (isRecentLocalEdit && active && (active.id === localItem.id || active.id === localItem.productId)) {
+                if (isRecentLocalEdit && active && (active.id === localItem.id || isSameProduct(active.id, localItem.productId, products))) {
                   if (localItem.hourlyActuals[active.slotName] !== undefined) {
                     mergedHourly[active.slotName] = localItem.hourlyActuals[active.slotName];
                   }
@@ -2233,10 +2317,23 @@ const [isScrolled, setIsScrolled] = useState(false);
 
                 return {
                   ...localItem,
+                  ...incoming,
                   dailyPlan: incoming.dailyPlan !== undefined ? incoming.dailyPlan : localItem.dailyPlan,
                   hourlyActuals: mergedHourly,
                 };
               });
+
+              // Bổ sung lại các model nội bộ nếu máy bên kia chưa có
+              prev.forEach((localItem) => {
+                const exists = mergedList.some(
+                  (mi) => isSameProduct(mi.productId, localItem.productId, products) || mi.id === localItem.id
+                );
+                if (!exists) {
+                  mergedList.push(localItem);
+                }
+              });
+
+              return mergedList;
             });
           }
           if (data.slots) {
@@ -2262,34 +2359,57 @@ const [isScrolled, setIsScrolled] = useState(false);
       },
 
       // (10) Lắng nghe broadcast đồng bộ tức thì các bảng khi có thay đổi từ máy/tab khác
-      // TỐI ƯU HÓA: Tuyệt đối KHÔNG query lại toàn bộ bảng để tiết kiệm tối đa Egress và không giật lag!
-      // Các bảng production_logs, attendance_records, workers, products đã được cập nhật từng hàng tức thì qua CDC.
+      // Cung cấp cơ chế Realtime đồng bộ kép: vừa nhận tức thì qua Supabase Broadcast vừa nhận qua Postgres CDC
       onTableSyncChange: async (table, extraPayload) => {
         try {
           if (extraPayload?.senderId === storage.CLIENT_SESSION_ID) return;
 
-          if (
-            table === 'production_logs' ||
-            table === 'attendance_records' ||
-            table === 'workers' ||
-            table === 'products' ||
-            table === 'daily_reports'
-          ) {
-            // Đã được xử lý từng phần tử trực tiếp từ Postgres CDC (Realtime), tránh tải lại toàn bộ bảng gây tốn Egress
-            return;
-          } else if (table === 'monthly_plan') {
+          if (table === 'monthly_plan') {
             if (extraPayload?.data) {
               setMonthlyPlan(extraPayload.data);
+            } else {
+              const fresh = await storage.getMonthlyPlan();
+              if (fresh && Object.keys(fresh).length > 0) setMonthlyPlan(fresh);
             }
           } else if (table === 'monthly_targets') {
             if (extraPayload?.data) {
               setMonthlyTargets(extraPayload.data);
+            } else {
+              const fresh = await storage.getMonthlyTargets();
+              if (fresh && Object.keys(fresh).length > 0) setMonthlyTargets(fresh);
             }
           } else if (table === 'monthly_metrics') {
             if (extraPayload?.year && extraPayload?.data) {
               if (extraPayload.year === 2025) setMetrics2025(extraPayload.data);
               if (extraPayload.year === 2026) setMetrics2026(extraPayload.data);
+            } else {
+              const [m25, m26] = await Promise.all([
+                storage.getMonthlyMetrics(2025),
+                storage.getMonthlyMetrics(2026),
+              ]);
+              if (m25 && m25.length > 0) setMetrics2025(m25);
+              if (m26 && m26.length > 0) setMetrics2026(m26);
             }
+          } else if (table === 'daily_reports') {
+            // Khi nhận broadcast cập nhật báo cáo ngày, tải lại dữ liệu mới nhất
+            const allDaily = await storage.getAllDailyReports();
+            if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
+            if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
+            if (allDaily.declaredImeis && allDaily.declaredImeis.length > 0) setDeclaredImeis(allDaily.declaredImeis);
+            if (allDaily.scannedImeis && allDaily.scannedImeis.length > 0) setScannedImeis(allDaily.scannedImeis);
+            if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
+            if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
+            if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
+            if (allDaily.monthlyDclr && allDaily.monthlyDclr.length > 0) setMonthlyDclrError(allDaily.monthlyDclr);
+          } else if (table === 'workers') {
+            const freshWorkers = await storage.getWorkers();
+            if (freshWorkers && freshWorkers.length > 0) setWorkers(freshWorkers);
+          } else if (table === 'products') {
+            const freshProducts = await storage.getProducts();
+            if (freshProducts && freshProducts.length > 0) setProducts(freshProducts);
+          } else if (table === 'attendance_records') {
+            const freshAtt = await storage.getAttendanceLogs(1000);
+            if (freshAtt && freshAtt.length > 0) setAttendanceLogs(freshAtt);
           }
         } catch (err) {
           console.warn('[Realtime] Lỗi đồng bộ bảng từ broadcast:', table, err);
