@@ -183,6 +183,7 @@ export function isValidHourlySlot(slot: string): boolean {
 }
 
 export function formatSlotLabel(slot: string): string {
+  if (!slot || typeof slot !== "string") return "";
   let clean = slot.trim().toUpperCase().replace(/:00/g, "").replace(/\s+/g, "");
   const match = clean.match(/^(\d+)(H|H-)?-?(\d+)(H)?$/);
   if (match) {
@@ -194,6 +195,7 @@ export function formatSlotLabel(slot: string): string {
 }
 
 export function getProductModelCode(name: string): string {
+  if (!name || typeof name !== "string") return "";
   // Extract clean model code (e.g. SHA76222KL, SHA75102LA, SHB2106, MMBB0787B, etc.)
   const words = name.replace(/[()]/g, ' ').split(/\s+/);
   for (const word of words) {

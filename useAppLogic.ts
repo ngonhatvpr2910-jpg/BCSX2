@@ -1416,8 +1416,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (!rows || rows.length === 0) return;
 
       const matchSlotName = (shiftStr: string, currentSlots: string[]) => {
-        const clean = shiftStr.replace(/\s+/g, '').toUpperCase();
-        const found = currentSlots.find(s => s.replace(/\s+/g, '').toUpperCase() === clean);
+        if (!shiftStr) return '';
+        const clean = String(shiftStr).replace(/\s+/g, '').toUpperCase();
+        const found = (currentSlots || []).find(s => s && String(s).replace(/\s+/g, '').toUpperCase() === clean);
         return found || shiftStr;
       };
 
@@ -1557,25 +1558,53 @@ const [isScrolled, setIsScrolled] = useState(false);
     formTechnician,
   ]);
 
-  // Lưu trữ dữ liệu khi có thay đổi (LocalStorage cache phản hồi tức thì 0ms, tiết kiệm 100% Egress mạng)
+  // Lưu trữ dữ liệu khi có thay đổi (LocalStorage cache 0ms + tự động đồng bộ lên Supabase Cloud)
   useEffect(() => {
     localStorage.setItem("sunhouse_metrics_2025", JSON.stringify(metrics2025));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveMonthlyMetrics(2025, metrics2025), 1200);
+      return () => clearTimeout(timer);
+    }
   }, [metrics2025]);
 
   useEffect(() => {
     localStorage.setItem("sunhouse_metrics_2026", JSON.stringify(metrics2026));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveMonthlyMetrics(2026, metrics2026), 1200);
+      return () => clearTimeout(timer);
+    }
   }, [metrics2026]);
 
   useEffect(() => {
     localStorage.setItem("sunhouse_monthly_targets", JSON.stringify(monthlyTargets));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveMonthlyTargets(monthlyTargets), 1200);
+      return () => clearTimeout(timer);
+    }
   }, [monthlyTargets]);
 
   useEffect(() => {
+    localStorage.setItem("sunhouse_monthly_plan_v2", JSON.stringify(monthlyPlan));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveMonthlyPlan(monthlyPlan), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [monthlyPlan]);
+
+  useEffect(() => {
     localStorage.setItem("sunhouse_gas_daily_reports_v2", JSON.stringify(gasDailyReports));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveGasDailyReports(gasDailyReports), 1200);
+      return () => clearTimeout(timer);
+    }
   }, [gasDailyReports]);
 
   useEffect(() => {
     localStorage.setItem("sunhouse_assembly_daily_reports_v2", JSON.stringify(assemblyDailyReports));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveAssemblyDailyReports(assemblyDailyReports), 1200);
+      return () => clearTimeout(timer);
+    }
   }, [assemblyDailyReports]);
 
   useEffect(() => {
@@ -1585,6 +1614,54 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
   }, [products]);
+
+  useEffect(() => {
+    localStorage.setItem("sunhouse_monthly_scrap_v2", JSON.stringify(monthlyScrap));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveMonthlyScrapReport(monthlyScrap), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [monthlyScrap]);
+
+  useEffect(() => {
+    localStorage.setItem("sunhouse_weekly_scrap_v2", JSON.stringify(weeklyScrap));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveWeeklyScrapReport(weeklyScrap), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [weeklyScrap]);
+
+  useEffect(() => {
+    localStorage.setItem("sunhouse_weekly_dclr_error_v2", JSON.stringify(weeklyDclrError));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveWeeklyDclrErrorRate(weeklyDclrError), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [weeklyDclrError]);
+
+  useEffect(() => {
+    localStorage.setItem("sunhouse_monthly_dclr_error_v2", JSON.stringify(monthlyDclrError));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveMonthlyDclrErrorRate(monthlyDclrError), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [monthlyDclrError]);
+
+  useEffect(() => {
+    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveDeclaredImeis(declaredImeis), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [declaredImeis]);
+
+  useEffect(() => {
+    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
+    if (isLoadedRef.current) {
+      const timer = setTimeout(() => storage.saveScannedImeis(scannedImeis), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [scannedImeis]);
 
   // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
   const syncHistoricalMetricsWithLogs = useCallback((currentLogs: ProductionLog[]) => {
@@ -1909,9 +1986,9 @@ const [isScrolled, setIsScrolled] = useState(false);
           const rowQty = Number(row.quantity ?? row.actual_units ?? 0);
 
           if (rowDate === formDateRef.current && rowProdCode) {
-            const cleanShift = rowShift ? rowShift.replace(/\s+/g, '').toUpperCase() : '';
+            const cleanShift = rowShift ? String(rowShift).replace(/\s+/g, '').toUpperCase() : '';
             const matchedProd = products.find(
-              (p) => p.code === rowProdCode || getProductModelCode(p.name) === rowProdCode || p.id === rowProdCode
+              (p) => p.code === rowProdCode || (p.name && getProductModelCode(p.name) === rowProdCode) || p.id === rowProdCode
             );
             const targetProdId = matchedProd?.id || rowProdCode;
 
@@ -1919,7 +1996,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             if (rowShift && isValidHourlySlot(rowShift)) {
               setFormSlots((prevSlots) => {
                 const cleanPrev = prevSlots.filter(isValidHourlySlot);
-                const hasSlot = cleanPrev.some((s) => s.replace(/\s+/g, '').toUpperCase() === cleanShift);
+                const hasSlot = cleanPrev.some((s) => s && String(s).replace(/\s+/g, '').toUpperCase() === cleanShift);
                 if (!hasSlot) {
                   return [...cleanPrev, rowShift].sort((a, b) => {
                     const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
@@ -1940,14 +2017,15 @@ const [isScrolled, setIsScrolled] = useState(false);
                     if (
                       active &&
                       (active.id === it.id || active.id === it.productId) &&
-                      active.slotName.replace(/\s+/g, '').toUpperCase() === cleanShift &&
+                      active.slotName &&
+                      String(active.slotName).replace(/\s+/g, '').toUpperCase() === cleanShift &&
                       Date.now() - active.timestamp < 3000
                     ) {
                       return it;
                     }
 
-                    const actualKey = Object.keys(it.hourlyActuals).find(
-                      (k) => k.replace(/\s+/g, '').toUpperCase() === cleanShift
+                    const actualKey = Object.keys(it.hourlyActuals || {}).find(
+                      (k) => k && String(k).replace(/\s+/g, '').toUpperCase() === cleanShift
                     ) || rowShift;
 
                     if (it.hourlyActuals[actualKey] === rowQty) return it;
@@ -1987,12 +2065,13 @@ const [isScrolled, setIsScrolled] = useState(false);
                   let changed = false;
                   Object.entries(row.hourly_actuals).forEach(([slotK, slotVal]) => {
                     if (isValidHourlySlot(slotK)) {
-                      const cleanK = slotK.replace(/\s+/g, '').toUpperCase();
+                      const cleanK = slotK ? String(slotK).replace(/\s+/g, '').toUpperCase() : '';
                       const active = activeEditingCellRef.current;
                       if (
                         active &&
                         (active.id === it.id || active.id === it.productId) &&
-                        active.slotName.replace(/\s+/g, '').toUpperCase() === cleanK &&
+                        active.slotName &&
+                        String(active.slotName).replace(/\s+/g, '').toUpperCase() === cleanK &&
                         Date.now() - active.timestamp < 3000
                       ) {
                         return;
@@ -2083,7 +2162,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         }
       },
 
-      // (8) Bảng daily_reports (Bếp Gas, Lắp ráp, IMEI): Cập nhật state trực tiếp
+      // (8) Bảng daily_reports (Bếp Gas, Lắp ráp, IMEI, Phế phẩm, Lỗi): Cập nhật state trực tiếp
       onDailyReportsChange: (payload) => {
         if (payload.new && payload.new.report_data) {
           const id = payload.new.id;
@@ -2094,7 +2173,19 @@ const [isScrolled, setIsScrolled] = useState(false);
           } else if (id === 'assembly_daily_reports' || repType === 'assembly') {
             setAssemblyDailyReports(payload.new.report_data);
             localStorage.setItem('sunhouse_assembly_daily_reports_v2', JSON.stringify(payload.new.report_data));
-          } else if (id === 'declared_imeis') {
+          } else if (id === 'monthly_scrap_report' || repType === 'scrap') {
+            setMonthlyScrap(payload.new.report_data);
+            localStorage.setItem('sunhouse_monthly_scrap_v2', JSON.stringify(payload.new.report_data));
+          } else if (id === 'weekly_scrap_report') {
+            setWeeklyScrap(payload.new.report_data);
+            localStorage.setItem('sunhouse_weekly_scrap_v2', JSON.stringify(payload.new.report_data));
+          } else if (id === 'weekly_dclr_error' || repType === 'dclr_error') {
+            setWeeklyDclrError(payload.new.report_data);
+            localStorage.setItem('sunhouse_weekly_dclr_error_v2', JSON.stringify(payload.new.report_data));
+          } else if (id === 'monthly_dclr_error') {
+            setMonthlyDclrError(payload.new.report_data);
+            localStorage.setItem('sunhouse_monthly_dclr_error_v2', JSON.stringify(payload.new.report_data));
+          } else if (id === 'declared_imeis' || repType === 'imei') {
             setDeclaredImeis(payload.new.report_data);
             localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(payload.new.report_data));
           } else if (id === 'scanned_imeis') {
@@ -2638,7 +2729,8 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [filterDivision]);
 
   const getProductionMonthFromWeek = (weekStr: string): number => {
-    const weekNum = parseInt(weekStr.replace("W", ""), 10);
+    if (!weekStr) return 1;
+    const weekNum = parseInt(String(weekStr).replace("W", ""), 10) || 1;
     let w1Start = new Date(selectedYear, 0, 1);
     while (w1Start.getDay() !== 5) {
       w1Start.setDate(w1Start.getDate() - 1);
@@ -2755,7 +2847,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const valid = getFridayToThursdayWeeksForMonth(selectedYear, scrapQualityMonth);
     if (valid.length === 0) return [];
     const firstWeekStr = valid[0];
-    const firstWeekNum = parseInt(firstWeekStr.replace("W", ""), 10);
+    const firstWeekNum = parseInt(String(firstWeekStr || '').replace("W", ""), 10) || 1;
     const pastWeeks = [];
     if (firstWeekNum > 2) {
       pastWeeks.push("W" + (firstWeekNum - 2));
@@ -3226,7 +3318,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
       const newWeekly = Object.entries(weeklyData).map(([week, data]) => {
         const value = data.mandays > 0 ? Number(((data.totalEq / data.mandays) / 9.03 * 100).toFixed(1)) : 0;
-        return { name: week, value, rawWeek: parseInt(week.replace("Tuần ", "")) };
+        return { name: week, value, rawWeek: parseInt(String(week || '').replace("Tuần ", "")) || 0 };
       });
       newWeekly.sort((a, b) => a.rawWeek - b.rawWeek);
 
@@ -5599,6 +5691,51 @@ const [isScrolled, setIsScrolled] = useState(false);
     XLSX.writeFile(wb, `KHSX_Thang_${month}_${year}_${filterDivision}.xlsx`);
   };
 
+  // Đẩy toàn bộ 100% dữ liệu hiện tại lên Supabase Cloud để tất cả các thiết bị đồng nhất
+  const pushAllDataToSupabase = async () => {
+    try {
+      setSyncStatus('syncing');
+      setSyncMessage('Đang đẩy toàn bộ 100% dữ liệu hệ thống lên Supabase Cloud...');
+
+      const results = await Promise.allSettled([
+        storage.saveAllWorkers(workers),
+        storage.saveAllProducts(products),
+        storage.saveAllAttendanceLogs(attendanceLogs),
+        storage.saveAllProductionLogs(productionLogs),
+        storage.saveMonthlyPlan(monthlyPlan),
+        storage.saveMonthlyTargets(monthlyTargets),
+        storage.saveMonthlyMetrics(2025, metrics2025),
+        storage.saveMonthlyMetrics(2026, metrics2026),
+        storage.saveGasDailyReports(gasDailyReports),
+        storage.saveAssemblyDailyReports(assemblyDailyReports),
+        storage.saveMonthlyScrapReport(monthlyScrap),
+        storage.saveWeeklyScrapReport(weeklyScrap),
+        storage.saveWeeklyDclrErrorRate(weeklyDclrError),
+        storage.saveMonthlyDclrErrorRate(monthlyDclrError),
+        storage.saveDeclaredImeis(declaredImeis),
+        storage.saveScannedImeis(scannedImeis)
+      ]);
+
+      const failedCount = results.filter(r => r.status === 'rejected').length;
+      if (failedCount === 0) {
+        setSyncStatus('synced');
+        setSyncMessage('Đã đồng bộ toàn bộ 100% dữ liệu lên Supabase');
+        setFormMessage('🎉 Đã đẩy toàn bộ 100% dữ liệu (16 hạng mục) lên Supabase Cloud thành công! Tất cả máy truy cập link Vercel sẽ tự động nhận dữ liệu mới nhất.');
+      } else {
+        setSyncStatus('error');
+        setSyncMessage(`Đã đồng bộ (${16 - failedCount}/16 mục thành công)`);
+        setFormMessage(`⚠️ Đã đồng bộ ${16 - failedCount}/16 hạng mục dữ liệu lên Supabase.`);
+      }
+      setTimeout(() => setFormMessage(''), 5000);
+    } catch (err) {
+      console.error('Lỗi khi đẩy toàn bộ dữ liệu lên Supabase:', err);
+      setSyncStatus('error');
+      setSyncMessage('Lỗi kết nối Supabase');
+      setFormMessage('❌ Lỗi khi đồng bộ dữ liệu lên Supabase. Vui lòng kiểm tra kết nối mạng!');
+      setTimeout(() => setFormMessage(''), 4500);
+    }
+  };
+
   // Đồng bộ toàn bộ dữ liệu khi cập nhật dữ liệu hệ thống:
   // Chỉ đồng bộ lấy lại toàn bộ dữ liệu mới nhất từ Supabase Cloud / Backend,
   // không cần lưu lại file, tự động dọn dẹp các cache thừa để tối ưu dung lượng và tránh làm nặng app.
@@ -5777,7 +5914,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
           // Helper chuẩn hóa tên Sheet để tìm kiếm linh hoạt (không phân biệt hoa thường, dấu, khoảng trắng)
           const normalizeSheetName = (s: string) => 
-            s.toLowerCase().replace(/[\s\-_]+/g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            (s ? String(s) : "").toLowerCase().replace(/[\s\-_]+/g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
           const findSheet = (keywords: string[]) => {
             const sheetNames = wb.SheetNames;
@@ -6458,6 +6595,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     isSupabaseConfigured,
     syncHistoryFromLogs,
     syncEntireSystem,
+    pushAllDataToSupabase,
     storageInfo,
     handleOptimizeStorage,
     toastError,

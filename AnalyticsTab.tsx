@@ -112,40 +112,41 @@ export const AnalyticsTab = ({
 
                       {/* Render markdown analysis styled cleanly */}
                       <div className="prose prose-invert prose-rose max-w-none text-slate-300 font-sans space-y-4">
-                        {aiAnalysis.split("\n").map((line, idx) => {
+                        {(aiAnalysis || "").split("\n").map((line, idx) => {
+                          if (!line) return <div key={idx} className="h-2" />;
                           // Very basic markdown formatting parser for pristine UI
                           if (line.startsWith("###")) {
                             return (
                               <h4 key={idx} className="text-sm font-bold text-white border-l-4 border-rose-500 pl-2 mt-4 mb-2">
-                                {line.replace("###", "").trim()}
+                                {(line || "").replace("###", "").trim()}
                               </h4>
                             );
                           }
                           if (line.startsWith("##")) {
                             return (
                               <h3 key={idx} className="text-base font-bold text-rose-400 border-b border-slate-800 pb-1 mt-6 mb-3">
-                                {line.replace("##", "").trim()}
+                                {(line || "").replace("##", "").trim()}
                               </h3>
                             );
                           }
                           if (line.startsWith("#")) {
                             return (
                               <h2 key={idx} className="text-lg font-bold text-white mt-8 mb-4">
-                                {line.replace("#", "").trim()}
+                                {(line || "").replace("#", "").trim()}
                               </h2>
                             );
                           }
                           if (line.startsWith("-") || line.startsWith("*")) {
                             return (
                               <li key={idx} className="ml-4 list-disc text-slate-300 py-0.5">
-                                {line.replace(/^[-*]\s*/, "").replace(/\*\*(.*?)\*\*/g, "$1")}
+                                {(line || "").replace(/^[-*]\s*/, "").replace(/\*\*(.*?)\*\*/g, "$1")}
                               </li>
                             );
                           }
                           return (
                             <p key={idx} className="text-xs md:text-sm text-slate-300 leading-relaxed text-justify">
                               {/* Bold conversion */}
-                              {line.split("**").map((part, i) => (i % 2 === 1 ? <strong key={i} className="text-white font-semibold">{part}</strong> : part))}
+                              {(line || "").split("**").map((part, i) => (i % 2 === 1 ? <strong key={i} className="text-white font-semibold">{part}</strong> : part))}
                             </p>
                           );
                         })}

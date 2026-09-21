@@ -339,6 +339,7 @@ export default function App() {
     isSupabaseConfigured,
     syncHistoryFromLogs,
     syncEntireSystem,
+    pushAllDataToSupabase,
     storageInfo,
     handleOptimizeStorage,
     toastError,
@@ -960,6 +961,7 @@ export default function App() {
               restoreMode={restoreMode}
               setRestoreMode={setRestoreMode}
               syncEntireSystem={syncEntireSystem}
+              pushAllDataToSupabase={pushAllDataToSupabase}
               syncStatus={syncStatus}
               syncMessage={syncMessage}
               isSupabaseConfigured={isSupabaseConfigured}

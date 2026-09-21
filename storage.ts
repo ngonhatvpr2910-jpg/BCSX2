@@ -962,7 +962,7 @@ export async function upsertHourlyProductionLog(
 async function executeUpsertHourlyInternal(
   payload: HourlyLogPayload
 ): Promise<{ data: any; error: any }> {
-  const cleanSlot = payload.shift.replace(/\s+/g, ''); // Ví dụ: '8H-9H'
+  const cleanSlot = (payload.shift || '').replace(/\s+/g, ''); // Ví dụ: '8H-9H'
   const qty = Number(payload.quantity || 0);
 
   // 1. Thử ghi theo Granular Schema (nếu database đã xác nhận có các cột work_date, department, product_code,...)
@@ -1803,7 +1803,7 @@ export async function getFormDraft(date: string, shift: string): Promise<FormDra
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const draftId = `draft_${date}_${shift.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const draftId = `draft_${date || ''}_${(shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
       const { data, error } = await supabase
         .from('daily_reports')
         .select('report_data')
@@ -1833,7 +1833,7 @@ export async function saveFormDraft(draft: FormDraftData): Promise<void> {
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const draftId = `draft_${draft.date}_${draft.shift.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const draftId = `draft_${draft.date || ''}_${(draft.shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
       const { error } = await supabase.from('daily_reports').upsert({
         id: draftId,
         report_type: 'form_draft',
@@ -1856,7 +1856,7 @@ export async function clearFormDraft(date: string, shift: string): Promise<void>
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const draftId = `draft_${date}_${shift.replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const draftId = `draft_${date || ''}_${(shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
       await supabase.from('daily_reports').delete().eq('id', draftId);
     } catch (err) {
       console.warn('[storage] Xóa form draft thất bại:', err);

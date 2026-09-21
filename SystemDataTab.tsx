@@ -11,6 +11,7 @@ export const SystemDataTab = ({
   restoreMode,
   setRestoreMode,
   syncEntireSystem,
+  pushAllDataToSupabase,
   syncStatus,
   syncMessage,
   isSupabaseConfigured,
@@ -46,11 +47,11 @@ export const SystemDataTab = ({
                   <h2 className="text-2xl font-black text-white tracking-tight">Cập Nhật & Đồng Bộ Toàn Bộ Dữ Liệu</h2>
                   <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
                     <Zap className="w-3 h-3 text-emerald-400" />
-                    Chỉ lấy dữ liệu • Không lưu file • Tối ưu dung lượng
+                    Đồng bộ 100% lên Supabase • Tự động trên tất cả thiết bị
                   </span>
                 </div>
                 <p className="text-slate-400 text-sm max-w-2xl leading-relaxed">
-                  Đồng bộ và làm mới trực tiếp toàn bộ dữ liệu từ cơ sở dữ liệu Cloud. <span className="text-slate-200 font-medium">Hoàn toàn không cần lưu trữ lại file tạm</span>, tự động giải phóng các cache thừa giúp tối ưu hóa dung lượng máy và tránh làm nặng ứng dụng.
+                  Toàn bộ dữ liệu được đồng bộ trực tuyến với Supabase Cloud. Mọi thao tác nhập liệu hay sửa đổi trên một máy sẽ tự động cập nhật ngay lập tức sang tất cả các thiết bị khác khi truy cập link Vercel.
                 </p>
               </div>
             </div>
@@ -67,14 +68,27 @@ export const SystemDataTab = ({
                 </button>
               )}
 
+              {pushAllDataToSupabase && (
+                <button
+                  onClick={pushAllDataToSupabase}
+                  disabled={syncStatus === 'syncing'}
+                  className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-blue-950/40 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed text-sm"
+                  title="Đẩy toàn bộ 16 danh mục dữ liệu hiện tại lên Supabase Cloud"
+                >
+                  <Upload className={`w-4 h-4 ${syncStatus === 'syncing' ? 'animate-bounce' : ''}`} />
+                  Đẩy toàn bộ lên Supabase
+                </button>
+              )}
+
               {syncEntireSystem && (
                 <button
                   onClick={syncEntireSystem}
                   disabled={syncStatus === 'syncing'}
-                  className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-emerald-950/40 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-emerald-950/40 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed text-sm"
+                  title="Lấy lại toàn bộ dữ liệu mới nhất từ Supabase Cloud"
                 >
                   <RefreshCw className={`w-4 h-4 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                  {syncStatus === 'syncing' ? 'Đang lấy lại dữ liệu...' : 'Đồng bộ & Lấy lại dữ liệu'}
+                  {syncStatus === 'syncing' ? 'Đang đồng bộ...' : 'Tải lại từ Cloud'}
                 </button>
               )}
             </div>
