@@ -202,7 +202,16 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   const [metrics2026, setMetrics2026] = useState<MonthlyMetric[]>(() => {
     const saved = localStorage.getItem("sunhouse_metrics_2026_v2");
-    return saved ? JSON.parse(saved) : HISTORICAL_2026;
+    const rawList: MonthlyMetric[] = saved ? JSON.parse(saved) : HISTORICAL_2026;
+    return rawList.map((m) => {
+      if (m.year === 2026 && m.month === 7) {
+        return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+      }
+      if (m.year === 2026 && m.month === 8) {
+        return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+      }
+      return m;
+    });
   });
 
   const [monthlyScrap, setMonthlyScrap] = useState<MonthlyScrapReport[]>(() => {
@@ -1872,6 +1881,15 @@ const [isScrolled, setIsScrolled] = useState(false);
     const updateYearMetrics = (year: 2025 | 2026, setMetrics: React.Dispatch<React.SetStateAction<MonthlyMetric[]>>) => {
       setMetrics((prevMetrics) => {
         const updated = prevMetrics.map((m) => {
+          if (year === 2026 && (m.month === 7 || m.month === 8)) {
+            return {
+              ...m,
+              laborProductivityPercent: m.month === 7 ? 135.5 : 133.6,
+              actualProducts: m.month === 7 ? 13025 : 12615,
+              equivalentProducts: m.month === 7 ? 17233 : 19601,
+              productionMandays: m.month === 7 ? 1408 : 1625,
+            };
+          }
           const monthLogs = yearMonthMap[year]?.[m.month];
           if (!monthLogs || monthLogs.length === 0) {
             return m;
@@ -1963,7 +1981,18 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (loadedPlan && Object.keys(loadedPlan).length > 0) setMonthlyPlan(loadedPlan);
       if (loadedTargets && Object.keys(loadedTargets).length > 0) setMonthlyTargets(loadedTargets);
       if (loaded2025 && loaded2025.length > 0) setMetrics2025(loaded2025);
-      if (loaded2026 && loaded2026.length > 0) setMetrics2026(loaded2026);
+      if (loaded2026 && loaded2026.length > 0) {
+        const guarded2026 = loaded2026.map(m => {
+          if (m.year === 2026 && m.month === 7) {
+            return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+          }
+          if (m.year === 2026 && m.month === 8) {
+            return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+          }
+          return m;
+        });
+        setMetrics2026(guarded2026);
+      }
       if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
       if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
       if (allDaily.declaredImeis !== undefined && Array.isArray(allDaily.declaredImeis)) {
@@ -2884,8 +2913,28 @@ const [isScrolled, setIsScrolled] = useState(false);
       const currentMonth = now.getMonth() + 1;
       const isPast = m.year < currentYear || (m.year === currentYear && m.month < currentMonth);
       const isCurrent = m.year === currentYear && m.month === currentMonth;
-      const isLocked = (isPast || isCurrent) && !(m.year === 2026 && (m.month === 7 || m.month === 8));
+      const isLocked = isPast || isCurrent || (m.year === 2026 && (m.month === 7 || m.month === 8));
       const isAutoReportMonth = isLocked;
+
+      // Tháng 7 & 8 năm 2026 được khóa và giữ nguyên dữ liệu này theo yêu cầu
+      if (m.year === 2026 && m.month === 7) {
+        return {
+          ...m,
+          laborProductivityPercent: 135.5,
+          actualProducts: 13025,
+          equivalentProducts: 17233,
+          productionMandays: 1408,
+        };
+      }
+      if (m.year === 2026 && m.month === 8) {
+        return {
+          ...m,
+          laborProductivityPercent: 133.6,
+          actualProducts: 12615,
+          equivalentProducts: 19601,
+          productionMandays: 1625,
+        };
+      }
 
       // Get logs for this month
       const logsForMonth = productionLogs.filter(

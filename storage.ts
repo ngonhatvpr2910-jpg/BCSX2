@@ -1247,6 +1247,19 @@ export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetri
   const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
   const initial = year === 2025 ? HISTORICAL_2025 : HISTORICAL_2026;
 
+  const enforceLocked2026 = (list: MonthlyMetric[]) => {
+    if (year !== 2026 || !Array.isArray(list)) return list;
+    return list.map((m) => {
+      if (m.month === 7) {
+        return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+      }
+      if (m.month === 8) {
+        return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+      }
+      return m;
+    });
+  };
+
   if (supabase && isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -1256,26 +1269,38 @@ export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetri
         .single();
 
       if (!error && data && data.metrics_data) {
-        setLocal(key, data.metrics_data);
-        return data.metrics_data as MonthlyMetric[];
+        const guarded = enforceLocked2026(data.metrics_data as MonthlyMetric[]);
+        setLocal(key, guarded);
+        return guarded;
       }
     } catch (err) {
       console.warn(`[storage] Không thể tải metrics ${year} từ Supabase, dùng local fallback:`, err);
     }
   }
-  return getLocal<MonthlyMetric[]>(key, initial);
+  const localVal = getLocal<MonthlyMetric[]>(key, initial);
+  return enforceLocked2026(localVal);
 }
 
 export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetric[]): Promise<void> {
   const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
-  setLocal(key, metrics);
+  const metricsToSave = (year === 2026 && Array.isArray(metrics)) ? metrics.map((m) => {
+    if (m.month === 7) {
+      return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+    }
+    if (m.month === 8) {
+      return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+    }
+    return m;
+  }) : metrics;
+
+  setLocal(key, metricsToSave);
 
   if (supabase && isSupabaseConfigured) {
     try {
       const { error } = await supabase.from('monthly_metrics').upsert({
         id: `metrics_${year}`,
         year: year,
-        metrics_data: metrics,
+        metrics_data: metricsToSave,
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn(`[storage] Lưu metrics ${year} lên Supabase:`, error.message || error);
