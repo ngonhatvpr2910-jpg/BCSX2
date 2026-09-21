@@ -184,6 +184,8 @@ export default function App() {
     deleteConfirmId,
     setScannedImeis,
     setDeleteConfirmId,
+    handleDeleteScannedImei,
+    handleClearAllScannedImeis,
     filteredDeclaredImeis,
     declareFilterDate,
     setDeclareFilterDate,
@@ -192,6 +194,8 @@ export default function App() {
     deleteDeclareConfirmImei,
     setDeclaredImeis,
     setDeleteDeclareConfirmImei,
+    handleDeleteDeclaredImei,
+    handleClearAllDeclaredImeis,
     comparisonRecords,
     setCompareStatusFilter,
     compareStatusFilter,
@@ -740,6 +744,8 @@ export default function App() {
       deleteConfirmId={deleteConfirmId}
       setScannedImeis={setScannedImeis}
       setDeleteConfirmId={setDeleteConfirmId}
+      handleDeleteScannedImei={handleDeleteScannedImei}
+      handleClearAllScannedImeis={handleClearAllScannedImeis}
       filteredDeclaredImeis={filteredDeclaredImeis}
       declareFilterDate={declareFilterDate}
       setDeclareFilterDate={setDeclareFilterDate}
@@ -748,6 +754,8 @@ export default function App() {
       deleteDeclareConfirmImei={deleteDeclareConfirmImei}
       setDeclaredImeis={setDeclaredImeis}
       setDeleteDeclareConfirmImei={setDeleteDeclareConfirmImei}
+      handleDeleteDeclaredImei={handleDeleteDeclaredImei}
+      handleClearAllDeclaredImeis={handleClearAllDeclaredImeis}
       comparisonRecords={comparisonRecords}
       setCompareStatusFilter={setCompareStatusFilter}
       compareStatusFilter={compareStatusFilter}

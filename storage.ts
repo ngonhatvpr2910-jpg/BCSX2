@@ -101,10 +101,10 @@ export function broadcastTableUpdate(tableName: string, extraData?: any): void {
   try {
     const ch = getSharedBroadcastChannel();
     if (!ch) return;
-    // Chỉ gửi thông tin cần thiết và metadata nhẹ, tránh gửi toàn bộ object lớn làm ngốn Egress
+    // Gửi thông tin cần thiết và metadata nhẹ, hoặc payload thay đổi tức thì
     const payloadToSend: any = { table: tableName, senderId: CLIENT_SESSION_ID, timestamp: Date.now() };
-    if (extraData && typeof extraData === 'object' && extraData.year) {
-      payloadToSend.year = extraData.year;
+    if (extraData && typeof extraData === 'object') {
+      Object.assign(payloadToSend, extraData);
     }
     ch.send({
       type: 'broadcast',
@@ -1298,6 +1298,8 @@ export interface AllDailyReportsBundle {
   monthlyDclr: MonthlyDclreErrorRate[];
   declaredImeis: any[];
   scannedImeis: any[];
+  declaredImeisUpdatedAt?: string;
+  scannedImeisUpdatedAt?: string;
 }
 
 // Gom toàn bộ 8 bảng báo cáo hàng ngày vào 1 query duy nhất để tiết kiệm 87% Egress và tải siêu tốc
@@ -1317,7 +1319,7 @@ export async function getAllDailyReports(): Promise<AllDailyReportsBundle> {
     try {
       const { data, error } = await supabase
         .from('daily_reports')
-        .select('id, report_type, report_data')
+        .select('id, report_type, report_data, updated_at')
         .in('id', [
           'gas_daily_reports',
           'assembly_daily_reports',
@@ -1331,7 +1333,7 @@ export async function getAllDailyReports(): Promise<AllDailyReportsBundle> {
 
       if (!error && data && data.length > 0) {
         data.forEach((row: any) => {
-          if (!row.report_data) return;
+          if (row.report_data === undefined || row.report_data === null) return;
           if (row.id === 'gas_daily_reports') {
             result.gas = row.report_data;
             setLocal(STORAGE_KEYS.GAS_DAILY, row.report_data);
@@ -1351,11 +1353,33 @@ export async function getAllDailyReports(): Promise<AllDailyReportsBundle> {
             result.monthlyDclr = row.report_data;
             setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, row.report_data);
           } else if (row.id === 'declared_imeis') {
-            result.declaredImeis = row.report_data;
-            setLocal(STORAGE_KEYS.DECLARED_IMEIS, row.report_data);
+            const rowTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+            const currentLocalTs = Number(getLocal('sunhouse_declared_imeis_ts', 0)) || 0;
+            if (rowTs >= currentLocalTs) {
+              result.declaredImeis = Array.isArray(row.report_data) ? row.report_data : [];
+              result.declaredImeisUpdatedAt = row.updated_at;
+              setLocal(STORAGE_KEYS.DECLARED_IMEIS, result.declaredImeis);
+              if (row.updated_at) {
+                setLocal('sunhouse_declared_imeis_ts', rowTs);
+              }
+            } else {
+              result.declaredImeis = getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
+              result.declaredImeisUpdatedAt = new Date(currentLocalTs).toISOString();
+            }
           } else if (row.id === 'scanned_imeis') {
-            result.scannedImeis = row.report_data;
-            setLocal(STORAGE_KEYS.SCANNED_IMEIS, row.report_data);
+            const rowTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+            const currentLocalTs = Number(getLocal('sunhouse_scanned_imeis_ts', 0)) || 0;
+            if (rowTs >= currentLocalTs) {
+              result.scannedImeis = Array.isArray(row.report_data) ? row.report_data : [];
+              result.scannedImeisUpdatedAt = row.updated_at;
+              setLocal(STORAGE_KEYS.SCANNED_IMEIS, result.scannedImeis);
+              if (row.updated_at) {
+                setLocal('sunhouse_scanned_imeis_ts', rowTs);
+              }
+            } else {
+              result.scannedImeis = getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+              result.scannedImeisUpdatedAt = new Date(currentLocalTs).toISOString();
+            }
           }
         });
       }
@@ -1607,13 +1631,23 @@ export async function getDeclaredImeis(): Promise<any[]> {
     try {
       const { data, error } = await supabase
         .from('daily_reports')
-        .select('report_data')
+        .select('report_data, updated_at')
         .eq('id', 'declared_imeis')
         .maybeSingle();
 
-      if (!error && data?.report_data) {
-        setLocal(STORAGE_KEYS.DECLARED_IMEIS, data.report_data);
-        return data.report_data as any[];
+      if (!error && data && data.report_data !== undefined) {
+        const rowTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+        const localTs = Number(getLocal('sunhouse_declared_imeis_ts', 0)) || 0;
+        if (rowTs >= localTs) {
+          const list = Array.isArray(data.report_data) ? data.report_data : [];
+          setLocal(STORAGE_KEYS.DECLARED_IMEIS, list);
+          if (data.updated_at) {
+            setLocal('sunhouse_declared_imeis_ts', rowTs);
+          }
+          return list;
+        } else {
+          return getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
+        }
       }
     } catch (err) {
       console.warn('[storage] Không thể tải declared_imeis từ Supabase, dùng local fallback:', err);
@@ -1622,18 +1656,20 @@ export async function getDeclaredImeis(): Promise<any[]> {
   return getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
 }
 
-export async function saveDeclaredImeis(records: any[]): Promise<void> {
+export async function saveDeclaredImeis(records: any[], timestamp?: number): Promise<void> {
+  const ts = timestamp || Date.now();
   setLocal(STORAGE_KEYS.DECLARED_IMEIS, records);
+  setLocal('sunhouse_declared_imeis_ts', ts);
   if (supabase && isSupabaseConfigured) {
     try {
       const { error } = await supabase.from('daily_reports').upsert({
         id: 'declared_imeis',
-        report_type: 'imei',
+        report_type: 'declared_imei',
         report_data: records,
-        updated_at: new Date().toISOString(),
+        updated_at: new Date(ts).toISOString(),
       });
       if (error) console.warn('[storage] Lưu declared_imeis lên Supabase:', error.message || error);
-      broadcastTableUpdate('daily_reports');
+      broadcastTableUpdate('daily_reports', { subType: 'declared_imeis', data: records, timestamp: ts });
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu declared_imeis:', err?.message || err);
     }
@@ -1645,13 +1681,23 @@ export async function getScannedImeis(): Promise<any[]> {
     try {
       const { data, error } = await supabase
         .from('daily_reports')
-        .select('report_data')
+        .select('report_data, updated_at')
         .eq('id', 'scanned_imeis')
         .maybeSingle();
 
-      if (!error && data?.report_data) {
-        setLocal(STORAGE_KEYS.SCANNED_IMEIS, data.report_data);
-        return data.report_data as any[];
+      if (!error && data && data.report_data !== undefined) {
+        const rowTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+        const localTs = Number(getLocal('sunhouse_scanned_imeis_ts', 0)) || 0;
+        if (rowTs >= localTs) {
+          const list = Array.isArray(data.report_data) ? data.report_data : [];
+          setLocal(STORAGE_KEYS.SCANNED_IMEIS, list);
+          if (data.updated_at) {
+            setLocal('sunhouse_scanned_imeis_ts', rowTs);
+          }
+          return list;
+        } else {
+          return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+        }
       }
     } catch (err) {
       console.warn('[storage] Không thể tải scanned_imeis từ Supabase, dùng local fallback:', err);
@@ -1660,18 +1706,20 @@ export async function getScannedImeis(): Promise<any[]> {
   return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
 }
 
-export async function saveScannedImeis(records: any[]): Promise<void> {
+export async function saveScannedImeis(records: any[], timestamp?: number): Promise<void> {
+  const ts = timestamp || Date.now();
   setLocal(STORAGE_KEYS.SCANNED_IMEIS, records);
+  setLocal('sunhouse_scanned_imeis_ts', ts);
   if (supabase && isSupabaseConfigured) {
     try {
       const { error } = await supabase.from('daily_reports').upsert({
         id: 'scanned_imeis',
-        report_type: 'imei',
+        report_type: 'scanned_imei',
         report_data: records,
-        updated_at: new Date().toISOString(),
+        updated_at: new Date(ts).toISOString(),
       });
       if (error) console.warn('[storage] Lưu scanned_imeis lên Supabase:', error.message || error);
-      broadcastTableUpdate('daily_reports');
+      broadcastTableUpdate('daily_reports', { subType: 'scanned_imeis', data: records, timestamp: ts });
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu scanned_imeis:', err?.message || err);
     }

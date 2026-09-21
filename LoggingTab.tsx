@@ -390,16 +390,19 @@ export const LoggingTab = ({
                                 .reduce((acc, item) => acc + (item.hourlyActuals[slot] || 0), 0);
                               return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-blue-700 min-w-[80px] w-[80px] text-center">{sum || 0}</td>
                             })}
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 font-bold text-center">{displayTotalActualQty || 0}</td>
+                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 font-bold text-center">{(Number(displayTotalActualQty) || 0)}</td>
                             <td className={`py-1 px-1 border-r border-slate-300 font-bold text-center ${
-                              displayTotalActualQty - displayTotalPlanQty >= 0 ? "text-emerald-400" : "text-rose-400"
+                              (Number(displayTotalActualQty) || 0) - (Number(displayTotalPlanQty) || 0) >= 0 ? "text-emerald-400" : "text-rose-400"
                             }`}>
-                              {displayTotalActualQty - displayTotalPlanQty > 0 
-                                ? `+${displayTotalActualQty - displayTotalPlanQty}` 
-                                : displayTotalActualQty - displayTotalPlanQty}
+                              {(() => {
+                                const act = Number(displayTotalActualQty) || 0;
+                                const plan = Number(displayTotalPlanQty) || 0;
+                                const diff = act - plan;
+                                return diff > 0 ? `+${diff}` : String(diff);
+                              })()}
                             </td>
                             <td className="py-1 px-1 border-r border-slate-300 text-blue-700 font-bold text-center">
-                              {displayTotalRemainingQty}
+                              {Number(displayTotalRemainingQty) || 0}
                             </td>
                             <td></td>
                           </tr>
@@ -415,11 +418,12 @@ export const LoggingTab = ({
                                 .filter(item => filterDivision === "ALL" || (products.find(x => x.id === item.productId) || products[0]).group === filterDivision)
                                 .forEach(item => {
                                 const p = products.find(x => x.id === item.productId) || products[0];
-                                sumEq += Math.round((item.hourlyActuals[slot] || 0) * p.factor);
+                                const factor = Number(p?.factor) || 1;
+                                sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * factor);
                               });
                               return <td key={slot} className="py-1 px-1 border-r border-slate-300 min-w-[80px] w-[80px] text-center text-blue-700">{sumEq || 0}</td>
                             })}
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">{displayTotalEqQty || 0}</td>
+                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">{Number(displayTotalEqQty) || 0}</td>
                             <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
                             <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
                             <td></td>
@@ -433,22 +437,28 @@ export const LoggingTab = ({
                             {formSlots.map(slot => {
                               const sumActual = formModelItems
                                 .filter(item => filterDivision === "ALL" || (products.find(x => x.id === item.productId) || products[0]).group === filterDivision)
-                                .reduce((acc, item) => acc + (item.hourlyActuals[slot] || 0), 0);
-                              const hourlyPlan = displayTotalPlanQty / (formSlots.length || 1);
+                                .reduce((acc, item) => acc + (Number(item.hourlyActuals[slot]) || 0), 0);
+                              const safePlanQty = Number(displayTotalPlanQty) || 0;
+                              const hourlyPlan = safePlanQty / (formSlots.length || 1);
                               let rate = 0;
-                              if (hourlyPlan > 0) {
+                              if (hourlyPlan > 0 && Number.isFinite(sumActual / hourlyPlan)) {
                                 rate = Number(((sumActual / hourlyPlan) * 100).toFixed(1));
                               }
                               return (
                                 <td key={slot} className={`py-1 px-1 border-r border-slate-800 min-w-[80px] w-[80px] text-center ${rate >= 100 ? "text-emerald-400" : rate > 0 ? "text-amber-400" : "text-rose-400"}`}>
-                                  {displayTotalPlanQty > 0 ? `${rate}%` : "-"}
+                                  {safePlanQty > 0 ? `${Number.isFinite(rate) ? rate : 0}%` : "-"}
                                 </td>
                               )
                             })}
                             <td className="py-1 px-1 border-r border-slate-800 text-amber-400">
-                              {displayTotalPlanQty > 0 
-                                ? `${((displayTotalActualQty / displayTotalPlanQty) * 100).toFixed(1)}%` 
-                                : "-"}
+                              {(() => {
+                                const act = Number(displayTotalActualQty) || 0;
+                                const plan = Number(displayTotalPlanQty) || 0;
+                                if (plan > 0 && Number.isFinite(act / plan)) {
+                                  return `${((act / plan) * 100).toFixed(1)}%`;
+                                }
+                                return "-";
+                              })()}
                             </td>
                             <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
                             <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
@@ -1315,11 +1325,11 @@ export const LoggingTab = ({
                                     </td>
                                     <td className="py-2.5 px-2.5 text-center">
                                       <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${
-                                        log.laborProductivityPercent >= kpis.monthTarget
+                                        (Number(log.laborProductivityPercent) || 0) >= kpis.monthTarget
                                           ? "bg-emerald-950/60 text-emerald-400 border-emerald-900/50"
                                           : "bg-amber-950/60 text-amber-400 border-amber-900/50"
                                       }`}>
-                                        {log.laborProductivityPercent.toFixed(0)}%
+                                        {(Number(log.laborProductivityPercent) || 0).toFixed(0)}%
                                       </span>
                                     </td>
                                   </tr>

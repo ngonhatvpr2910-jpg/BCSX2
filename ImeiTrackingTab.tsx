@@ -34,6 +34,8 @@ export const ImeiTrackingTab = ({
   deleteConfirmId,
   setScannedImeis,
   setDeleteConfirmId,
+  handleDeleteScannedImei,
+  handleClearAllScannedImeis,
   filteredDeclaredImeis,
   declareFilterDate,
   setDeclareFilterDate,
@@ -42,6 +44,8 @@ export const ImeiTrackingTab = ({
   deleteDeclareConfirmImei,
   setDeclaredImeis,
   setDeleteDeclareConfirmImei,
+  handleDeleteDeclaredImei,
+  handleClearAllDeclaredImeis,
   comparisonRecords,
   setCompareStatusFilter,
   compareStatusFilter,
@@ -203,6 +207,16 @@ export const ImeiTrackingTab = ({
                           onChange={(e) => setImeiSearchTerm(e.target.value)}
                           className="px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 transition-colors"
                         />
+                        {scannedImeis.length > 0 && (
+                          <button
+                            onClick={handleClearAllScannedImeis}
+                            title="Xóa toàn bộ lịch sử quét IMEI (đồng bộ ngay sang các máy khác)"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-rose-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Xóa Tất Cả</span>
+                          </button>
+                        )}
                      </div>
                   </div>
                   
@@ -245,8 +259,12 @@ export const ImeiTrackingTab = ({
                                        <span className="text-[10px] text-slate-400 font-sans">Xóa?</span>
                                        <button
                                          onClick={() => {
-                                           setScannedImeis(prev => prev.filter(x => x.id !== item.id));
-                                           setDeleteConfirmId(null);
+                                           if (handleDeleteScannedImei) {
+                                             handleDeleteScannedImei(item.id);
+                                           } else {
+                                             setScannedImeis((prev: any[]) => prev.filter(x => x.id !== item.id));
+                                             setDeleteConfirmId(null);
+                                           }
                                          }}
                                          className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px] font-bold cursor-pointer"
                                        >
@@ -310,6 +328,16 @@ export const ImeiTrackingTab = ({
                           onChange={(e) => setDeclareSearchTerm(e.target.value)}
                           className="px-3 py-1.5 bg-slate-900 border border-slate-700 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 transition-colors"
                         />
+                        {declaredImeis.length > 0 && (
+                          <button
+                            onClick={handleClearAllDeclaredImeis}
+                            title="Xóa toàn bộ danh sách khai báo IMEI (đồng bộ ngay sang các máy khác)"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-950/40 hover:bg-rose-900/60 border border-rose-800/60 text-rose-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Xóa Tất Cả</span>
+                          </button>
+                        )}
                      </div>
                   </div>
                   
@@ -361,8 +389,12 @@ export const ImeiTrackingTab = ({
                                        <span className="text-[10px] text-slate-400 font-sans">Xóa?</span>
                                        <button
                                          onClick={() => {
-                                           setDeclaredImeis(prev => prev.filter(x => x.imei !== item.imei));
-                                           setDeleteDeclareConfirmImei(null);
+                                           if (handleDeleteDeclaredImei) {
+                                             handleDeleteDeclaredImei(item.imei);
+                                           } else {
+                                             setDeclaredImeis((prev: any[]) => prev.filter(x => x.imei !== item.imei));
+                                             setDeleteDeclareConfirmImei(null);
+                                           }
                                          }}
                                          className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px] font-bold cursor-pointer"
                                        >

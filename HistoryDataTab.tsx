@@ -336,13 +336,13 @@ export const HistoryDataTab = ({
                                   <div className="bg-slate-950 p-3 border border-slate-800 rounded-lg shadow-xl text-xs space-y-1.5 font-sans">
                                     <p className="font-semibold text-white border-b border-slate-800 pb-1">{data.monthFullName} ({selectedYear})</p>
                                     <p className="text-slate-400">
-                                      Thực tế ({historyYear}): <span className="text-orange-400 font-semibold">{data.hasActualData ? `${data.actualNSLD}%` : "Chưa nhập / Trống"}</span>
+                                      Thực tế ({historyYear}): <span className="text-orange-400 font-semibold">{data.hasActualData && Number.isFinite(data.actualNSLD) ? `${data.actualNSLD}%` : "Chưa nhập / Trống"}</span>
                                     </p>
                                     <p className="text-slate-400">
-                                      Năm 2025: <span className="text-blue-400 font-semibold">{data.nsld2025 !== null ? `${data.nsld2025}%` : "Chưa nhập / Trống"}</span>
+                                      Năm 2025: <span className="text-blue-400 font-semibold">{data.nsld2025 !== null && Number.isFinite(data.nsld2025) ? `${data.nsld2025}%` : "Chưa nhập / Trống"}</span>
                                     </p>
                                     <p className="text-slate-400">
-                                      Mục tiêu: <span className="text-rose-400 font-semibold">{data.targetNSLD}%</span>
+                                      Mục tiêu: <span className="text-rose-400 font-semibold">{Number.isFinite(data.targetNSLD) ? `${data.targetNSLD}%` : "0%"}</span>
                                     </p>
                                     <div className="border-t border-slate-800/80 pt-1.5 mt-1 text-[10px] text-slate-500 space-y-0.5 font-mono">
                                       {data.hasActualData && <p className="text-amber-500/85">🔒 Ô dữ liệu tháng này đã được lưu khóa</p>}

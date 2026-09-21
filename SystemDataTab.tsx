@@ -270,7 +270,7 @@ export const SystemDataTab = ({
                     Khôi Phục Dữ Liệu Từ File Ngoại Tuyến (.xlsx, .xls, .json)
                   </h3>
                   <p className="text-sm text-slate-400 leading-relaxed max-w-xl">
-                    Tải lên file sao lưu ngoại tuyến để nạp trực tiếp vào cơ sở dữ liệu. Sau khi đọc xong, hệ thống giải phóng ngay lập tức file đệm trong bộ nhớ để đảm bảo ứng dụng luôn nhẹ.
+                    Tải lên file sao lưu ngoại tuyến để nạp trực tiếp vào cơ sở dữ liệu. Hệ thống tự động nhận diện và tương thích hoàn toàn với cả file xuất từ phiên bản cũ (chưa có tab Nhân sự & QR), bảo lưu an toàn dữ liệu hiện hành.
                   </p>
                 </div>
                 <div className="flex flex-col gap-2 shrink-0 self-start sm:self-auto">

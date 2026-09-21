@@ -244,11 +244,13 @@ export const MonthlyPlanTab = ({
                 {/* Tóm tắt nhanh Thực hiện Kế hoạch */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   {(() => {
-                    const totalPlan = monthlyPlanExecution.reduce((sum, item) => sum + item.planQty, 0);
-                    const totalPlanEq = monthlyPlanExecution.reduce((sum, item) => sum + item.planEqQty, 0);
-                    const totalActual = monthlyPlanExecution.reduce((sum, item) => sum + item.actualQty, 0);
-                    const totalActualEq = monthlyPlanExecution.reduce((sum, item) => sum + item.actualEqQty, 0);
-                    const overallPercent = totalPlan > 0 ? Number(((totalActual / totalPlan) * 100).toFixed(1)) : (totalActual > 0 ? 100 : 0);
+                    const totalPlan = monthlyPlanExecution.reduce((sum, item) => sum + (Number(item.planQty) || 0), 0);
+                    const totalPlanEq = monthlyPlanExecution.reduce((sum, item) => sum + (Number(item.planEqQty) || 0), 0);
+                    const totalActual = monthlyPlanExecution.reduce((sum, item) => sum + (Number(item.actualQty) || 0), 0);
+                    const totalActualEq = monthlyPlanExecution.reduce((sum, item) => sum + (Number(item.actualEqQty) || 0), 0);
+                    const overallPercent = totalPlan > 0 && Number.isFinite(totalActual / totalPlan) 
+                      ? Number(((totalActual / totalPlan) * 100).toFixed(1)) 
+                      : (totalActual > 0 ? 100 : 0);
                     const diffSum = totalActual - totalPlan;
 
                     const [year, month] = formDate.split("-");
@@ -268,6 +270,9 @@ export const MonthlyPlanTab = ({
                       : executionFilterType === "WEEK" 
                         ? `Thực Tế ${weekLabelPart}` 
                         : `Thực Tế Ngày ${executionFilterDay}`;
+
+                    const safePercent = Number.isFinite(overallPercent) ? overallPercent : 0;
+                    const safeDiff = Number.isFinite(diffSum) ? diffSum : 0;
 
                     return (
                       <>
@@ -290,20 +295,20 @@ export const MonthlyPlanTab = ({
                         <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-850">
                           <div className="text-[10px] text-slate-400 uppercase font-mono font-semibold">Tỷ Lệ Hoàn Thành</div>
                           <div className="text-lg font-black text-rose-500 mt-1 font-mono">
-                            {overallPercent}%
+                            {safePercent}%
                           </div>
                           <div className="w-full bg-slate-850 rounded-full h-1.5 mt-1.5">
                             <div 
                               className="bg-rose-500 h-1.5 rounded-full transition-all duration-500" 
-                              style={{ width: `${Math.min(100, overallPercent)}%` }}
+                              style={{ width: `${Math.min(100, Math.max(0, safePercent))}%` }}
                             />
                           </div>
                         </div>
 
                         <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-850">
                           <div className="text-[10px] text-slate-400 uppercase font-mono font-semibold">Hao Hụt / Vượt Tiến Độ</div>
-                          <div className={`text-lg font-black mt-1 font-mono ${diffSum >= 0 ? "text-emerald-400" : "text-rose-450"}`}>
-                            {diffSum >= 0 ? `+${(diffSum || 0).toLocaleString()}` : (diffSum || 0).toLocaleString()} <span className="text-xs font-normal font-sans text-slate-400">SP</span>
+                          <div className={`text-lg font-black mt-1 font-mono ${safeDiff >= 0 ? "text-emerald-400" : "text-rose-450"}`}>
+                            {safeDiff >= 0 ? `+${safeDiff.toLocaleString()}` : safeDiff.toLocaleString()} <span className="text-xs font-normal font-sans text-slate-400">SP</span>
                           </div>
                           <div className="text-[10px] text-slate-500 mt-0.5 font-sans">So với chỉ tiêu ban đầu</div>
                         </div>
@@ -381,13 +386,13 @@ export const MonthlyPlanTab = ({
                                       className={`h-2 rounded-full transition-all duration-300 ${
                                         isSuccess ? "bg-emerald-500" : "bg-rose-500"
                                       }`}
-                                      style={{ width: `${Math.min(100, item.progressPercent)}%` }}
+                                      style={{ width: `${Math.min(100, Math.max(0, Number.isFinite(item.progressPercent) ? item.progressPercent : 0))}%` }}
                                     />
                                   </div>
                                   <span className={`font-mono text-xs font-bold min-w-[45px] ${
                                     isSuccess ? "text-emerald-400" : "text-rose-400"
                                   }`}>
-                                    {item.progressPercent}%
+                                    {Number.isFinite(item.progressPercent) ? item.progressPercent : 0}%
                                   </span>
                                   {isSuccess ? (
                                     <CheckCircle className="w-4 h-4 text-emerald-500 inline-block" />

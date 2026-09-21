@@ -228,7 +228,7 @@ export const DashboardTab = ({
                         <div className="mt-2 text-xs flex items-center justify-between">
                           <span className="text-slate-400">Tỉ lệ hoàn thành</span>
                           <span className="font-mono font-bold text-emerald-400">
-                              {kpis.plannedRevenue > 0 ? (Math.round((kpis.actualRevenue / kpis.plannedRevenue) * 100) || 0) : 0}%
+                              {kpis.plannedRevenue > 0 && Number.isFinite(kpis.actualRevenue) ? (Math.round((kpis.actualRevenue / kpis.plannedRevenue) * 100) || 0) : 0}%
                           </span>
                         </div>
                         <div className="mt-3 pt-2 border-t border-slate-800/50 flex justify-end">

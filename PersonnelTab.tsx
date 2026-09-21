@@ -343,9 +343,11 @@ export const PersonnelTab: React.FC<PersonnelTabProps> = ({
             loaiLD = getWorkerTypeFromId(maNV);
           }
           
+          const qrCodeCustom = row.length >= 5 && row[4] ? String(row[4]).trim() : maNV;
+
           importedWorkers.push({
             id: maNV,
-            qrCode: maNV,
+            qrCode: qrCodeCustom || maNV,
             name: tenNV,
             division: boPhan,
             type: loaiLD
@@ -1645,12 +1647,17 @@ const ReportView = ({
     
     // Tính tổng số giờ làm của cả bảng
     const totalHoursWorked = tableLogs.reduce((sum, log) => {
-      if (log.checkOutTime) {
-        const diffMs = new Date(log.checkOutTime).getTime() - new Date(log.checkInTime).getTime();
-        return sum + (diffMs / 3600000);
+      if (log.checkOutTime && log.checkInTime) {
+        const outTime = new Date(log.checkOutTime).getTime();
+        const inTime = new Date(log.checkInTime).getTime();
+        if (!isNaN(outTime) && !isNaN(inTime) && outTime > inTime) {
+          const diffMs = outTime - inTime;
+          return sum + (diffMs / 3600000);
+        }
       }
       return sum;
     }, 0);
+    const safeTotalHours = Number.isFinite(totalHoursWorked) ? totalHoursWorked : 0;
 
     return (
       <div className={`bg-white border rounded-2xl overflow-hidden shadow-sm mb-6 transition-all ${borderColor}`}>
@@ -1683,10 +1690,10 @@ const ReportView = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {totalHoursWorked > 0 && (
+            {safeTotalHours > 0 && (
               <div className="hidden sm:flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 font-mono shadow-sm">
                 <Clock className="w-3.5 h-3.5 text-amber-500" />
-                <span>Tổng: <strong className="text-slate-900 font-bold">{totalHoursWorked.toFixed(1)}h</strong></span>
+                <span>Tổng: <strong className="text-slate-900 font-bold">{safeTotalHours.toFixed(1)}h</strong></span>
               </div>
             )}
             <button

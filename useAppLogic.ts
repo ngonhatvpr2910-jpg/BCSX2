@@ -252,19 +252,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     return saved ? JSON.parse(saved) : JSON.parse(JSON.stringify(MONTHLY_DCLR_ERROR_RATE));
   });
 
-  useEffect(() => {
-    localStorage.setItem("sunhouse_monthly_scrap_v2", JSON.stringify(monthlyScrap));
-  }, [monthlyScrap]);
-  useEffect(() => {
-    localStorage.setItem("sunhouse_weekly_scrap_v2", JSON.stringify(weeklyScrap));
-  }, [weeklyScrap]);
-  useEffect(() => {
-    localStorage.setItem("sunhouse_weekly_dclr_error_v2", JSON.stringify(weeklyDclrError));
-  }, [weeklyDclrError]);
-  useEffect(() => {
-    localStorage.setItem("sunhouse_monthly_dclr_error_v2", JSON.stringify(monthlyDclrError));
-  }, [monthlyDclrError]);
-
   const [products, setProducts] = useState<ProductDefinition[]>(() => {
     const defaultProducts = SUNHOUSE_PRODUCTS.map(p => ({
       ...p,
@@ -318,11 +305,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     return initial;
   });
 
-  useEffect(() => {
-    if (!isLoadedRef.current) return;
-    storage.saveMonthlyPlan(monthlyPlan);
-  }, [monthlyPlan]);
-
   const [productionLogs, setProductionLogs] = useState<ProductionLog[]>(() => {
     // Clear legacy storage keys
     localStorage.removeItem("sunhouse_production_logs");
@@ -346,11 +328,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
     return INITIAL_PRODUCTION_LOGS;
   });
-
-  useEffect(() => {
-    if (!isLoadedRef.current) return;
-    localStorage.setItem("sunhouse_production_logs_v2", JSON.stringify(productionLogs));
-  }, [productionLogs]);
 
   // Dữ liệu báo cáo chi tiết Excel cho 2 chuyền (Bếp Gas & Lắp ráp)
   const [gasDailyReports, setGasDailyReports] = useState<DailyReportRowGas[]>(() => {
@@ -620,6 +597,21 @@ const [isScrolled, setIsScrolled] = useState(false);
   }
 
   interface DeclaredImei { imei: string; productId: string; date: string; }
+  // Dấu thời gian thao tác cuối cùng (Last-Action-Wins) để giải quyết xung đột đồng bộ giữa nhiều thiết bị
+  const lastScannedImeisActionTimeRef = useRef<number>(
+    (() => {
+      const s = localStorage.getItem("sunhouse_scanned_imeis_ts");
+      return s ? Number(s) : 0;
+    })()
+  );
+  const lastDeclaredImeisActionTimeRef = useRef<number>(
+    (() => {
+      const s = localStorage.getItem("sunhouse_declared_imeis_ts");
+      return s ? Number(s) : 0;
+    })()
+  );
+  const isRemoteSyncRef = useRef<boolean>(false);
+
   const [declaredImeis, setDeclaredImeis] = useState<DeclaredImei[]>(() => {
     const saved = localStorage.getItem("sunhouse_declared_imeis");
     if (saved) {
@@ -627,9 +619,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
     return [];
   });
-  useEffect(() => {
-    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
-  }, [declaredImeis]);
 
   const [scannedImeis, setScannedImeis] = useState<ScannedImei[]>(() => {
     const saved = localStorage.getItem("sunhouse_scanned_imeis");
@@ -644,10 +633,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
     return [];
   });
-
-  useEffect(() => {
-    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
-  }, [scannedImeis]);
 
   const [imeiSearchTerm, setImeiSearchTerm] = useState("");
   const [imeiFilterDate, setImeiFilterDate] = useState(new Date().toISOString().slice(0, 10));
@@ -835,12 +820,12 @@ const [isScrolled, setIsScrolled] = useState(false);
   };
 
   const handleScanSubmit = (scannedValue?: any) => {
-    let val = scanInput;
-    if (typeof scannedValue === 'string') {
-      val = scannedValue;
-    }
-    if (!val || typeof val !== 'string' || !val.trim()) return;
-    val = val.trim().toUpperCase();
+    let rawVal = typeof scannedValue === 'string' ? scannedValue : scanInput;
+    if (!rawVal || typeof rawVal !== 'string' || !rawVal.trim()) return;
+    
+    // Chuẩn hóa chuỗi quét: loại bỏ mã định danh đầu đọc (AIM code prefix như ]C1, ]e0...), khoảng trắng và chuyển chữ hoa
+    let val = rawVal.trim().replace(/^\][A-Za-z0-9]{2}/, '').trim().toUpperCase();
+    if (!val) return;
     
     // (1) Tự động xác định khung giờ làm việc hiện tại
     const currentHour = new Date().getHours();
@@ -864,10 +849,25 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
     
     // (2) TỰ ĐỘNG NHẬN DIỆN MODEL ĐA TẦNG (MULTI-STRATEGY AUTO-DETECTION)
+    // Nạp danh sách IMEI khai báo mới nhất (từ state hoặc bộ nhớ cục bộ nếu vừa nhận từ link khác)
+    let currentDeclaredList = declaredImeis;
+    if (!currentDeclaredList || currentDeclaredList.length === 0) {
+      try {
+        const local = localStorage.getItem("sunhouse_declared_imeis");
+        if (local) currentDeclaredList = JSON.parse(local);
+      } catch(e) {}
+    }
+
     // Chiến lược A: Tìm trong danh sách IMEI đã khai báo (Ưu tiên ngày hiện tại, sau đó toàn bộ)
-    let declaration = declaredImeis.find(d => d.imei.toUpperCase() === val && d.date === formDate);
+    let declaration = currentDeclaredList.find(d => d.imei.toUpperCase() === val && d.date === formDate);
     if (!declaration) {
-      declaration = declaredImeis.find(d => d.imei.toUpperCase() === val);
+      declaration = currentDeclaredList.find(d => d.imei.toUpperCase() === val);
+    }
+    if (!declaration) {
+      declaration = currentDeclaredList.find(d => {
+        const dImei = d.imei.toUpperCase();
+        return (dImei.length >= 6 && val.includes(dImei)) || (val.length >= 6 && dImei.includes(val));
+      });
     }
 
     let matchedProduct: ProductDefinition | undefined;
@@ -878,18 +878,31 @@ const [isScrolled, setIsScrolled] = useState(false);
       matchedProduct = products.find(p => isSameProduct(p.id, declaration!.productId));
     } else {
       // Chiến lược B: Quét trực tiếp Mã Model / Barcode / Tên Model sản phẩm
+      // Hỗ trợ cả 2 chiều: chuỗi quét chứa mã Model (khi quét IMEI có mã Model) HOẶC mã Model chứa chuỗi quét
       matchedProduct = products.find(p => {
-        const modelCode = getProductModelCode(p.name);
+        const modelCode = (getProductModelCode(p.name) || '').toUpperCase();
         const codeUpper = (p.code || '').toUpperCase();
         const idUpper = (p.id || '').toUpperCase();
-        const modelUpper = (modelCode || '').toUpperCase();
-        return (
-          codeUpper === val ||
-          idUpper === val ||
-          (modelUpper && modelUpper === val) ||
-          (val.length >= 4 && codeUpper.includes(val)) ||
-          (val.length >= 4 && modelUpper && val.includes(modelUpper))
-        );
+
+        // 1. So khớp chính xác hoàn toàn
+        if (codeUpper === val || idUpper === val || (modelCode && modelCode === val)) return true;
+
+        // 2. Chuỗi quét chứa mã Model / Code sản phẩm (rất phổ biến khi máy quét đọc mã Barcode/IMEI dài)
+        if (codeUpper.length >= 3 && val.includes(codeUpper)) return true;
+        if (modelCode.length >= 3 && val.includes(modelCode)) return true;
+
+        // 3. Chuỗi quét ngắn là tiền tố hoặc chuỗi con của mã sản phẩm (nhập tắt)
+        if (val.length >= 4 && codeUpper.includes(val)) return true;
+        if (val.length >= 4 && modelCode && modelCode.includes(val)) return true;
+
+        // 4. So khớp dạng chuẩn hóa (loại bỏ dấu gạch ngang, dấu cách, ký tự đặc biệt)
+        const cleanVal = val.replace(/[^A-Z0-9]/g, '');
+        const cleanCode = codeUpper.replace(/[^A-Z0-9]/g, '');
+        const cleanModel = modelCode.replace(/[^A-Z0-9]/g, '');
+        if (cleanCode.length >= 3 && cleanVal.includes(cleanCode)) return true;
+        if (cleanModel.length >= 3 && cleanVal.includes(cleanModel)) return true;
+
+        return false;
       });
 
       // Chiến lược C: So khớp với các hàng Model đang có sẵn trên bảng biểu ca hiện tại
@@ -897,10 +910,13 @@ const [isScrolled, setIsScrolled] = useState(false);
         const existingItem = formModelItems.find(it => {
           if (it.productId.toUpperCase() === val) return true;
           const p = products.find(prod => isSameProduct(prod.id, it.productId));
-          if (p && (
-            (p.code && p.code.toUpperCase() === val) || 
-            (p.name && getProductModelCode(p.name).toUpperCase() === val)
-          )) return true;
+          if (p) {
+            const pCode = (p.code || '').toUpperCase();
+            const pModel = (getProductModelCode(p.name) || '').toUpperCase();
+            if (pCode === val || pModel === val) return true;
+            if (pCode.length >= 3 && val.includes(pCode)) return true;
+            if (pModel.length >= 3 && val.includes(pModel)) return true;
+          }
           return false;
         });
         if (existingItem) {
@@ -973,9 +989,13 @@ const [isScrolled, setIsScrolled] = useState(false);
       timestamp: new Date().toISOString(),
       slot: currentSlot
     };
+    const ts = Date.now();
+    lastScannedImeisActionTimeRef.current = ts;
     const nextScannedList = [newImei, ...scannedImeis.filter(s => s.imei.toUpperCase() !== val)];
     setScannedImeis(nextScannedList);
-    storage.saveScannedImeis(nextScannedList);
+    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(nextScannedList));
+    localStorage.setItem("sunhouse_scanned_imeis_ts", String(ts));
+    storage.saveScannedImeis(nextScannedList, ts);
 
     // (7) TẠO GÓI DRAFT VÀ PHÁT BROADCAST ĐỒNG THỜI LƯU LÊN SUPABASE (ĐỒNG BỘ 2 CHIỀU ĐA LINK)
     const draftData: storage.FormDraftData = {
@@ -1041,9 +1061,13 @@ const [isScrolled, setIsScrolled] = useState(false);
       return;
     }
 
+    const ts = Date.now();
+    lastDeclaredImeisActionTimeRef.current = ts;
     const nextDeclaredList = [newDecl, ...declaredImeis];
     setDeclaredImeis(nextDeclaredList);
-    storage.saveDeclaredImeis(nextDeclaredList);
+    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(nextDeclaredList));
+    localStorage.setItem("sunhouse_declared_imeis_ts", String(ts));
+    storage.saveDeclaredImeis(nextDeclaredList, ts);
     
     setDeclareImeiInput('');
     
@@ -1060,6 +1084,53 @@ const [isScrolled, setIsScrolled] = useState(false);
       }, 300);
     }
   };
+
+  // Thao tác xóa IMEI có bảo vệ Timestamp (Last-Action-Wins) - Đảm bảo lệnh xóa từ thiết bị này ghi đè hoàn toàn trên mọi máy khác
+  const handleDeleteScannedImei = useCallback((id: string) => {
+    const ts = Date.now();
+    lastScannedImeisActionTimeRef.current = ts;
+    setScannedImeis(prev => {
+      const next = prev.filter(x => x.id !== id);
+      localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(next));
+      localStorage.setItem("sunhouse_scanned_imeis_ts", String(ts));
+      storage.saveScannedImeis(next, ts);
+      return next;
+    });
+    setDeleteConfirmId(null);
+  }, []);
+
+  const handleClearAllScannedImeis = useCallback(() => {
+    if (!window.confirm("Bạn có chắc chắn muốn xóa toàn bộ lịch sử quét IMEI? Thao tác này sẽ đồng bộ tức thì tới tất cả các thiết bị khác.")) return;
+    const ts = Date.now();
+    lastScannedImeisActionTimeRef.current = ts;
+    setScannedImeis([]);
+    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify([]));
+    localStorage.setItem("sunhouse_scanned_imeis_ts", String(ts));
+    storage.saveScannedImeis([], ts);
+  }, []);
+
+  const handleDeleteDeclaredImei = useCallback((imei: string) => {
+    const ts = Date.now();
+    lastDeclaredImeisActionTimeRef.current = ts;
+    setDeclaredImeis(prev => {
+      const next = prev.filter(x => x.imei !== imei);
+      localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(next));
+      localStorage.setItem("sunhouse_declared_imeis_ts", String(ts));
+      storage.saveDeclaredImeis(next, ts);
+      return next;
+    });
+    setDeleteDeclareConfirmImei(null);
+  }, []);
+
+  const handleClearAllDeclaredImeis = useCallback(() => {
+    if (!window.confirm("Bạn có chắc chắn muốn xóa toàn bộ danh sách khai báo IMEI? Thao tác này sẽ đồng bộ tức thì tới tất cả các thiết bị khác.")) return;
+    const ts = Date.now();
+    lastDeclaredImeisActionTimeRef.current = ts;
+    setDeclaredImeis([]);
+    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify([]));
+    localStorage.setItem("sunhouse_declared_imeis_ts", String(ts));
+    storage.saveDeclaredImeis([], ts);
+  }, []);
 
   const [formOfficialWorkersRO, setFormOfficialWorkersRO] = useState<{ [slotName: string]: number }>(() => {
     const draft = getInitialActiveDraft();
@@ -1461,22 +1532,50 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     } else {
       // 3. Chưa có log & chưa có draft: Tự động khởi tạo từ KHSX Tháng (monthlyPlan)
+      const shiftSlots = getShiftSlots(formShift).filter(isValidHourlySlot);
+      const currentSlots = formSlotsRef.current;
+      const slotsChanged = shiftSlots.length !== currentSlots.length || shiftSlots.some((s, idx) => s !== currentSlots[idx]);
+      if (slotsChanged) {
+        setFormSlots(shiftSlots);
+      }
+
+      const initialWorkers: Record<string, number> = {};
+      shiftSlots.forEach(s => { initialWorkers[s] = 0; });
+      setFormOfficialWorkersRO(initialWorkers);
+      setFormSeasonalWorkersRO(initialWorkers);
+      setFormOfficialWorkersBG(initialWorkers);
+      setFormSeasonalWorkersBG(initialWorkers);
+
       if (!isNaN(dayNum) && monthlyPlan[ym]) {
-        const plannedProducts = products.filter(p => (monthlyPlan[ym]?.[p.id]?.[dayNum] || 0) > 0);
+        const plannedProducts = products.filter(p => {
+          const planVal = monthlyPlan[ym]?.[p.id]?.[dayNum] || 0;
+          const leftover = getPrevDayLeftover(p.id, formDate);
+          return planVal > 0 || leftover > 0;
+        });
+
         if (plannedProducts.length > 0) {
-          const shiftSlots = getShiftSlots(formShift).filter(isValidHourlySlot);
-          setFormSlots(shiftSlots);
           const newItems: FormModelItem[] = plannedProducts.map(p => {
             const initialHrs: Record<string, number> = {};
             shiftSlots.forEach(s => { initialHrs[s] = 0; });
             return {
-              id: `item-${p.id}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              id: `item-${p.id}-${formDate}-${formShift}`,
               productId: p.id,
-              dailyPlan: monthlyPlan[ym][p.id][dayNum],
+              dailyPlan: monthlyPlan[ym]?.[p.id]?.[dayNum] || 0,
               hourlyActuals: initialHrs,
             };
           });
           setFormModelItems(newItems);
+        } else {
+          const initialHrs: Record<string, number> = {};
+          shiftSlots.forEach(s => { initialHrs[s] = 0; });
+          setFormModelItems([
+            {
+              id: `item-init-${formDate}-${formShift}`,
+              productId: "mln-01",
+              dailyPlan: monthlyPlan[ym]?.["mln-01"]?.[dayNum] || 0,
+              hourlyActuals: initialHrs,
+            }
+          ]);
         }
       }
     }
@@ -1505,6 +1604,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         return found || shiftStr;
       };
 
+      let newSlotsToSet: string[] | null = null;
       setFormModelItems((prevItems) => {
         const itemMap = new Map<string, FormModelItem>();
         prevItems.forEach((it) => {
@@ -1585,11 +1685,19 @@ const [isScrolled, setIsScrolled] = useState(false);
             return hourA - hourB;
           });
         if (sortedSlots.length > 0) {
-          setFormSlots(sortedSlots);
+          const currentSlots = formSlotsRef.current;
+          const isDiff = sortedSlots.length !== currentSlots.length || sortedSlots.some((s, idx) => s !== currentSlots[idx]);
+          if (isDiff) {
+            newSlotsToSet = sortedSlots;
+          }
         }
 
         return Array.from(itemMap.values());
       });
+
+      if (newSlotsToSet) {
+        setFormSlots(newSlotsToSet);
+      }
     } catch (err: any) {
       console.error("[storage] Ngoại lệ khi fetchShiftLogsAndMapToMatrix:", err);
     }
@@ -1731,19 +1839,13 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [monthlyDclrError]);
 
   useEffect(() => {
+    if (isRemoteSyncRef.current) return;
     localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
-    if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveDeclaredImeis(declaredImeis), 1200);
-      return () => clearTimeout(timer);
-    }
   }, [declaredImeis]);
 
   useEffect(() => {
+    if (isRemoteSyncRef.current) return;
     localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
-    if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveScannedImeis(scannedImeis), 1200);
-      return () => clearTimeout(timer);
-    }
   }, [scannedImeis]);
 
   // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
@@ -1864,8 +1966,26 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (loaded2026 && loaded2026.length > 0) setMetrics2026(loaded2026);
       if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
       if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
-      if (allDaily.declaredImeis && allDaily.declaredImeis.length > 0) setDeclaredImeis(allDaily.declaredImeis);
-      if (allDaily.scannedImeis && allDaily.scannedImeis.length > 0) setScannedImeis(allDaily.scannedImeis);
+      if (allDaily.declaredImeis !== undefined && Array.isArray(allDaily.declaredImeis)) {
+        const cloudTs = allDaily.declaredImeisUpdatedAt ? new Date(allDaily.declaredImeisUpdatedAt).getTime() : 0;
+        const localTs = lastDeclaredImeisActionTimeRef.current;
+        if (cloudTs >= localTs || declaredImeis.length === 0) {
+          lastDeclaredImeisActionTimeRef.current = Math.max(localTs, cloudTs);
+          setDeclaredImeis(allDaily.declaredImeis);
+          localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(allDaily.declaredImeis));
+          localStorage.setItem('sunhouse_declared_imeis_ts', String(lastDeclaredImeisActionTimeRef.current));
+        }
+      }
+      if (allDaily.scannedImeis !== undefined && Array.isArray(allDaily.scannedImeis)) {
+        const cloudTs = allDaily.scannedImeisUpdatedAt ? new Date(allDaily.scannedImeisUpdatedAt).getTime() : 0;
+        const localTs = lastScannedImeisActionTimeRef.current;
+        if (cloudTs >= localTs || scannedImeis.length === 0) {
+          lastScannedImeisActionTimeRef.current = Math.max(localTs, cloudTs);
+          setScannedImeis(allDaily.scannedImeis);
+          localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(allDaily.scannedImeis));
+          localStorage.setItem('sunhouse_scanned_imeis_ts', String(lastScannedImeisActionTimeRef.current));
+        }
+      }
       if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
       if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
       if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
@@ -2268,12 +2388,28 @@ const [isScrolled, setIsScrolled] = useState(false);
           } else if (id === 'monthly_dclr_error') {
             setMonthlyDclrError(payload.new.report_data);
             localStorage.setItem('sunhouse_monthly_dclr_error_v2', JSON.stringify(payload.new.report_data));
-          } else if (id === 'declared_imeis' || repType === 'imei') {
-            setDeclaredImeis(payload.new.report_data);
-            localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(payload.new.report_data));
-          } else if (id === 'scanned_imeis') {
-            setScannedImeis(payload.new.report_data);
-            localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(payload.new.report_data));
+          } else if (id === 'declared_imeis' || repType === 'declared_imei') {
+            const rowTs = payload.new.updated_at ? new Date(payload.new.updated_at).getTime() : Date.now();
+            if (rowTs >= lastDeclaredImeisActionTimeRef.current) {
+              lastDeclaredImeisActionTimeRef.current = rowTs;
+              isRemoteSyncRef.current = true;
+              const records = Array.isArray(payload.new.report_data) ? payload.new.report_data : [];
+              setDeclaredImeis(records);
+              localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(records));
+              localStorage.setItem('sunhouse_declared_imeis_ts', String(rowTs));
+              setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
+            }
+          } else if (id === 'scanned_imeis' || repType === 'scanned_imei') {
+            const rowTs = payload.new.updated_at ? new Date(payload.new.updated_at).getTime() : Date.now();
+            if (rowTs >= lastScannedImeisActionTimeRef.current) {
+              lastScannedImeisActionTimeRef.current = rowTs;
+              isRemoteSyncRef.current = true;
+              const records = Array.isArray(payload.new.report_data) ? payload.new.report_data : [];
+              setScannedImeis(records);
+              localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(records));
+              localStorage.setItem('sunhouse_scanned_imeis_ts', String(rowTs));
+              setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
+            }
           }
         }
       },
@@ -2390,13 +2526,57 @@ const [isScrolled, setIsScrolled] = useState(false);
               if (m25 && m25.length > 0) setMetrics2025(m25);
               if (m26 && m26.length > 0) setMetrics2026(m26);
             }
+          } else if (table === 'scanned_imeis' || extraPayload?.subType === 'scanned_imeis') {
+            const senderTs = extraPayload?.timestamp || Date.now();
+            if (senderTs >= lastScannedImeisActionTimeRef.current) {
+              lastScannedImeisActionTimeRef.current = senderTs;
+              isRemoteSyncRef.current = true;
+              const incoming = extraPayload?.data !== undefined ? extraPayload.data : (await storage.getScannedImeis());
+              const records = Array.isArray(incoming) ? incoming : [];
+              setScannedImeis(records);
+              localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(records));
+              localStorage.setItem('sunhouse_scanned_imeis_ts', String(senderTs));
+              setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
+            }
+          } else if (table === 'declared_imeis' || extraPayload?.subType === 'declared_imeis') {
+            const senderTs = extraPayload?.timestamp || Date.now();
+            if (senderTs >= lastDeclaredImeisActionTimeRef.current) {
+              lastDeclaredImeisActionTimeRef.current = senderTs;
+              isRemoteSyncRef.current = true;
+              const incoming = extraPayload?.data !== undefined ? extraPayload.data : (await storage.getDeclaredImeis());
+              const records = Array.isArray(incoming) ? incoming : [];
+              setDeclaredImeis(records);
+              localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(records));
+              localStorage.setItem('sunhouse_declared_imeis_ts', String(senderTs));
+              setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
+            }
           } else if (table === 'daily_reports') {
             // Khi nhận broadcast cập nhật báo cáo ngày, tải lại dữ liệu mới nhất
             const allDaily = await storage.getAllDailyReports();
             if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
             if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
-            if (allDaily.declaredImeis && allDaily.declaredImeis.length > 0) setDeclaredImeis(allDaily.declaredImeis);
-            if (allDaily.scannedImeis && allDaily.scannedImeis.length > 0) setScannedImeis(allDaily.scannedImeis);
+            if (Array.isArray(allDaily.declaredImeis)) {
+              const cloudTs = allDaily.declaredImeisUpdatedAt ? new Date(allDaily.declaredImeisUpdatedAt).getTime() : 0;
+              if (cloudTs >= lastDeclaredImeisActionTimeRef.current) {
+                lastDeclaredImeisActionTimeRef.current = cloudTs;
+                isRemoteSyncRef.current = true;
+                setDeclaredImeis(allDaily.declaredImeis);
+                localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(allDaily.declaredImeis));
+                localStorage.setItem('sunhouse_declared_imeis_ts', String(cloudTs));
+                setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
+              }
+            }
+            if (Array.isArray(allDaily.scannedImeis)) {
+              const cloudTs = allDaily.scannedImeisUpdatedAt ? new Date(allDaily.scannedImeisUpdatedAt).getTime() : 0;
+              if (cloudTs >= lastScannedImeisActionTimeRef.current) {
+                lastScannedImeisActionTimeRef.current = cloudTs;
+                isRemoteSyncRef.current = true;
+                setScannedImeis(allDaily.scannedImeis);
+                localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(allDaily.scannedImeis));
+                localStorage.setItem('sunhouse_scanned_imeis_ts', String(cloudTs));
+                setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
+              }
+            }
             if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
             if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
             if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
@@ -4454,12 +4634,19 @@ const [isScrolled, setIsScrolled] = useState(false);
       });
     });
 
-    setFormOfficialWorkersRO(newOffRO);
-    setFormSeasonalWorkersRO(newSeasRO);
-    setFormOfficialWorkersBG(newOffBG);
-    setFormSeasonalWorkersBG(newSeasBG);
-    setFormOfficialWorkersRMA(newOffRMA);
-    setFormSeasonalWorkersRMA(newSeasRMA);
+    const isWorkersDifferent = (a: Record<string, number>, b: Record<string, number>) => {
+      const keysA = Object.keys(a);
+      const keysB = Object.keys(b);
+      if (keysA.length !== keysB.length) return true;
+      return keysA.some(k => a[k] !== b[k]);
+    };
+
+    if (isWorkersDifferent(newOffRO, formOfficialWorkersRO)) setFormOfficialWorkersRO(newOffRO);
+    if (isWorkersDifferent(newSeasRO, formSeasonalWorkersRO)) setFormSeasonalWorkersRO(newSeasRO);
+    if (isWorkersDifferent(newOffBG, formOfficialWorkersBG)) setFormOfficialWorkersBG(newOffBG);
+    if (isWorkersDifferent(newSeasBG, formSeasonalWorkersBG)) setFormSeasonalWorkersBG(newSeasBG);
+    if (isWorkersDifferent(newOffRMA, formOfficialWorkersRMA)) setFormOfficialWorkersRMA(newOffRMA);
+    if (isWorkersDifferent(newSeasRMA, formSeasonalWorkersRMA)) setFormSeasonalWorkersRMA(newSeasRMA);
   };
 
   useEffect(() => {
@@ -6023,16 +6210,34 @@ const [isScrolled, setIsScrolled] = useState(false);
 
         let rawBackupData: any = {};
 
+        // Helper an toàn phân tích chuỗi JSON (tránh crash khi gặp định dạng cũ hoặc giá trị rỗng)
+        const safeJsonParse = (val: any, defaultVal: any = {}) => {
+          if (!val) return defaultVal;
+          if (typeof val === 'object') return val;
+          if (typeof val === 'string') {
+            const trimmed = val.trim();
+            if (!trimmed || trimmed === 'undefined' || trimmed === 'null' || trimmed === '[object Object]') {
+              return defaultVal;
+            }
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return defaultVal;
+            }
+          }
+          return defaultVal;
+        };
+
         if (isJsonFile) {
           // --- Xử lý file JSON Backup ---
           const text = evt.target?.result as string;
           rawBackupData = JSON.parse(text);
         } else {
-          // --- Xử lý file Excel Backup ---
+          // --- Xử lý file Excel Backup (Hỗ trợ cả bản mới và bản cũ chưa có tab Nhân sự / QR) ---
           const bstr = evt.target?.result;
           const wb = XLSX.read(bstr, { type: "binary" });
 
-          // Helper chuẩn hóa tên Sheet để tìm kiếm linh hoạt (không phân biệt hoa thường, dấu, khoảng trắng)
+          // Helper chuẩn hóa tên Sheet để tìm kiếm linh hoạt (không phân biệt hoa thường, dấu tiếng Việt, khoảng trắng, gạch dưới)
           const normalizeSheetName = (s: string) => 
             (s ? String(s) : "").toLowerCase().replace(/[\s\-_]+/g, '').normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 
@@ -6040,7 +6245,10 @@ const [isScrolled, setIsScrolled] = useState(false);
             const sheetNames = wb.SheetNames;
             for (const name of sheetNames) {
               const norm = normalizeSheetName(name);
-              if (keywords.some(kw => norm.includes(normalizeSheetName(kw)))) {
+              if (keywords.some(kw => {
+                const normKw = normalizeSheetName(kw);
+                return norm === normKw || norm.includes(normKw) || normKw.includes(norm);
+              })) {
                 return wb.Sheets[name];
               }
             }
@@ -6053,23 +6261,112 @@ const [isScrolled, setIsScrolled] = useState(false);
             return XLSX.utils.sheet_to_json(ws);
           };
 
-          rawBackupData.productionLogs = getSheetData(["production_logs", "productionlogs", "nhat_ky_ca", "nhatky", "logs"]);
-          rawBackupData.products = getSheetData(["products", "san_pham", "sanpham", "danhmuc"]);
-          rawBackupData.workers = getSheetData(["workers", "nhan_su", "nhansu", "congnhan"]);
-          rawBackupData.attendanceLogs = getSheetData(["attendance_logs", "attendance", "diem_danh", "diemdanh", "chamcong"]);
-          rawBackupData.monthlyTargets = getSheetData(["monthly_targets", "targets", "muc_tieu", "muctieu"]);
-          rawBackupData.monthlyPlan = getSheetData(["monthly_plan", "monthlyplan", "ke_hoach", "kehoach", "plan"]);
-          rawBackupData.gasDailyReports = getSheetData(["gas_daily_reports", "gasdailyreports", "gas", "bep_gas", "bepgas"]);
-          rawBackupData.assemblyDailyReports = getSheetData(["assembly_daily_reports", "assemblydailyreports", "assembly", "lap_rap", "laprap", "dcro"]);
-          rawBackupData.metrics2025 = getSheetData(["metrics_2025", "metrics2025", "2025"]);
-          rawBackupData.metrics2026 = getSheetData(["metrics_2026", "metrics2026", "2026"]);
-          rawBackupData.monthlyScrap = getSheetData(["monthly_scrap", "monthlyscrap", "scrap_thang"]);
-          rawBackupData.weeklyScrap = getSheetData(["weekly_scrap", "weeklyscrap", "scrap_tuan"]);
-          rawBackupData.weeklyDclrError = getSheetData(["weekly_dclr_error", "weeklydclr", "loi_tuan"]);
-          rawBackupData.monthlyDclrError = getSheetData(["monthly_dclr_error", "monthlydclr", "loi_thang"]);
-          rawBackupData.declaredImeis = getSheetData(["declared_imeis", "declaredimeis", "khai_bao_imei", "declared"]);
-          rawBackupData.scannedImeis = getSheetData(["scanned_imeis", "scannedimeis", "quet_imei", "scanned"]);
+          // Danh mục từ khóa phong phú mở rộng nhằm tương thích với toàn bộ các phiên bản trước
+          rawBackupData.productionLogs = getSheetData([
+            "production_logs", "productionlogs", "production_log", "productionlog", 
+            "nhat_ky_ca", "nhatkyca", "nhat_ky_san_xuat", "nhatkysanxuat", "nhat_ky_sx", 
+            "nhatkysx", "nhat_ky", "nhatky", "logs", "log", "san_xuat", "sanxuat", 
+            "production", "daily_logs", "dailylogs", "ca_lam_viec", "calamviec", "bc_san_xuat", "baocaosanxuat"
+          ]);
+
+          rawBackupData.products = getSheetData([
+            "products", "product", "san_pham", "sanpham", "danh_muc_san_pham", 
+            "danhmucsanpham", "danhmuc_sanpham", "danh_sach_san_pham", "danhsachsanpham", 
+            "danhmuc", "danh_muc", "dm_sanpham", "dmsanpham", "hang_hoa", "hanghoa", "model"
+          ]);
+
+          rawBackupData.workers = getSheetData([
+            "workers", "worker", "nhan_su", "nhansu", "danh_sach_nhan_su", 
+            "danhsachnhansu", "cong_nhan", "congnhan", "lao_dong", "laodong", "nhan_vien", "nhanvien"
+          ]);
+
+          rawBackupData.attendanceLogs = getSheetData([
+            "attendance_logs", "attendancelogs", "attendance", "diem_danh", "diemdanh", 
+            "cham_cong", "chamcong", "bang_cong", "bangcong", "diem_danh_ca"
+          ]);
+
+          rawBackupData.monthlyTargets = getSheetData([
+            "monthly_targets", "monthlytargets", "monthly_target", "targets", "target", 
+            "muc_tieu", "muctieu", "chi_tieu", "chitieu", "muc_tieu_thang", "muctieuthang", 
+            "muc_tieu_nsld", "muctieunsld", "target_nsld"
+          ]);
+
+          rawBackupData.monthlyPlan = getSheetData([
+            "monthly_plan", "monthlyplan", "ke_hoach", "kehoach", "plan", 
+            "khsx", "khsx_thang", "khsxthang", "ke_hoach_thang", "kehoachthang", 
+            "ke_hoach_san_xuat", "kehoachsanxuat"
+          ]);
+
+          rawBackupData.gasDailyReports = getSheetData([
+            "gas_daily_reports", "gasdailyreports", "gas_daily", "daily_gas", "dailygas", 
+            "gas", "bep_gas", "bepgas", "bao_cao_gas", "baocaogas", "gas_reports"
+          ]);
+
+          rawBackupData.assemblyDailyReports = getSheetData([
+            "assembly_daily_reports", "assemblydailyreports", "assembly_daily", "daily_assembly", 
+            "dailyassembly", "assembly", "lap_rap", "laprap", "dcro", "dc_ro", 
+            "bao_cao_lap_rap", "baocaolaprap", "assembly_reports"
+          ]);
+
+          rawBackupData.metrics2025 = getSheetData([
+            "metrics_2025", "metrics2025", "metric_2025", "2025", 
+            "chi_so_2025", "chiso2025", "hieu_suat_2025", "hieusuat2025", "nsld_2025"
+          ]);
+
+          rawBackupData.metrics2026 = getSheetData([
+            "metrics_2026", "metrics2026", "metric_2026", "2026", 
+            "chi_so_2026", "chiso2026", "hieu_suat_2026", "hieusuat2026", "nsld_2026"
+          ]);
+
+          rawBackupData.monthlyScrap = getSheetData([
+            "monthly_scrap", "monthlyscrap", "scrap_thang", "scrapthang", 
+            "phe_pham_thang", "phephamthang", "hang_hong_thang", "hanghongthang", "scrap"
+          ]);
+
+          rawBackupData.weeklyScrap = getSheetData([
+            "weekly_scrap", "weeklyscrap", "scrap_tuan", "scraptuan", 
+            "phe_pham_tuan", "phephamtuan", "hang_hong_tuan", "hanghongtuan"
+          ]);
+
+          rawBackupData.weeklyDclrError = getSheetData([
+            "weekly_dclr_error", "weeklydclrerror", "weekly_dclr", "weeklydclr", 
+            "loi_tuan", "loituan", "ti_le_loi_tuan", "tileloituan", "dclr_tuan", "dclrtuan", "loi_dclr_tuan"
+          ]);
+
+          rawBackupData.monthlyDclrError = getSheetData([
+            "monthly_dclr_error", "monthlydclrerror", "monthly_dclr", "monthlydclr", 
+            "loi_thang", "loithang", "ti_le_loi_thang", "tileloithang", "dclr_thang", "dclrthang", "loi_dclr_thang"
+          ]);
+
+          rawBackupData.declaredImeis = getSheetData([
+            "declared_imeis", "declaredimeis", "khai_bao_imei", "khaibaoimei", 
+            "declared_imei", "declared", "imei_khai_bao", "danh_sach_imei"
+          ]);
+
+          rawBackupData.scannedImeis = getSheetData([
+            "scanned_imeis", "scannedimeis", "quet_imei", "quetimei", 
+            "scanned_imei", "scanned", "imei_da_quet", "doi_chieu_imei"
+          ]);
+
+          // Nếu file Excel chỉ có 1 sheet hoặc xuất lẻ mà tên sheet không khớp từ khóa
+          if (wb.SheetNames.length === 1 && !rawBackupData.productionLogs && !rawBackupData.products && !rawBackupData.monthlyPlan) {
+            const singleWs = wb.Sheets[wb.SheetNames[0]];
+            const singleRows = XLSX.utils.sheet_to_json<any>(singleWs);
+            if (singleRows.length > 0) {
+              const keys = Object.keys(singleRows[0]).map(k => k.toLowerCase());
+              if (keys.some(k => k.includes('actual') || k.includes('thực tế') || k.includes('shift') || k.includes('ca') || k.includes('chuyền') || k.includes('line'))) {
+                rawBackupData.productionLogs = singleRows;
+              } else if (keys.some(k => k.includes('factor') || k.includes('hệ số') || k.includes('group') || k.includes('ngành hàng') || k.includes('nhóm'))) {
+                rawBackupData.products = singleRows;
+              } else if (keys.some(k => k.includes('day_') || k.includes('yearmonth') || k.includes('tháng') || k.includes('kế hoạch'))) {
+                rawBackupData.monthlyPlan = singleRows;
+              }
+            }
+          }
         }
+
+        // Nhận diện file thuộc phiên bản cũ (chưa tích hợp tab Nhân sự và QR/IMEI)
+        const isLegacyVersion = !rawBackupData.workers && !rawBackupData.attendanceLogs && !rawBackupData.declaredImeis && !rawBackupData.scannedImeis;
 
         const stats = {
           logs: 0,
@@ -6083,16 +6380,59 @@ const [isScrolled, setIsScrolled] = useState(false);
         // 1. Khôi phục Nhật ký sản xuất (Production Logs)
         let finalLogs = productionLogs;
         if (rawBackupData.productionLogs && Array.isArray(rawBackupData.productionLogs)) {
-          const parsedLogs: ProductionLog[] = rawBackupData.productionLogs.map((log: any, idx: number) => ({
-            ...log,
-            id: log.id || `restored_log_${Date.now()}_${idx}`,
-            hourlyActuals: log.hourlyActuals 
-              ? (typeof log.hourlyActuals === 'string' ? JSON.parse(log.hourlyActuals) : log.hourlyActuals) 
-              : {},
-            hourlyWorkers: log.hourlyWorkers 
-              ? (typeof log.hourlyWorkers === 'string' ? JSON.parse(log.hourlyWorkers) : log.hourlyWorkers) 
-              : {}
-          }));
+          const parsedLogs: ProductionLog[] = rawBackupData.productionLogs.map((log: any, idx: number) => {
+            const rawDate = String(log.date || log['Ngày'] || log['ngay'] || log['Date'] || '').trim();
+            const rawShift = String(log.shift || log['Ca'] || log['ca'] || log['Shift'] || 'Ca HC (08:00 - 17:00)').trim();
+            const rawLineId = String(log.lineId || log.line_id || log['Mã Chuyền'] || log['Chuyền'] || log['line'] || 'line-mln-1').trim();
+            const rawLineName = String(log.lineName || log.line_name || log['Tên Chuyền'] || 'Chuyền Lắp Ráp 1').trim();
+            const rawProdId = String(log.productId || log.product_id || log['Mã SP'] || log['Mã sản phẩm'] || log['Model'] || '').trim();
+            const rawProdName = String(log.productName || log.product_name || log['Tên SP'] || log['Tên sản phẩm'] || log['Tên Model'] || rawProdId).trim();
+            
+            const rawGroup = String(log.productGroup || log.product_group || log['Ngành hàng'] || log['Nhóm'] || 'MLN').trim().toUpperCase();
+            let productGroup: ProductGroup = 'MLN';
+            if (rawGroup.includes('BG') || rawGroup.includes('BẾP') || rawGroup.includes('GAS')) productGroup = 'BG';
+            else if (rawGroup.includes('RMA')) productGroup = 'RMA';
+
+            const actualUnits = Number(log.actualUnits ?? log.actual_units ?? log['Thực tế'] ?? log['Số lượng thực tế'] ?? log['Số lượng'] ?? 0);
+            const workersCount = Number(log.workersCount ?? log.workers_count ?? log['Số lao động'] ?? log['Lao động'] ?? log['Công'] ?? 0);
+            const officialWorkers = log.officialWorkers !== undefined ? Number(log.officialWorkers) : (log['LĐ Chính thức'] ? Number(log['LĐ Chính thức']) : undefined);
+            const seasonalWorkers = log.seasonalWorkers !== undefined ? Number(log.seasonalWorkers) : (log['LĐ Thời vụ'] ? Number(log['LĐ Thời vụ']) : undefined);
+            const factor = Number(log.equivalentFactor ?? log.equivalent_factor ?? log['Hệ số quy đổi'] ?? log['Hệ số'] ?? 1) || 1.0;
+            
+            let eqProducts = Number(log.equivalentProducts ?? log.equivalent_products ?? log['Sản phẩm quy đổi'] ?? 0);
+            if (!eqProducts && actualUnits > 0) {
+              eqProducts = actualUnits * factor;
+            }
+
+            let prodRate = Number(log.laborProductivityPercent ?? log.labor_productivity_percent ?? log['Năng suất (%)'] ?? log['Năng suất'] ?? 0);
+            if (!prodRate && workersCount > 0 && eqProducts > 0) {
+              prodRate = Math.round(((eqProducts / workersCount) / 9.03) * 1000) / 10;
+            }
+
+            return {
+              ...log,
+              id: log.id || `restored_log_${Date.now()}_${idx}`,
+              date: rawDate,
+              shift: rawShift as any,
+              lineId: rawLineId,
+              lineName: rawLineName,
+              productId: rawProdId,
+              productName: rawProdName,
+              productGroup,
+              actualUnits,
+              workersCount,
+              officialWorkers,
+              seasonalWorkers,
+              equivalentFactor: factor,
+              equivalentProducts: eqProducts,
+              laborProductivityPercent: prodRate,
+              technicianName: String(log.technicianName || log.technician_name || log['Kỹ thuật viên'] || log['KTV'] || log['Người ghi'] || '').trim(),
+              hourlyActuals: safeJsonParse(log.hourlyActuals ?? log.hourly_actuals ?? log['Sản lượng theo giờ']),
+              hourlyWorkers: safeJsonParse(log.hourlyWorkers ?? log.hourly_workers ?? log['Lao động theo giờ']),
+              hourlyOfficialWorkers: safeJsonParse(log.hourlyOfficialWorkers ?? log.hourly_official_workers),
+              hourlySeasonalWorkers: safeJsonParse(log.hourlySeasonalWorkers ?? log.hourly_seasonal_workers)
+            };
+          }).filter(l => l.date && (l.productName || l.productId));
 
           if (restoreMode === 'overwrite') {
             finalLogs = parsedLogs;
@@ -6110,15 +6450,24 @@ const [isScrolled, setIsScrolled] = useState(false);
         // 2. Khôi phục Danh mục sản phẩm (Products)
         let finalProducts = products;
         if (rawBackupData.products && Array.isArray(rawBackupData.products)) {
-          const parsedProducts: ProductDefinition[] = rawBackupData.products.map((p: any) => ({
-            id: String(p.id || p.code || ''),
-            name: String(p.name || ''),
-            group: (p.group || 'MLN') as any,
-            code: String(p.code || p.id || ''),
-            factor: Number(p.factor ?? 1),
-            description: String(p.description || ''),
-            price: p.price !== undefined && p.price !== null ? Number(p.price) : undefined
-          }));
+          const parsedProducts: ProductDefinition[] = rawBackupData.products.map((p: any, idx: number) => {
+            const rawCode = String(p.code || p.id || p['Mã SP'] || p['Mã sản phẩm'] || p['Mã Model'] || p['Code'] || '').trim();
+            const rawName = String(p.name || p['Tên SP'] || p['Tên sản phẩm'] || p['Tên Model'] || p['Name'] || rawCode).trim();
+            const rawGroup = String(p.group || p['Phân nhóm'] || p['Ngành hàng'] || p['Nhóm'] || 'MLN').trim().toUpperCase();
+            let group: ProductGroup = 'MLN';
+            if (rawGroup.includes('BG') || rawGroup.includes('BẾP') || rawGroup.includes('GAS')) group = 'BG';
+            else if (rawGroup.includes('RMA')) group = 'RMA';
+
+            return {
+              id: rawCode || `prod_restored_${Date.now()}_${idx}`,
+              name: rawName,
+              group,
+              code: rawCode || getProductModelCode(rawName),
+              factor: Number(p.factor ?? p['Hệ số quy đổi'] ?? p['Hệ số'] ?? 1) || 1.0,
+              description: String(p.description || p['Mô tả'] || p['Ghi chú'] || ''),
+              price: p.price !== undefined && p.price !== null ? Number(p.price) : undefined
+            };
+          }).filter((p: ProductDefinition) => p.code || p.name);
 
           if (restoreMode === 'overwrite') {
             finalProducts = parsedProducts;
@@ -6132,16 +6481,34 @@ const [isScrolled, setIsScrolled] = useState(false);
         }
 
         // 3. Khôi phục Nhân sự (Workers)
+        // ĐẶC BIỆT: Nếu là file Excel phiên bản cũ không có sheet Nhân sự, tuyệt đối KHÔNG xóa trắng nhân sự mà bảo lưu danh sách hiện có!
         let finalWorkers = workers;
         if (rawBackupData.workers && Array.isArray(rawBackupData.workers)) {
-          const parsedWorkers: Worker[] = rawBackupData.workers.map((w: any) => ({
-            id: String(w.id || ''),
-            name: String(w.name || ''),
-            division: (w.division || 'RO') as any,
-            type: (w.type || 'OFFICIAL') as any,
-            qrCode: String(w.qrCode || w.id || ''),
-            imageUrl: w.imageUrl || undefined
-          }));
+          const parsedWorkers: Worker[] = rawBackupData.workers.map((w: any) => {
+            const wId = String(w.id || w['Mã NV'] || w['Mã nhân sự'] || '').trim();
+            const wName = String(w.name || w['Họ và tên'] || w['Tên'] || w['Họ tên'] || wId).trim();
+            const divRaw = String(w.division || w['Bộ phận'] || w['Xưởng'] || 'RO').trim().toUpperCase();
+            let division: WorkerDivision = 'RO';
+            if (divRaw.includes('BG') || divRaw.includes('GAS') || divRaw.includes('BẾP')) division = 'BG';
+            else if (divRaw.includes('RMA')) division = 'RMA';
+
+            const typeRaw = String(w.type || w['Loại LĐ'] || w['Loại nhân sự'] || 'OFFICIAL').trim().toUpperCase();
+            let type: WorkerType = 'OFFICIAL';
+            if (typeRaw.includes('THỜI VỤ') || typeRaw.includes('THOI VU') || typeRaw.includes('SEASONAL') || typeRaw === 'TV') {
+              type = 'SEASONAL';
+            } else if (typeRaw.includes('THỬ VIỆC') || typeRaw.includes('THU VIEC') || typeRaw.includes('PROBATION')) {
+              type = 'PROBATION';
+            }
+
+            return {
+              id: wId,
+              name: wName,
+              division,
+              type,
+              qrCode: String(w.qrCode || w['Mã QR'] || w['QR'] || wId),
+              imageUrl: w.imageUrl || w['Ảnh'] || undefined
+            };
+          }).filter(w => w.id && w.name);
 
           if (restoreMode === 'overwrite') {
             finalWorkers = parsedWorkers;
@@ -6152,20 +6519,28 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
           setWorkers(finalWorkers);
           stats.workers = finalWorkers.length;
+        } else {
+          // File phiên bản cũ không có tab Nhân sự: Giữ nguyên hoặc nạp INITIAL_WORKERS nếu trống
+          if (!finalWorkers || finalWorkers.length === 0) {
+            finalWorkers = INITIAL_WORKERS;
+            setWorkers(finalWorkers);
+          }
+          stats.workers = finalWorkers.length;
         }
 
         // 4. Khôi phục Điểm danh (Attendance Logs)
+        // ĐẶC BIỆT: Nếu là file phiên bản cũ, bảo lưu lịch sử điểm danh hiện có
         let finalAttendance = attendanceLogs;
         if (rawBackupData.attendanceLogs && Array.isArray(rawBackupData.attendanceLogs)) {
           const parsedAttendance: AttendanceRecord[] = rawBackupData.attendanceLogs.map((a: any, idx: number) => ({
             id: a.id || `att_${Date.now()}_${idx}`,
-            workerId: String(a.workerId || a.worker_id || ''),
-            date: String(a.date || ''),
-            slot: a.slot || undefined,
-            checkInTime: a.checkInTime || a.check_in_time || '',
-            checkOutTime: a.checkOutTime || a.check_out_time || undefined,
-            scannedDivision: a.scannedDivision || a.scanned_division || undefined
-          }));
+            workerId: String(a.workerId || a.worker_id || a['Mã NV'] || a['Mã nhân sự'] || ''),
+            date: String(a.date || a['Ngày'] || ''),
+            slot: a.slot || a['Ca'] || undefined,
+            checkInTime: a.checkInTime || a.check_in_time || a['Giờ vào'] || '',
+            checkOutTime: a.checkOutTime || a.check_out_time || a['Giờ ra'] || undefined,
+            scannedDivision: a.scannedDivision || a.scanned_division || a['Bộ phận quét'] || undefined
+          })).filter(a => a.workerId && a.date);
 
           if (restoreMode === 'overwrite') {
             finalAttendance = parsedAttendance;
@@ -6176,6 +6551,12 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
           setAttendanceLogs(finalAttendance);
           stats.attendance = finalAttendance.length;
+        } else {
+          if (!finalAttendance || finalAttendance.length === 0) {
+            finalAttendance = INITIAL_ATTENDANCE;
+            setAttendanceLogs(finalAttendance);
+          }
+          stats.attendance = finalAttendance.length;
         }
 
         // 5. Khôi phục Mục tiêu NSLĐ (Monthly Targets)
@@ -6184,8 +6565,10 @@ const [isScrolled, setIsScrolled] = useState(false);
           const newTargets: Record<string, number> = {};
           if (Array.isArray(rawBackupData.monthlyTargets)) {
             rawBackupData.monthlyTargets.forEach((item: any) => {
-              if (item.key && item.targetValue !== undefined) {
-                newTargets[item.key] = Number(item.targetValue);
+              const key = String(item.key || item['Tháng'] || item['thang'] || item.month || '').trim();
+              const targetVal = item.targetValue ?? item['Mục tiêu'] ?? item['muctieu'] ?? item['Chỉ tiêu'] ?? item['chitieu'] ?? item.target;
+              if (key && targetVal !== undefined && !isNaN(Number(targetVal))) {
+                newTargets[key] = Number(targetVal);
               }
             });
           } else if (typeof rawBackupData.monthlyTargets === 'object') {
@@ -6202,14 +6585,14 @@ const [isScrolled, setIsScrolled] = useState(false);
           let parsedPlan: any = {};
           if (Array.isArray(rawBackupData.monthlyPlan)) {
             rawBackupData.monthlyPlan.forEach((row: any) => {
-              const ym = row.yearMonth;
-              const pid = row.productId;
+              const ym = String(row.yearMonth || row['Tháng'] || row['thang'] || row['Năm-Tháng'] || '').trim();
+              const pid = String(row.productId || row.product_id || row['Mã SP'] || row['Mã sản phẩm'] || row['Model'] || '').trim();
               if (ym && pid) {
                 if (!parsedPlan[ym]) parsedPlan[ym] = {};
                 if (!parsedPlan[ym][pid]) parsedPlan[ym][pid] = {};
                 for (let d = 1; d <= 31; d++) {
-                  const val = row[`day_${d}`];
-                  if (val !== undefined && val !== "") {
+                  const val = row[`day_${d}`] ?? row[`day${d}`] ?? row[`${d}`] ?? row[`Ngày ${d}`] ?? row[`d${d}`];
+                  if (val !== undefined && val !== "" && !isNaN(Number(val))) {
                     parsedPlan[ym][pid][d] = Number(val);
                     stats.planDays++;
                   }
@@ -6271,7 +6654,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         if (rawBackupData.weeklyDclrError && Array.isArray(rawBackupData.weeklyDclrError)) setWeeklyDclrError(rawBackupData.weeklyDclrError);
         if (rawBackupData.monthlyDclrError && Array.isArray(rawBackupData.monthlyDclrError)) setMonthlyDclrError(rawBackupData.monthlyDclrError);
 
-        // 11. Khôi phục Dữ liệu IMEI
+        // 11. Khôi phục Dữ liệu IMEI (Bảo lưu dữ liệu an toàn nếu là file phiên bản cũ)
         let finalDeclaredImeis = declaredImeis;
         let finalScannedImeis = scannedImeis;
         if (rawBackupData.declaredImeis && Array.isArray(rawBackupData.declaredImeis)) {
@@ -6280,12 +6663,14 @@ const [isScrolled, setIsScrolled] = useState(false);
             : [...declaredImeis, ...rawBackupData.declaredImeis.filter((d: any) => !declaredImeis.some(e => e.imei === d.imei))];
           setDeclaredImeis(finalDeclaredImeis);
           stats.imeis += finalDeclaredImeis.length;
+          lastDeclaredImeisActionTimeRef.current = Date.now();
         }
         if (rawBackupData.scannedImeis && Array.isArray(rawBackupData.scannedImeis)) {
           finalScannedImeis = restoreMode === 'overwrite'
             ? rawBackupData.scannedImeis
             : [...scannedImeis, ...rawBackupData.scannedImeis.filter((s: any) => !scannedImeis.some(e => e.id === s.id || e.imei === s.imei))];
           setScannedImeis(finalScannedImeis);
+          lastScannedImeisActionTimeRef.current = Date.now();
         }
 
         // 12. Tự động đồng bộ và tính toán lại các chỉ số lịch sử từ Nhật ký đã phục hồi
@@ -6316,8 +6701,13 @@ const [isScrolled, setIsScrolled] = useState(false);
 
         setSyncStatus(isSupabaseConfigured ? 'synced' : 'local');
         setSyncMessage(isSupabaseConfigured ? 'Đã khôi phục và lưu lên Cloud' : 'Đã khôi phục và lưu vào bộ nhớ máy');
-        setFormMessage(`🎉 Khôi phục dữ liệu thành công (${restoreMode === 'overwrite' ? 'Ghi đè' : 'Hợp nhất'}): ${finalLogs.length} nhật ký ca, ${finalProducts.length} sản phẩm, ${finalWorkers.length} nhân sự, ${finalAttendance.length} điểm danh! (Đã tối ưu bộ nhớ, không giữ file)`);
-        setTimeout(() => setFormMessage(""), 5000);
+
+        if (isLegacyVersion) {
+          setFormMessage(`🎉 Nhận diện thành công file Excel phiên bản cũ (chưa có tab Nhân sự & QR): Đã khôi phục ${finalLogs.length} nhật ký ca, ${finalProducts.length} sản phẩm, KHSX và chỉ số hiệu suất; đồng thời bảo lưu an toàn dữ liệu Nhân sự (${finalWorkers.length} người) & mã IMEI hiện tại!`);
+        } else {
+          setFormMessage(`🎉 Khôi phục dữ liệu thành công (${restoreMode === 'overwrite' ? 'Ghi đè' : 'Hợp nhất'}): ${finalLogs.length} nhật ký ca, ${finalProducts.length} sản phẩm, ${finalWorkers.length} nhân sự, ${finalAttendance.length} điểm danh, ${finalDeclaredImeis.length} IMEI! (Đã giải phóng bộ nhớ đệm)`);
+        }
+        setTimeout(() => setFormMessage(""), 6000);
 
       } catch (err) {
         console.error("Lỗi khôi phục backup:", err);
@@ -6384,99 +6774,29 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   }, [activeTab]);
 
-  // Keep track of the last processed date to detect when the date changes
-  const lastProcessedDateRef = useRef<string>(formDate);
-
-  // Auto-fill/update production models when formDate or monthlyPlan changes
+  // Synchronize dailyPlan in formModelItems when monthlyPlan updates
   useEffect(() => {
-    const dayNum = parseInt(formDate.split("-")[2]);
+    if (isSyncingFromExternalRef.current) return;
+    const parts = formDate.split("-");
+    if (parts.length < 3) return;
+    const ym = `${parts[0]}-${parts[1]}`;
+    const dayNum = parseInt(parts[2], 10);
     if (isNaN(dayNum)) return;
 
-    const dateChanged = lastProcessedDateRef.current !== formDate;
-    lastProcessedDateRef.current = formDate;
-
-    // Find all product IDs that have a plan value > 0 for this specific day in the monthly plan
-    const plannedProductIds = products
-      .filter(p => (monthlyPlan[currentYearMonth]?.[p.id]?.[dayNum] || 0) > 0)
-      .map(p => p.id);
-
-    // Find products with outstanding cumulative debt (leftover > 0) from preceding days of the same month
-    const leftoverPrevProductIds = products
-      .filter(p => {
-        const leftover = getPrevDayLeftover(p.id, formDate);
-        return leftover > 0;
-      })
-      .map(p => p.id);
-
-    const combinedProductIds = Array.from(new Set([...plannedProductIds, ...leftoverPrevProductIds]));
-
-    // If the user changed the date, we check if there's already a draft or logs for that day before auto-populating
-    if (dateChanged) {
-      const hasDraft = Boolean(getDraftForDateAndShift(formDate, formShift));
-      const hasLogs = productionLogs.some(l => l.date === formDate && l.shift === formShift);
-      if (hasDraft || hasLogs) {
-        return;
-      }
-
-      // Reset workers counts to 0 for unsaved days to avoid mixing days
-      const resetSlots = formSlotsRef.current.filter(isValidHourlySlot);
-      const initialWorkers: { [slotName: string]: number } = {};
-      resetSlots.forEach(s => {
-        initialWorkers[s] = 0;
+    setFormModelItems(prev => {
+      if (!prev || prev.length === 0) return prev;
+      let changed = false;
+      const next = prev.map(item => {
+        const planVal = (monthlyPlan[ym]?.[item.productId]?.[dayNum]) || 0;
+        if (item.dailyPlan !== planVal) {
+          changed = true;
+          return { ...item, dailyPlan: planVal };
+        }
+        return item;
       });
-      setFormOfficialWorkersRO(initialWorkers);
-      setFormSeasonalWorkersRO(initialWorkers);
-      setFormOfficialWorkersBG(initialWorkers);
-      setFormSeasonalWorkersBG(initialWorkers);
-
-      if (combinedProductIds.length > 0) {
-        setFormModelItems(() => {
-          return combinedProductIds.map((prodId, idx) => {
-            const planVal = (monthlyPlan[currentYearMonth]?.[prodId]?.[dayNum]) || 0;
-            const initialHrs: { [slotName: string]: number } = {};
-            resetSlots.forEach(s => {
-              initialHrs[s] = 0;
-            });
-            return {
-              id: `item-auto-${prodId}-${Date.now()}-${idx}`,
-              productId: prodId,
-              dailyPlan: planVal,
-              hourlyActuals: initialHrs
-            };
-          });
-        });
-      } else {
-        // Fallback default row
-        const initialHrs: { [slotName: string]: number } = {};
-        resetSlots.forEach(s => {
-          initialHrs[s] = 0;
-        });
-        setFormModelItems([
-          {
-            id: `item-init-${Date.now()}`,
-            productId: "mln-01",
-            dailyPlan: (monthlyPlan[currentYearMonth]?.["mln-01"]?.[dayNum]) || 0,
-            hourlyActuals: initialHrs
-          }
-        ]);
-      }
-    } else {
-      // If the date is the same (e.g. they edited plans or something changed in monthlyPlan),
-      // we just synchronize the dailyPlan field for the existing list of items.
-      setFormModelItems(prev => {
-        let changed = false;
-        const next = prev.map(item => {
-          const planVal = (monthlyPlan[currentYearMonth]?.[item.productId]?.[dayNum]) || 0;
-          if (item.dailyPlan !== planVal) {
-            changed = true;
-            return { ...item, dailyPlan: planVal };
-          }
-          return item;
-         });
-        return changed ? next : prev;
-      });
-    }
-  }, [formDate, formShift, monthlyPlan, products]);
+      return changed ? next : prev;
+    });
+  }, [formDate, monthlyPlan]);
 
   const displayTotalActualQty = filterDivision === "MLN" ? formAggregates.totalActualQtyRO : (filterDivision === "BG" ? formAggregates.totalActualQtyBG : formAggregates.totalActualQty);
   const displayTotalEqQty = filterDivision === "MLN" ? formAggregates.totalEqQtyRO : (filterDivision === "BG" ? formAggregates.totalEqQtyBG : formAggregates.totalEqQty);
@@ -6559,6 +6879,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     deleteConfirmId,
     setScannedImeis,
     setDeleteConfirmId,
+    handleDeleteScannedImei,
+    handleClearAllScannedImeis,
     filteredDeclaredImeis,
     declareFilterDate,
     setDeclareFilterDate,
@@ -6567,6 +6889,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     deleteDeclareConfirmImei,
     setDeclaredImeis,
     setDeleteDeclareConfirmImei,
+    handleDeleteDeclaredImei,
+    handleClearAllDeclaredImeis,
     comparisonRecords,
     setCompareStatusFilter,
     compareStatusFilter,
