@@ -1946,14 +1946,32 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [productionLogs, syncHistoricalMetricsWithLogs]);
 
   // Hàm tải / làm mới dữ liệu từ Supabase Cloud
-  const refreshFromCloud = useCallback(async () => {
+  const refreshFromCloud = useCallback(async (isDeepSync = false) => {
     try {
       if (isSupabaseConfigured) {
         setSyncStatus('syncing');
-        setSyncMessage('Đang tải dữ liệu từ Supabase Cloud...');
+        setSyncMessage(isDeepSync ? 'Đang thực hiện làm mới toàn diện từ Cloud...' : 'Đang tải dữ liệu từ Supabase Cloud...');
       } else {
         setSyncStatus('local');
         setSyncMessage('Chế độ Local (Chưa cấu hình Supabase)');
+      }
+
+      if (isDeepSync) {
+        // Xóa sạch bộ nhớ tạm cục bộ để đảm bảo lấy dữ liệu 100% từ Cloud
+        storage.cleanupAndOptimizeStorage();
+        // Xóa thêm các key chính yếu để force fetch
+        const mainKeys = [
+          'sunhouse_production_logs_v2',
+          'sunhouse_workers',
+          'sunhouse_attendance_logs',
+          'sunhouse_products_v2',
+          'sunhouse_monthly_plan_v2',
+          'sunhouse_monthly_targets_v2',
+          'sunhouse_declared_imeis',
+          'sunhouse_scanned_imeis'
+        ];
+        mainKeys.forEach(k => localStorage.removeItem(k));
+        console.info('[Sync] Đã xóa cache cục bộ để bắt đầu làm mới toàn diện.');
       }
 
       const [
@@ -1968,9 +1986,9 @@ const [isScrolled, setIsScrolled] = useState(false);
         allDaily,
       ] = await Promise.all([
         storage.getWorkers(),
-        storage.getAttendanceLogs(1000),
+        storage.getAttendanceLogs(2000), // Tăng giới hạn nạp
         storage.getProducts(),
-        storage.getProductionLogs(1000),
+        storage.getProductionLogs(2000), // Tăng giới hạn nạp
         storage.getMonthlyPlan(),
         storage.getMonthlyTargets(),
         storage.getMonthlyMetrics(2025),
@@ -1978,17 +1996,22 @@ const [isScrolled, setIsScrolled] = useState(false);
         storage.getAllDailyReports(),
       ]);
 
-      if (loadedWorkers && loadedWorkers.length > 0) setWorkers(loadedWorkers);
-      if (loadedAttendance && loadedAttendance.length > 0) setAttendanceLogs(loadedAttendance);
-      if (loadedProducts && loadedProducts.length > 0) setProducts(loadedProducts);
-      if (loadedLogs && loadedLogs.length > 0) {
+      // Cập nhật State & Local Cache đồng nhất
+      if (loadedWorkers) setWorkers(loadedWorkers);
+      if (loadedAttendance) setAttendanceLogs(loadedAttendance);
+      if (loadedProducts) setProducts(loadedProducts);
+      
+      if (loadedLogs) {
         setProductionLogs(loadedLogs);
         syncHistoricalMetricsWithLogs(loadedLogs);
       }
-      if (loadedPlan && Object.keys(loadedPlan).length > 0) setMonthlyPlan(loadedPlan);
-      if (loadedTargets && Object.keys(loadedTargets).length > 0) setMonthlyTargets(loadedTargets);
-      if (loaded2025 && loaded2025.length > 0) setMetrics2025(loaded2025);
-      if (loaded2026 && loaded2026.length > 0) {
+      
+      if (loadedPlan) setMonthlyPlan(loadedPlan);
+      if (loadedTargets) setMonthlyTargets(loadedTargets);
+      
+      if (loaded2025) setMetrics2025(loaded2025);
+      
+      if (loaded2026) {
         const guarded2026 = loaded2026.map(m => {
           if (m.year === 2026) {
             if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
@@ -2004,53 +2027,55 @@ const [isScrolled, setIsScrolled] = useState(false);
         });
         setMetrics2026(guarded2026);
       }
-      if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
-      if (allDaily.assembly && allDaily.assembly.length > 0) setAssemblyDailyReports(allDaily.assembly);
+
+      if (allDaily.gas) setGasDailyReports(allDaily.gas);
+      if (allDaily.assembly) setAssemblyDailyReports(allDaily.assembly);
+      
       if (allDaily.declaredImeis !== undefined && Array.isArray(allDaily.declaredImeis)) {
         const cloudTs = allDaily.declaredImeisUpdatedAt ? new Date(allDaily.declaredImeisUpdatedAt).getTime() : 0;
-        const localTs = lastDeclaredImeisActionTimeRef.current;
-        if (cloudTs >= localTs || declaredImeis.length === 0) {
-          lastDeclaredImeisActionTimeRef.current = Math.max(localTs, cloudTs);
-          setDeclaredImeis(allDaily.declaredImeis);
-          localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(allDaily.declaredImeis));
-          localStorage.setItem('sunhouse_declared_imeis_ts', String(lastDeclaredImeisActionTimeRef.current));
-        }
+        lastDeclaredImeisActionTimeRef.current = Math.max(lastDeclaredImeisActionTimeRef.current, cloudTs);
+        setDeclaredImeis(allDaily.declaredImeis);
+        localStorage.setItem('sunhouse_declared_imeis', JSON.stringify(allDaily.declaredImeis));
+        localStorage.setItem('sunhouse_declared_imeis_ts', String(lastDeclaredImeisActionTimeRef.current));
       }
+
       if (allDaily.scannedImeis !== undefined && Array.isArray(allDaily.scannedImeis)) {
         const cloudTs = allDaily.scannedImeisUpdatedAt ? new Date(allDaily.scannedImeisUpdatedAt).getTime() : 0;
-        const localTs = lastScannedImeisActionTimeRef.current;
-        if (cloudTs >= localTs || scannedImeis.length === 0) {
-          lastScannedImeisActionTimeRef.current = Math.max(localTs, cloudTs);
-          setScannedImeis(allDaily.scannedImeis);
-          localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(allDaily.scannedImeis));
-          localStorage.setItem('sunhouse_scanned_imeis_ts', String(lastScannedImeisActionTimeRef.current));
-        }
+        lastScannedImeisActionTimeRef.current = Math.max(lastScannedImeisActionTimeRef.current, cloudTs);
+        setScannedImeis(allDaily.scannedImeis);
+        localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(allDaily.scannedImeis));
+        localStorage.setItem('sunhouse_scanned_imeis_ts', String(lastScannedImeisActionTimeRef.current));
       }
-      if (allDaily.monthlyScrap && allDaily.monthlyScrap.length > 0) setMonthlyScrap(allDaily.monthlyScrap);
-      if (allDaily.weeklyScrap && allDaily.weeklyScrap.length > 0) setWeeklyScrap(allDaily.weeklyScrap);
-      if (allDaily.weeklyDclr && allDaily.weeklyDclr.length > 0) setWeeklyDclrError(allDaily.weeklyDclr);
-      if (allDaily.monthlyDclr && allDaily.monthlyDclr.length > 0) setMonthlyDclrError(allDaily.monthlyDclr);
 
-      // Để React hoàn tất render dữ liệu mới tải từ Cloud trước khi kích hoạt cờ lưu trữ tự động
-      setTimeout(() => {
-        isLoadedRef.current = true;
-      }, 400);
+      if (allDaily.monthlyScrap) setMonthlyScrap(allDaily.monthlyScrap);
+      if (allDaily.weeklyScrap) setWeeklyScrap(allDaily.weeklyScrap);
+      if (allDaily.weeklyDclr) setWeeklyDclrError(allDaily.weeklyDclr);
+      if (allDaily.monthlyDclr) setMonthlyDclrError(allDaily.monthlyDclr);
+
+      if (isDeepSync) {
+        setFormMessage("✅ Làm mới toàn diện thành công! Mọi computers hiện đã đồng bộ 100% dữ liệu mới nhất.");
+        storage.sendSyncSignal(); // Phát tín hiệu để các máy khác cũng tự động làm mới
+        setTimeout(() => setFormMessage(""), 4000);
+      }
+
+      setTimeout(() => { isLoadedRef.current = true; }, 400);
       setIsInitialLoading(false);
-
       if (isSupabaseConfigured) {
         setSyncStatus('synced');
         setSyncMessage('Đã đồng bộ trực tuyến với Supabase');
       }
     } catch (err: any) {
-      console.warn('[Supabase] Thông báo khi nạp dữ liệu từ Cloud:', err?.message || err);
-      setTimeout(() => {
-        isLoadedRef.current = true;
-      }, 400);
+      console.warn('[Supabase] Lỗi khi nạp dữ liệu từ Cloud:', err?.message || err);
+      setTimeout(() => { isLoadedRef.current = true; }, 400);
       setIsInitialLoading(false);
       setSyncStatus('error');
       setSyncMessage('Lỗi kết nối Supabase, đang dùng dữ liệu lưu tạm');
     }
-  }, []);
+  }, [isSupabaseConfigured]);
+
+  const handleDeepSync = () => {
+    refreshFromCloud(true);
+  };
 
   // Tải lại danh sách nhân sự trực tiếp từ Supabase Cloud
   const fetchWorkers = useCallback(async () => {
@@ -2634,6 +2659,10 @@ const [isScrolled, setIsScrolled] = useState(false);
         } catch (err) {
           console.warn('[Realtime] Lỗi đồng bộ bảng từ broadcast:', table, err);
         }
+      },
+      onSyncSignal: () => {
+        console.info('[Realtime] Nhận tín hiệu làm mới toàn hệ thống từ máy khác. Đang tự động đồng bộ...');
+        refreshFromCloud();
       },
     });
 
@@ -6896,6 +6925,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     productionLogs,
     handleEditLog,
     handleDeleteLog,
+    handleDeepSync,
     chartMonthlyScrap,
     chartWeeklyScrap,
     displayMonthlyDclrError,

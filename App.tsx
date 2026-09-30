@@ -147,6 +147,7 @@ export default function App() {
     productionLogs,
     handleEditLog,
     handleDeleteLog,
+    handleDeepSync,
     chartMonthlyScrap,
     chartWeeklyScrap,
     displayMonthlyDclrError,
@@ -968,7 +969,7 @@ export default function App() {
               handleImportFullBackup={handleImportFullBackup}
               restoreMode={restoreMode}
               setRestoreMode={setRestoreMode}
-              syncEntireSystem={syncEntireSystem}
+              syncEntireSystem={handleDeepSync}
               pushAllDataToSupabase={pushAllDataToSupabase}
               syncStatus={syncStatus}
               syncMessage={syncMessage}

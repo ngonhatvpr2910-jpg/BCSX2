@@ -1956,6 +1956,21 @@ export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
   }
 }
 
+export function sendSyncSignal(): void {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'system_sync_signal',
+      payload: { senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi tín hiệu đồng bộ thất bại:', err);
+  }
+}
+
 // ==========================================
 // 10. REALTIME SUBSCRIPTION (LẮNG NGHE THAY ĐỔI TỐI ƯU)
 // ==========================================
@@ -1976,6 +1991,7 @@ export interface RealtimeCallbacks {
   onDailyReportsChange?: (payload: any) => void;
   onLiveFormChange?: (payload: any) => void;
   onTableSyncChange?: (table: string, payload: any) => void;
+  onSyncSignal?: (payload: any) => void;
 }
 
 /**
@@ -2135,6 +2151,17 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
             if (tbl) {
               callbacks.onTableSyncChange?.(tbl, payload.payload);
             }
+          }
+        );
+      }
+
+      if (callbacks.onSyncSignal) {
+        broadcastRoom.on(
+          'broadcast',
+          { event: 'system_sync_signal' },
+          (payload: any) => {
+            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+            callbacks.onSyncSignal?.(payload);
           }
         );
       }
