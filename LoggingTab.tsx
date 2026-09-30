@@ -410,7 +410,7 @@ export const LoggingTab = ({
                           {/* Equivalent Qty */}
                           <tr key="equivalent-qty-row" className="bg-white font-bold text-blue-700">
                             <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap text-blue-700">
-                              Sản phẩm quy đổi (SP)
+                              Tổng sản phẩm quy đổi (SP)
                             </td>
                             {formSlots.map(slot => {
                               let sumEq = 0;
@@ -428,6 +428,77 @@ export const LoggingTab = ({
                             <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
                             <td></td>
                           </tr>
+
+                          {/* Equivalent Qty RO */}
+                          {(filterDivision === "ALL" || filterDivision === "MLN") && (
+                            <tr key="eq-qty-ro-row" className="bg-white font-medium text-slate-700 border-t border-slate-100">
+                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap">
+                                Sản Phẩm QĐ RO (SP)
+                              </td>
+                              {formSlots.map(slot => {
+                                let sumEq = 0;
+                                formModelItems.forEach(item => {
+                                  const p = products.find(x => x.id === item.productId) || products[0];
+                                  const isRMA = p.group === "RMA" || (p.group === "MLN" && (p.name.toLowerCase().includes("rma") || p.code.toLowerCase().includes("rma") || p.id.toLowerCase().includes("rma")));
+                                  if (p.group === "MLN" && !isRMA) {
+                                    sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * (Number(p.factor) || 1));
+                                  }
+                                });
+                                return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-center">{sumEq || 0}</td>
+                              })}
+                              <td className="py-1 px-1 border-r border-slate-300 text-center font-bold">{formAggregates.totalEqQtyRO || 0}</td>
+                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
+                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
+                              <td></td>
+                            </tr>
+                          )}
+
+                          {/* Equivalent Qty BG */}
+                          {(filterDivision === "ALL" || filterDivision === "BG") && (
+                            <tr key="eq-qty-bg-row" className="bg-white font-medium text-slate-700 border-t border-slate-100">
+                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap">
+                                Sản Phẩm QĐ BG (SP)
+                              </td>
+                              {formSlots.map(slot => {
+                                let sumEq = 0;
+                                formModelItems.forEach(item => {
+                                  const p = products.find(x => x.id === item.productId) || products[0];
+                                  if (p.group === "BG") {
+                                    sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * (Number(p.factor) || 1));
+                                  }
+                                });
+                                return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-center">{sumEq || 0}</td>
+                              })}
+                              <td className="py-1 px-1 border-r border-slate-300 text-center font-bold">{formAggregates.totalEqQtyBG || 0}</td>
+                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
+                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
+                              <td></td>
+                            </tr>
+                          )}
+
+                          {/* Equivalent Qty RMA */}
+                          {(filterDivision === "ALL" || filterDivision === "RMA") && (
+                            <tr key="eq-qty-rma-row" className="bg-white font-medium text-slate-700 border-t border-slate-100">
+                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap">
+                                Sản Phẩm QĐ RMA (SP)
+                              </td>
+                              {formSlots.map(slot => {
+                                let sumEq = 0;
+                                formModelItems.forEach(item => {
+                                  const p = products.find(x => x.id === item.productId) || products[0];
+                                  const isRMA = p.group === "RMA" || (p.group === "MLN" && (p.name.toLowerCase().includes("rma") || p.code.toLowerCase().includes("rma") || p.id.toLowerCase().includes("rma")));
+                                  if (isRMA) {
+                                    sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * (Number(p.factor) || 1));
+                                  }
+                                });
+                                return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-center">{sumEq || 0}</td>
+                              })}
+                              <td className="py-1 px-1 border-r border-slate-300 text-center font-bold">{formAggregates.totalEqQtyRMA || 0}</td>
+                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
+                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
+                              <td></td>
+                            </tr>
+                          )}
 
                           {/* Tỷ lệ hoàn thành KHSX (%) */}
                           <tr key="completion-rate-row" className="bg-white font-bold border-t border-slate-300 text-blue-700">
