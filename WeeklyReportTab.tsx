@@ -216,8 +216,7 @@ export const WeeklyReportTab = ({
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs font-black">
                           {/* Use weekly calculation logic */}
                           {(() => {
-                            const totalDaysWithWorkers = weeklyReportData.dayTotals.filter(d => (d.workers as number) > 0).length;
-                            const totalMandays = weeklyReportData.grandTotal.workers * totalDaysWithWorkers;
+                            const totalMandays = weeklyReportData.grandTotal.workers;
                             const avgDots = totalMandays > 0 ? (weeklyReportData.grandTotal.actualEq / totalMandays) : 0;
                             return avgDots > 0 ? avgDots.toFixed(2) : "-";
                           })()}
@@ -245,8 +244,7 @@ export const WeeklyReportTab = ({
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs border-l-2 border-l-slate-300 !bg-[#a4c2f4]">-</td>
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs font-bold !bg-[#a4c2f4]">
                           {(() => {
-                            const totalDaysWithWorkers = weeklyReportData.dayTotals.filter(d => (d.workers as number) > 0).length;
-                            const totalMandays = weeklyReportData.grandTotal.workers * totalDaysWithWorkers;
+                            const totalMandays = weeklyReportData.grandTotal.workers;
                             const avgDots = totalMandays > 0 ? (weeklyReportData.grandTotal.actualEq / totalMandays) : 0;
                             const avgPercent = (avgDots / 9.03) * 100;
                             return avgDots > 0 ? `${avgPercent.toFixed(1)}%` : "-";
@@ -314,10 +312,9 @@ export const WeeklyReportTab = ({
                       <div className="flex justify-between items-center text-slate-400">
                         <span>NSLĐ Trung bình:</span>
                         <div className="text-right">
-                          <span className={`text-xl font-black font-mono block ${((weeklyReportData.grandTotal.actualEq / (weeklyReportData.grandTotal.workers * (weeklyReportData.dayTotals.filter(d => (d.workers as number) > 0).length || 1))) / 9.03 * 100) >= 100 ? "text-emerald-400" : "text-amber-400"}`}>
+                          <span className={`text-xl font-black font-mono block ${((weeklyReportData.grandTotal.actualEq / (weeklyReportData.grandTotal.workers || 1)) / 9.03 * 100) >= 100 ? "text-emerald-400" : "text-amber-400"}`}>
                             {(() => {
-                              const totalDaysWithWorkers = weeklyReportData.dayTotals.filter(d => (d.workers as number) > 0).length;
-                              const totalMandays = weeklyReportData.grandTotal.workers * totalDaysWithWorkers;
+                              const totalMandays = weeklyReportData.grandTotal.workers;
                               const avgDots = totalMandays > 0 ? (weeklyReportData.grandTotal.actualEq / totalMandays) : 0;
                               const avgPercent = (avgDots / 9.03) * 100;
                               return `${avgPercent.toFixed(1)}%`;
@@ -325,8 +322,7 @@ export const WeeklyReportTab = ({
                           </span>
                           <span className="text-white/60 font-bold font-mono text-[10px]">
                             {(() => {
-                              const totalDaysWithWorkers = weeklyReportData.dayTotals.filter(d => (d.workers as number) > 0).length;
-                              const totalMandays = weeklyReportData.grandTotal.workers * totalDaysWithWorkers;
+                              const totalMandays = weeklyReportData.grandTotal.workers;
                               const avgDots = totalMandays > 0 ? (weeklyReportData.grandTotal.actualEq / totalMandays) : 0;
                               return `${avgDots.toFixed(2)} Cái / Định mức 9.03`;
                             })()}

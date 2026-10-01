@@ -1330,12 +1330,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     const isToday = formDate === todayStr;
     const currentHour = new Date().getHours();
 
-    const activeSlots = formSlots.filter(slot => {
-      if (isPast) return true;
-      if (!isToday) return false;
-      const slotStartHour = parseInt(slot.split("H")[0]);
-      return !isNaN(slotStartHour) && slotStartHour <= currentHour;
-    });
+    // LUÔN TÍNH TOÀN BỘ KHUNG GIỜ TRONG FORM ĐỂ ĐẢM BẢO TỔNG CÔNG CHÍNH XÁC (KHÔNG LỌC THEO GIỜ HIỆN TẠI)
+    const activeSlots = formSlots;
 
     const divisor = activeSlots.length > 0 ? activeSlots.length : 1;
 
@@ -1398,28 +1394,13 @@ const [isScrolled, setIsScrolled] = useState(false);
       formSeasonalCountBG: Number((seasBG / 8).toFixed(3)) || 0,
       formWorkersCountBG: Number(((offBG + seasBG) / 8).toFixed(3)) || 0,
       formWorkersCount: Number(((offRO + seasRO + offRMA + seasRMA + offBG + seasBG) / 8).toFixed(3)) || 0,
+      // Tính Số người trung bình (Actual people count) để tránh nhầm lẫn với Công (Man-days)
+      formPersonCountRO: divisor > 0 ? Number(((offRO + seasRO) / divisor).toFixed(1)) : 0,
+      formPersonCountRMA: divisor > 0 ? Number(((offRMA + seasRMA) / divisor).toFixed(1)) : 0,
+      formPersonCountBG: divisor > 0 ? Number(((offBG + seasBG) / divisor).toFixed(1)) : 0,
+      formPersonCount: divisor > 0 ? Number(((offRO + seasRO + offRMA + seasRMA + offBG + seasBG) / divisor).toFixed(1)) : 0,
     };
   }, [formDate, formSlots, formModelItems, formOfficialWorkersRO, formSeasonalWorkersRO, formOfficialWorkersRMA, formSeasonalWorkersRMA, formOfficialWorkersBG, formSeasonalWorkersBG, products]);
-  // 14. TỰ ĐỘNG NẠP LẠI DỮ LIỆU KHI THAY ĐỔI NGÀY/CA TRONG FORM NHẬT KÝ CA
-  // Đảm bảo dữ liệu luôn được đồng bộ và "cố định" theo Database, không bị mất nhân công khi bổ sung/chỉnh sửa.
-  useEffect(() => {
-    const currentKey = `${formDate}_${formShift}`;
-    // Chỉ nạp nếu khóa (Date+Shift) thay đổi so với lần nạp trước để tránh lặp vô tận
-    if (lastLoadedDateShiftRef.current === currentKey) return;
-    
-    const logsForDate = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
-    if (logsForDate.length === 0) {
-      // Nếu không có dữ liệu cho ca này, ta có thể giữ nguyên form hoặc reset nhẹ
-      // (Nhưng không nên reset modelItems nếu user đang nhập, tuy nhiên useEffect này chạy khi Date/Shift thay đổi)
-      // lastLoadedDateShiftRef.current = currentKey;
-      return;
-    }
-
-    console.info(`[Form] Phát hiện dữ liệu cũ cho ${currentKey}. Đang tự động nạp lại để đồng bộ...`);
-    lastLoadedDateShiftRef.current = currentKey;
-    handleEditLog(formDate, formShift);
-  }, [formDate, formShift, productionLogs.length]);
-
   const [formTechnician, setFormTechnician] = useState<string>(() => {
     const draft = getInitialActiveDraft();
     if (draft && draft.technician) return draft.technician;
@@ -1440,22 +1421,20 @@ const [isScrolled, setIsScrolled] = useState(false);
   monthlyPlanRef.current = monthlyPlan;
   const lastFetchedDateDeptRef = useRef<string>("");
 
-  // Tự động nạp dữ liệu ca từ productionLogs / drafts / KHSX tháng khi chuyển ngày hoặc ca
+  // 14. TỰ ĐỘNG NẠP LẠI DỮ LIỆU KHI THAY ĐỔI NGÀY/CA TRONG FORM NHẬT KÝ CA
+  // Đảm bảo dữ liệu luôn được đồng bộ và "cố định" theo Database, không bị mất nhân công khi bổ sung/chỉnh sửa.
   useEffect(() => {
     if (!formDate || !formShift || isSyncingFromExternalRef.current) return;
 
     const dateShiftKey = `${formDate}_${formShift}`;
     const isDateShiftChanged = lastLoadedDateShiftRef.current !== dateShiftKey;
 
-    // Nếu ngày và ca không đổi, và form đã có dữ liệu người dùng đang thao tác,
-    // TUYỆT ĐỐI KHÔNG ghi đè lại formModelItems khi productionLogs thay đổi trong nền
-    // để dữ liệu tính toán tức thì như LocalStorage và không bao giờ bị nhảy số loạn.
     if (!isDateShiftChanged && formModelItems.length > 0) {
       return;
     }
     lastLoadedDateShiftRef.current = dateShiftKey;
 
-    // 1. Kiểm tra Bản Nháp (Draft) chưa lưu trước tiên để giữ lại toàn bộ số liệu vừa gõ dở
+    // 1. Kiểm tra Bản Nháp (Draft) chưa lưu trước tiên
     const draft = getDraftForDateAndShift(formDate, formShift);
     if (draft && Array.isArray(draft.items) && draft.items.length > 0) {
       if (draft.slots && Array.isArray(draft.slots) && draft.slots.length > 0) {
@@ -1480,136 +1459,59 @@ const [isScrolled, setIsScrolled] = useState(false);
       return;
     }
     
+    // 2. Nếu đã có bản ghi trong productionLogs -> nạp lại để "cố định" số liệu
+    const logsForDate = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
+    if (logsForDate.length > 0) {
+      handleEditLog(formDate, formShift);
+      return;
+    }
+
+    // 3. Nếu chưa có gì -> khởi tạo trắng hoặc từ KHSX
     const [year, month, day] = formDate.split("-");
     const ym = `${year}-${month}`;
     const dayNum = parseInt(day, 10);
+    const shiftSlots = getShiftSlots(formShift).filter(isValidHourlySlot);
+    setFormSlots(shiftSlots);
 
-    const logsForDate = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
+    const initialWorkers: Record<string, number> = {};
+    shiftSlots.forEach(s => { initialWorkers[s] = 0; });
+    setFormOfficialWorkersRO(initialWorkers);
+    setFormSeasonalWorkersRO(initialWorkers);
+    setFormOfficialWorkersBG(initialWorkers);
+    setFormSeasonalWorkersBG(initialWorkers);
+    setFormOfficialWorkersRMA(initialWorkers);
+    setFormSeasonalWorkersRMA(initialWorkers);
 
-    if (logsForDate.length > 0) {
-      // 2. Tự động nạp từ bản ghi productionLogs của ngày/ca đó
-      const allSlots = new Set<string>();
-      logsForDate.forEach(log => {
-        if (log.hourlyActuals) {
-          Object.keys(log.hourlyActuals).forEach(slot => {
-            if (isValidHourlySlot(slot)) allSlots.add(slot);
-          });
-        }
-      });
-      const defaultSlots = getShiftSlots(formShift);
-      defaultSlots.forEach(s => {
-        if (isValidHourlySlot(s)) allSlots.add(s);
-      });
-      const sortedSlots = Array.from(allSlots).sort((a, b) => {
-        const hA = parseInt(a.split("H")[0]) || 0;
-        const hB = parseInt(b.split("H")[0]) || 0;
-        return hA - hB;
-      });
-      if (sortedSlots.length > 0) {
-        setFormSlots(sortedSlots);
-      }
-
-      const items: FormModelItem[] = logsForDate.map(log => {
-        const planVal = (!isNaN(dayNum) && monthlyPlan[ym]?.[log.productId]?.[dayNum]) || 0;
-        const cleanHourly: Record<string, number> = {};
-        if (log.hourlyActuals) {
-          Object.entries(log.hourlyActuals).forEach(([k, v]) => {
-            if (isValidHourlySlot(k)) cleanHourly[k] = Number(v) || 0;
-          });
-        }
-        return {
-          id: `item-${log.productId}-${log.id}`,
-          productId: log.productId,
-          dailyPlan: planVal,
-          hourlyActuals: cleanHourly,
-        };
-      });
-      setFormModelItems(items);
-
-      // Khôi phục nhân sự theo từng bộ phận
-      const newOffRO: Record<string, number> = {};
-      const newSeasRO: Record<string, number> = {};
-      const newOffBG: Record<string, number> = {};
-      const newSeasBG: Record<string, number> = {};
-      const newOffRMA: Record<string, number> = {};
-      const newSeasRMA: Record<string, number> = {};
-
-      logsForDate.forEach(log => {
-        const isRMA = log.lineId === "line-rma-03";
-        const isMLN = log.lineId === "line-mln-01";
-        const isBG = log.lineId === "line-bg-02";
-
-        const off = log.hourlyOfficialWorkers || {};
-        const seas = log.hourlySeasonalWorkers || {};
-
-        if (isRMA) {
-          Object.assign(newOffRMA, off);
-          Object.assign(newSeasRMA, seas);
-        } else if (isMLN) {
-          Object.assign(newOffRO, off);
-          Object.assign(newSeasRO, seas);
-        } else if (isBG) {
-          Object.assign(newOffBG, off);
-          Object.assign(newSeasBG, seas);
-        }
+    if (!isNaN(dayNum) && monthlyPlan[ym]) {
+      const plannedProducts = products.filter(p => {
+        const planVal = monthlyPlan[ym]?.[p.id]?.[dayNum] || 0;
+        const leftover = getPrevDayLeftover(p.id, formDate);
+        return planVal > 0 || leftover > 0;
       });
 
-      if (Object.keys(newOffRO).length > 0) setFormOfficialWorkersRO(newOffRO);
-      if (Object.keys(newSeasRO).length > 0) setFormSeasonalWorkersRO(newSeasRO);
-      if (Object.keys(newOffBG).length > 0) setFormOfficialWorkersBG(newOffBG);
-      if (Object.keys(newSeasBG).length > 0) setFormSeasonalWorkersBG(newSeasBG);
-      if (Object.keys(newOffRMA).length > 0) setFormOfficialWorkersRMA(newOffRMA);
-      if (Object.keys(newSeasRMA).length > 0) setFormSeasonalWorkersRMA(newSeasRMA);
-      if (logsForDate[0]?.technicianName) {
-        setFormTechnician(logsForDate[0].technicianName);
-      }
-    } else {
-      // 3. Chưa có log & chưa có draft: Tự động khởi tạo từ KHSX Tháng (monthlyPlan)
-      const shiftSlots = getShiftSlots(formShift).filter(isValidHourlySlot);
-      const currentSlots = formSlotsRef.current;
-      const slotsChanged = shiftSlots.length !== currentSlots.length || shiftSlots.some((s, idx) => s !== currentSlots[idx]);
-      if (slotsChanged) {
-        setFormSlots(shiftSlots);
-      }
-
-      const initialWorkers: Record<string, number> = {};
-      shiftSlots.forEach(s => { initialWorkers[s] = 0; });
-      setFormOfficialWorkersRO(initialWorkers);
-      setFormSeasonalWorkersRO(initialWorkers);
-      setFormOfficialWorkersBG(initialWorkers);
-      setFormSeasonalWorkersBG(initialWorkers);
-
-      if (!isNaN(dayNum) && monthlyPlan[ym]) {
-        const plannedProducts = products.filter(p => {
-          const planVal = monthlyPlan[ym]?.[p.id]?.[dayNum] || 0;
-          const leftover = getPrevDayLeftover(p.id, formDate);
-          return planVal > 0 || leftover > 0;
-        });
-
-        if (plannedProducts.length > 0) {
-          const newItems: FormModelItem[] = plannedProducts.map(p => {
-            const initialHrs: Record<string, number> = {};
-            shiftSlots.forEach(s => { initialHrs[s] = 0; });
-            return {
-              id: `item-${p.id}-${formDate}-${formShift}`,
-              productId: p.id,
-              dailyPlan: monthlyPlan[ym]?.[p.id]?.[dayNum] || 0,
-              hourlyActuals: initialHrs,
-            };
-          });
-          setFormModelItems(newItems);
-        } else {
+      if (plannedProducts.length > 0) {
+        const newItems: FormModelItem[] = plannedProducts.map(p => {
           const initialHrs: Record<string, number> = {};
           shiftSlots.forEach(s => { initialHrs[s] = 0; });
-          setFormModelItems([
-            {
-              id: `item-init-${formDate}-${formShift}`,
-              productId: "mln-01",
-              dailyPlan: monthlyPlan[ym]?.["mln-01"]?.[dayNum] || 0,
-              hourlyActuals: initialHrs,
-            }
-          ]);
-        }
+          return {
+            id: `item-${p.id}-${formDate}-${formShift}-${Math.random().toString(36).substr(2, 5)}`,
+            productId: p.id,
+            dailyPlan: monthlyPlan[ym]?.[p.id]?.[dayNum] || 0,
+            hourlyActuals: initialHrs,
+          };
+        });
+        setFormModelItems(newItems);
+      } else {
+        const initialHrs: Record<string, number> = {};
+        shiftSlots.forEach(s => { initialHrs[s] = 0; });
+        setFormModelItems([
+          {
+            id: `item-init-${formDate}-${formShift}-${Math.random().toString(36).substr(2, 5)}`,
+            productId: products[0].id,
+            dailyPlan: monthlyPlan[ym]?.[products[0].id]?.[dayNum] || 0,
+            hourlyActuals: initialHrs,
+          }
+        ]);
       }
     }
   }, [formDate, formShift, productionLogs]);
@@ -3380,12 +3282,19 @@ const [isScrolled, setIsScrolled] = useState(false);
       
       const dayLogs = productionLogs.filter(log => log.date === weekObj.days[i].dateStr);
       
-      // Calculate total workers for the day by summing workers from unique lines
-      const uniqueLines = Array.from(new Set(dayLogs.map(l => l.lineId)));
-      const workers = uniqueLines.reduce((sum, lineId) => {
-        const lineLogs = dayLogs.filter(l => l.lineId === lineId);
-        return sum + (lineLogs.length > 0 ? lineLogs[0].workersCount : 0);
-      }, 0);
+      // Calculate total workers for the day by summing workers from unique (shift + lineId)
+      // and filtering by division if active
+      let filteredDayLogsForWorkers = dayLogs;
+      if (filterDivision !== "ALL") {
+        filteredDayLogsForWorkers = dayLogs.filter(l => l.productGroup === filterDivision);
+      }
+
+      const uniqueShiftWorkersMap: { [key: string]: number } = {};
+      filteredDayLogsForWorkers.forEach((log) => {
+        const key = `${log.shift}_${log.lineId}`;
+        uniqueShiftWorkersMap[key] = Math.max(uniqueShiftWorkersMap[key] || 0, log.workersCount || 0);
+      });
+      const workers = Object.values(uniqueShiftWorkersMap).reduce((acc, val) => acc + (val || 0), 0);
 
       return { plan, actual, planEq, actualEq, workers };
     });
@@ -3395,7 +3304,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       actual: dayTotals.reduce((sum: number, d) => sum + d.actual, 0),
       planEq: dayTotals.reduce((sum: number, d) => sum + d.planEq, 0),
       actualEq: dayTotals.reduce((sum: number, d) => sum + d.actualEq, 0),
-      workers: dayTotals.reduce((sum: number, d) => sum + (d.workers as number), 0) / (dayTotals.filter(d => (d.workers as number) > 0).length || 1),
+      // Change to SUM of man-days for the week
+      workers: dayTotals.reduce((sum: number, d) => sum + (d.workers as number), 0),
       allTimeActual: rows.reduce((sum, r) => sum + (r as any).allTimeActual, 0),
       allTimePlan: rows.reduce((sum, r) => sum + (r as any).allTimePlan, 0),
       allTimeActualEq: rows.reduce((sum, r) => sum + (r as any).allTimeActualEq, 0),
@@ -3646,6 +3556,10 @@ const [isScrolled, setIsScrolled] = useState(false);
     
     filteredLogs.forEach(log => {
       if (!log.date.startsWith(selectedYear)) return;
+      
+      // Bỏ qua bản ghi của ca hiện tại đang nhập trong form để tính toán live preview từ formAggregates
+      if (log.date === formDate && log.shift === formShift) return;
+
       if (!logsByDate[log.date]) logsByDate[log.date] = { totalEq: 0, mandays: 0 };
       logsByDate[log.date].totalEq += log.equivalentProducts;
       
@@ -3658,8 +3572,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       if (logsByDate[date]) logsByDate[date].mandays += workers;
     });
 
-    const isFormInLogs = filteredLogs.some(l => l.date === formDate);
-    if (!isFormInLogs && formDate && formDate.startsWith(selectedYear)) {
+    // Luôn cộng dồn dữ liệu từ form hiện tại vào ngày tương ứng để Dashboard cập nhật 100% Realtime (Request 7, 8, 9)
+    if (formDate && formDate.startsWith(selectedYear)) {
       if (!logsByDate[formDate]) logsByDate[formDate] = { totalEq: 0, mandays: 0 };
       if (filterDivision === "ALL") {
         logsByDate[formDate].totalEq += formAggregates.totalEqQty;
@@ -3670,6 +3584,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       } else if (filterDivision === "BG") {
         logsByDate[formDate].totalEq += formAggregates.totalEqQtyBG;
         logsByDate[formDate].mandays += formWorkersCountBG;
+      } else if (filterDivision === "RMA") {
+        logsByDate[formDate].totalEq += formAggregates.totalEqQtyRMA;
+        logsByDate[formDate].mandays += formWorkersCountRMA;
       }
     }
 
@@ -4033,9 +3950,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       (log) => log.date.startsWith(monthPrefix) && (filterDivision === "ALL" || log.productGroup === filterDivision)
     );
     
-    const filteredLogs = (isFormMonth && !hasSavedFormDate)
-      ? logsForMonth.filter((log) => log.date !== formDate)
-      : logsForMonth;
+    // Luôn lọc bỏ bản ghi của ca hiện tại từ dữ liệu đã lưu để thay thế bằng dữ liệu LIVE từ form
+    const filteredLogs = logsForMonth.filter((log) => log.date !== formDate || log.shift !== formShift);
 
     // Split Eq Prod into two: for display in Card 2 vs for calculation in Card 4/4.5
     let totalEqProd_display = 0;
@@ -4075,8 +3991,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     let totalOfficialMonth = Object.values(uniqueShiftMap).reduce((acc, val) => acc + val.official, 0);
     let totalSeasonalMonth = Object.values(uniqueShiftMap).reduce((acc, val) => acc + val.seasonal, 0);
 
-    // If formDate month matches and it hasn't been saved yet, add active form values
-    if (isFormMonth && !hasSavedFormDate) {
+    // If formDate month matches, add active form values for 100% Realtime sync
+    if (isFormMonth) {
       if (filterDivision === "ALL") {
         // For Display (Card 2) - Exclude RMA
         totalEqProd_display += (formAggregates.totalEqQtyRO + formAggregates.totalEqQtyBG);
@@ -4915,7 +4831,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     });
 
     // --- ĐỒNG BỘ & DỌN DẸP DỮ LIỆU CŨ ---
-    // Kiểm tra xem có bản ghi nào của ca này đã lưu trước đó nhưng hiện tại đã bị xóa khỏi form không
     const existingLogsInShift = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
     const incomingProductIds = new Set(newLogs.map(nl => nl.productId));
     const idsToDelete = existingLogsInShift
@@ -4923,7 +4838,6 @@ const [isScrolled, setIsScrolled] = useState(false);
       .map(el => el.id);
 
     if (idsToDelete.length > 0) {
-      console.info(`[Sync] Đang xóa ${idsToDelete.length} model không còn trong danh sách ca này...`);
       await storage.deleteMultipleProductionLogs(idsToDelete);
     }
 
@@ -4931,7 +4845,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     
     let updatedLogs: ProductionLog[] = [];
     setProductionLogs((prev) => {
-      // Lọc bỏ toàn bộ bản ghi cũ của ca này và thay thế bằng danh sách mới
       const filtered = prev.filter((log) => log.date !== formDate || log.shift !== formShift);
       const combined = [...newLogs, ...filtered];
       const { deduplicated } = storage.deduplicateProductionLogs(combined);
@@ -4939,7 +4852,6 @@ const [isScrolled, setIsScrolled] = useState(false);
       return updatedLogs;
     });
 
-    // Tự động đồng bộ số liệu vào dữ liệu lịch sử các tháng
     setTimeout(() => {
       if (updatedLogs.length > 0) {
         syncHistoricalMetricsWithLogs(updatedLogs);
@@ -4949,17 +4861,9 @@ const [isScrolled, setIsScrolled] = useState(false);
     const logMonth = parseInt(formDate.split("-")[1], 10) || 1;
     const logYear = parseInt(formDate.split("-")[0], 10) || 2026;
     setFormMessage(`✅ Đã đồng bộ & lưu thành công ${newLogs.length} bản ghi nhật ký ca (Tháng ${logMonth}/${logYear})!`);
-
-    // Xóa bản nháp (draft) sau khi đã lưu thành công
     storage.clearFormDraft(formDate, formShift);
-
-    // Reset form fields
     resetFormFields();
-
-    // Xóa thông báo sau 4 giây
-    setTimeout(() => {
-      setFormMessage("");
-    }, 4500);
+    setTimeout(() => setFormMessage(""), 4500);
   };
 
   const resetFormFields = () => {
@@ -4987,37 +4891,23 @@ const [isScrolled, setIsScrolled] = useState(false);
       remainingLogs = prev.filter((log) => log.id !== id);
       return remainingLogs;
     });
-
-    setTimeout(() => {
-      syncHistoricalMetricsWithLogs(remainingLogs);
-    }, 50);
-
+    setTimeout(() => syncHistoricalMetricsWithLogs(remainingLogs), 50);
     setFormMessage("❌ Đã xóa bản ghi nhật ký ca & cập nhật lại dữ liệu lịch sử.");
-    setTimeout(() => {
-      setFormMessage("");
-    }, 3500);
+    setTimeout(() => setFormMessage(""), 3500);
   };
 
-  // Hàm chủ động quét và dọn dẹp toàn bộ dữ liệu nhật ký ca bị trùng lặp (trên cả Local và Supabase Cloud)
   const handleDeduplicateLogs = async () => {
     const { deduplicated, duplicateIds } = storage.deduplicateProductionLogs(productionLogs);
-    if (duplicateIds.length === 0 && deduplicated.length === productionLogs.length) {
-      setFormMessage("✨ Dữ liệu nhật ký ca hiện tại hoàn toàn chuẩn xác, không phát hiện dòng trùng lặp nào!");
+    if (duplicateIds.length === 0) {
+      setFormMessage("✨ Dữ liệu nhật ký ca hiện tại hoàn toàn chuẩn xác!");
       setTimeout(() => setFormMessage(""), 4000);
       return;
     }
-
-    // Xóa các dòng duplicate trên Supabase
-    if (duplicateIds.length > 0) {
-      await storage.deleteMultipleProductionLogs(duplicateIds);
-    }
-    // Cập nhật lại toàn bộ danh sách chuẩn
+    if (duplicateIds.length > 0) await storage.deleteMultipleProductionLogs(duplicateIds);
     await storage.saveAllProductionLogs(deduplicated);
-
     setProductionLogs(deduplicated);
     syncHistoricalMetricsWithLogs(deduplicated);
-
-    setFormMessage(`🧹 Đã gộp và loại bỏ thành công ${duplicateIds.length} dòng nhật ký ca bị trùng lặp! Chỉ số NSLĐ các tháng đã được chuẩn hóa lại chính xác 100%.`);
+    setFormMessage(`🧹 Đã gộp và loại bỏ thành công ${duplicateIds.length} dòng trùng lặp!`);
     setTimeout(() => setFormMessage(""), 5000);
   };
 
@@ -5030,26 +4920,23 @@ const [isScrolled, setIsScrolled] = useState(false);
     setFormShift(firstLog.shift as any);
     setFormTechnician(firstLog.technicianName);
 
-    // Thu thập tất cả các slots được sử dụng
     const allSlots = new Set<string>();
     logsForDate.forEach(log => {
       if (log.hourlyActuals) {
-        Object.keys(log.hourlyActuals).forEach(slot => allSlots.add(slot));
+        Object.keys(log.hourlyActuals).forEach(slot => {
+          if (isValidHourlySlot(slot)) allSlots.add(slot);
+        });
       }
     });
-    
-    // Đảm bảo các slots mặc định cũng có mặt nếu shift là mặc định
     const defaultSlots = getShiftSlots(firstLog.shift);
-    defaultSlots.forEach(s => allSlots.add(s));
-    
+    defaultSlots.forEach(s => { if (isValidHourlySlot(s)) allSlots.add(s); });
     const sortedSlots = Array.from(allSlots).sort((a, b) => {
-      const hA = parseInt(a.split("H")[0]);
-      const hB = parseInt(b.split("H")[0]);
+      const hA = parseInt(a.split("H")[0]) || 0;
+      const hB = parseInt(b.split("H")[0]) || 0;
       return hA - hB;
     });
     setFormSlots(sortedSlots);
 
-    // Tái cấu trúc formModelItems có liên kết với KHSX ngày từ monthlyPlan
     const [editYear, editMonth, editDay] = date.split("-");
     const ym = `${editYear}-${editMonth}`;
     const dayNum = parseInt(editDay, 10);
@@ -5057,7 +4944,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const newFormModelItems: FormModelItem[] = logsForDate.map(log => {
       const planVal = (!isNaN(dayNum) && monthlyPlan[ym]?.[log.productId]?.[dayNum]) || 0;
       return {
-        id: "item-" + log.productId + "-" + Date.now() + Math.random(),
+        id: `item-${log.productId}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
         productId: log.productId,
         dailyPlan: planVal,
         hourlyActuals: log.hourlyActuals || {}
@@ -5065,88 +4952,50 @@ const [isScrolled, setIsScrolled] = useState(false);
     });
     setFormModelItems(newFormModelItems);
 
-    // Khôi phục nhân sự
-    setFormOfficialWorkersRO({});
-    setFormSeasonalWorkersRO({});
-    setFormOfficialWorkersRMA({});
-    setFormSeasonalWorkersRMA({});
-    setFormOfficialWorkersBG({});
-    setFormSeasonalWorkersBG({});
+    const newOffRO: Record<string, number> = {}, newSeasRO: Record<string, number> = {};
+    const newOffRMA: Record<string, number> = {}, newSeasRMA: Record<string, number> = {};
+    const newOffBG: Record<string, number> = {}, newSeasBG: Record<string, number> = {};
+
+    const synthesizeWorkers = (log: ProductionLog) => {
+      let official = log.hourlyOfficialWorkers || {};
+      let seasonal = log.hourlySeasonalWorkers || {};
+      if (Object.keys(official).length === 0 && Object.keys(seasonal).length === 0 && log.hourlyWorkers && Object.keys(log.hourlyWorkers).length > 0) {
+        const totalOff = log.officialWorkers || 0, totalSeas = log.seasonalWorkers || 0, total = totalOff + totalSeas;
+        if (total > 0) {
+          const offRatio = totalOff / total, seasRatio = totalSeas / total;
+          Object.keys(log.hourlyWorkers).forEach(slot => {
+            const hw = log.hourlyWorkers[slot];
+            official[slot] = Number((hw * offRatio).toFixed(3));
+            seasonal[slot] = Number((hw * seasRatio).toFixed(3));
+          });
+        } else official = { ...log.hourlyWorkers };
+      }
+      return { official, seasonal };
+    };
 
     logsForDate.forEach(log => {
-      const isRMA = log.lineId === "line-rma-03";
-      const isMLN = log.lineId === "line-mln-01";
-      const isBG = log.lineId === "line-bg-02";
-
-      const synthesizeWorkers = (log: ProductionLog) => {
-        let official = log.hourlyOfficialWorkers || {};
-        let seasonal = log.hourlySeasonalWorkers || {};
-        
-        // If no official/seasonal breakdown but we have hourlyWorkers (old records)
-        if (Object.keys(official).length === 0 && Object.keys(seasonal).length === 0 && log.hourlyWorkers && Object.keys(log.hourlyWorkers).length > 0) {
-          const totalOff = log.officialWorkers || 0;
-          const totalSeas = log.seasonalWorkers || 0;
-          const total = totalOff + totalSeas;
-          
-          if (total > 0) {
-            const offRatio = totalOff / total;
-            const seasRatio = totalSeas / total;
-            
-            Object.keys(log.hourlyWorkers).forEach(slot => {
-              const hw = log.hourlyWorkers[slot];
-              official[slot] = Number((hw * offRatio).toFixed(3));
-              seasonal[slot] = Number((hw * seasRatio).toFixed(3));
-            });
-          } else {
-            official = { ...log.hourlyWorkers }; // fallback to all official
-          }
-        }
-        return { official, seasonal };
-      };
-
+      const isRMA = log.lineId === "line-rma-03" || log.productGroup === "RMA";
+      const isBG = log.lineId === "line-bg-02" || log.productGroup === "BG";
+      const { official, seasonal } = synthesizeWorkers(log);
       if (isRMA) {
-        const { official, seasonal } = synthesizeWorkers(log);
-        setFormOfficialWorkersRMA(prev => {
-          const next = { ...prev };
-          Object.keys(official).forEach(k => { next[k] = Math.max(next[k] || 0, Number(official[k]) || 0); });
-          return next;
-        });
-        setFormSeasonalWorkersRMA(prev => {
-          const next = { ...prev };
-          Object.keys(seasonal).forEach(k => { next[k] = Math.max(next[k] || 0, Number(seasonal[k]) || 0); });
-          return next;
-        });
-      } else if (isMLN) {
-        const { official, seasonal } = synthesizeWorkers(log);
-        setFormOfficialWorkersRO(prev => {
-          const next = { ...prev };
-          Object.keys(official).forEach(k => { next[k] = Math.max(next[k] || 0, Number(official[k]) || 0); });
-          return next;
-        });
-        setFormSeasonalWorkersRO(prev => {
-          const next = { ...prev };
-          Object.keys(seasonal).forEach(k => { next[k] = Math.max(next[k] || 0, Number(seasonal[k]) || 0); });
-          return next;
-        });
+        Object.entries(official).forEach(([k, v]) => { newOffRMA[k] = Math.max(newOffRMA[k] || 0, Number(v) || 0); });
+        Object.entries(seasonal).forEach(([k, v]) => { newSeasRMA[k] = Math.max(newSeasRMA[k] || 0, Number(v) || 0); });
       } else if (isBG) {
-        const { official, seasonal } = synthesizeWorkers(log);
-        setFormOfficialWorkersBG(prev => {
-          const next = { ...prev };
-          Object.keys(official).forEach(k => { next[k] = Math.max(next[k] || 0, Number(official[k]) || 0); });
-          return next;
-        });
-        setFormSeasonalWorkersBG(prev => {
-          const next = { ...prev };
-          Object.keys(seasonal).forEach(k => { next[k] = Math.max(next[k] || 0, Number(seasonal[k]) || 0); });
-          return next;
-        });
+        Object.entries(official).forEach(([k, v]) => { newOffBG[k] = Math.max(newOffBG[k] || 0, Number(v) || 0); });
+        Object.entries(seasonal).forEach(([k, v]) => { newSeasBG[k] = Math.max(newSeasBG[k] || 0, Number(v) || 0); });
+      } else {
+        Object.entries(official).forEach(([k, v]) => { newOffRO[k] = Math.max(newOffRO[k] || 0, Number(v) || 0); });
+        Object.entries(seasonal).forEach(([k, v]) => { newSeasRO[k] = Math.max(newSeasRO[k] || 0, Number(v) || 0); });
       }
     });
 
+    setFormOfficialWorkersRO(newOffRO); setFormSeasonalWorkersRO(newSeasRO);
+    setFormOfficialWorkersRMA(newOffRMA); setFormSeasonalWorkersRMA(newSeasRMA);
+    setFormOfficialWorkersBG(newOffBG); setFormSeasonalWorkersBG(newSeasBG);
+
     setActiveTab("logging");
     setLoggingSubTab("records"); 
-    setFormMessage("🔄 Đã tải dữ liệu nhật ký ngày " + date + " lên form để chỉnh sửa. Sau khi sửa xong, nhấn 'Lưu Nhật Ký Ca' để cập nhật.");
-    
+    setFormMessage("🔄 Đã tải dữ liệu nhật ký ngày " + date + " lên form để chỉnh sửa.");
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -5484,6 +5333,86 @@ const [isScrolled, setIsScrolled] = useState(false);
       await storage.saveFormDraft(draftData);
       showToastSuccess("Đã lưu nhân sự ca lên Supabase ✓");
       storage.sendLiveFormBroadcast(draftData);
+
+      // ĐỒNG BỘ NGƯỢC LẠI productionLogs ĐỂ CÁC BÁO CÁO/DASHBOARD CẬP NHẬT TỨC THÌ (Request 7 & 8)
+      setProductionLogs(prev => {
+        let changed = false;
+        const next = prev.map(log => {
+          if (log.date === formDate && log.shift === formShift) {
+            const isRMA = log.lineId === "line-rma-03" || log.productGroup === "RMA";
+            const isBG = log.lineId === "line-bg-02" || log.productGroup === "BG";
+            const isRO = !isRMA && !isBG;
+
+            let off = {};
+            let seas = {};
+            let wCount = 0;
+            let offCount = 0;
+            let seasCount = 0;
+
+            if (isRMA) {
+              off = formOfficialWorkersRMA;
+              seas = formSeasonalWorkersRMA;
+              wCount = formWorkersCountRMA;
+              offCount = formOfficialCountRMA;
+              seasCount = formSeasonalCountRMA;
+            } else if (isBG) {
+              off = formOfficialWorkersBG;
+              seas = formSeasonalWorkersBG;
+              wCount = formWorkersCountBG;
+              offCount = formOfficialCountBG;
+              seasCount = formSeasonalCountBG;
+            } else {
+              off = formOfficialWorkersRO;
+              seas = formSeasonalWorkersRO;
+              wCount = formWorkersCountRO;
+              offCount = formOfficialCountRO;
+              seasCount = formSeasonalCountRO;
+            }
+
+            if (JSON.stringify(log.hourlyOfficialWorkers) !== JSON.stringify(off) || log.workersCount !== wCount) {
+              changed = true;
+              return {
+                ...log,
+                hourlyOfficialWorkers: off,
+                hourlySeasonalWorkers: seas,
+                workersCount: wCount,
+                officialWorkers: offCount,
+                seasonalWorkers: seasCount
+              };
+            }
+          }
+          return log;
+        });
+        return changed ? next : prev;
+      });
+
+      // Cập nhật lên Supabase cho các bản ghi đã tồn tại của ca này
+      const logsInShift = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
+      if (logsInShift.length > 0) {
+        const updatedLogs = logsInShift.map(log => {
+          const isRMA = log.lineId === "line-rma-03" || log.productGroup === "RMA";
+          const isBG = log.lineId === "line-bg-02" || log.productGroup === "BG";
+          
+          let off = {}, seas = {}, wCount = 0, offCount = 0, seasCount = 0;
+          if (isRMA) {
+            off = formOfficialWorkersRMA; seas = formSeasonalWorkersRMA; wCount = formWorkersCountRMA; offCount = formOfficialCountRMA; seasCount = formSeasonalCountRMA;
+          } else if (isBG) {
+            off = formOfficialWorkersBG; seas = formSeasonalWorkersBG; wCount = formWorkersCountBG; offCount = formOfficialCountBG; seasCount = formSeasonalCountBG;
+          } else {
+            off = formOfficialWorkersRO; seas = formSeasonalWorkersRO; wCount = formWorkersCountRO; offCount = formOfficialCountRO; seasCount = formSeasonalCountRO;
+          }
+
+          return {
+            ...log,
+            hourlyOfficialWorkers: off,
+            hourlySeasonalWorkers: seas,
+            workersCount: wCount,
+            officialWorkers: offCount,
+            seasonalWorkers: seasCount
+          };
+        });
+        storage.upsertProductionLogs(updatedLogs).catch(e => console.warn("Lỗi sync nhân sự ca:", e));
+      }
     } catch (err: any) {
       showToastError(err?.message || 'Lỗi lưu nhân sự lên Supabase');
     }

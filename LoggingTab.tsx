@@ -735,7 +735,7 @@ export const LoggingTab = ({
 
                               <tr key="ro-total-workers" className="bg-emerald-950/30 text-[14px] total-row-ro">
                                 <td colSpan={3} className="py-2 px-2 text-right text-emerald-400 font-bold border-r border-slate-800 sticky left-0 bg-emerald-950/90 z-10 pl-4 whitespace-nowrap">
-                                  ↳ Tổng nhân sự DCRO
+                                  ↳ Tổng công DCRO (Công)
                                 </td>
                                 {formSlots.map(slot => (
                                   <td key={slot} className="py-2 px-1 border-r border-slate-800 text-emerald-400 font-bold min-w-[80px] w-[80px] text-center">
@@ -748,6 +748,17 @@ export const LoggingTab = ({
                                 <td className="border-r border-slate-800"></td>
                                 <td className="border-r border-slate-800"></td>
                                 <td></td>
+                              </tr>
+
+                              <tr key="ro-people-count" className="bg-emerald-900/10 text-[13px]">
+                                <td colSpan={3} className="py-1 px-2 text-right text-emerald-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 pl-4 whitespace-nowrap italic">
+                                  ↳ Số người DCRO thực tế
+                                </td>
+                                <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
+                                <td className="py-1 px-1 border-r border-slate-800 text-emerald-300 font-bold text-center">
+                                  {formAggregates.formPersonCountRO}
+                                </td>
+                                <td colSpan={3}></td>
                               </tr>
 
                               {/* Spacer */}
@@ -817,7 +828,7 @@ export const LoggingTab = ({
 
                               <tr key="rma-total-workers" className="bg-amber-950/30 text-[14px] total-row-rma">
                                 <td colSpan={3} className="py-2 px-2 text-right text-amber-400 font-bold border-r border-slate-800 sticky left-0 bg-amber-950/90 z-10 pl-4 whitespace-nowrap">
-                                  ↳ Tổng nhân sự DCRMA
+                                  ↳ Tổng công DCRMA (Công)
                                 </td>
                                 {formSlots.map(slot => (
                                   <td key={slot} className="py-2 px-1 border-r border-slate-800 text-amber-400 font-bold min-w-[80px] w-[80px] text-center">
@@ -830,6 +841,17 @@ export const LoggingTab = ({
                                 <td className="border-r border-slate-800"></td>
                                 <td className="border-r border-slate-800"></td>
                                 <td></td>
+                              </tr>
+
+                              <tr key="rma-people-count" className="bg-amber-900/10 text-[13px]">
+                                <td colSpan={3} className="py-1 px-2 text-right text-amber-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 pl-4 whitespace-nowrap italic">
+                                  ↳ Số người DCRMA thực tế
+                                </td>
+                                <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
+                                <td className="py-1 px-1 border-r border-slate-800 text-amber-300 font-bold text-center">
+                                  {formAggregates.formPersonCountRMA}
+                                </td>
+                                <td colSpan={3}></td>
                               </tr>
 
                               <tr key="rma-spacer" className="h-2 bg-slate-950">
@@ -898,7 +920,7 @@ export const LoggingTab = ({
 
                               <tr key="bg-total-workers" className="bg-sky-950/30 text-[14px] total-row-bg">
                                 <td colSpan={3} className="py-2 px-2 text-right text-sky-400 font-bold border-r border-slate-800 sticky left-0 bg-sky-950/90 z-10 pl-4 whitespace-nowrap">
-                                  ↳ Tổng nhân sự DCBG
+                                  ↳ Tổng công DCBG (Công)
                                 </td>
                                 {formSlots.map(slot => (
                                   <td key={slot} className="py-2 px-1 border-r border-slate-800 text-sky-400 font-bold min-w-[80px] w-[80px] text-center">
@@ -913,6 +935,17 @@ export const LoggingTab = ({
                                 <td></td>
                               </tr>
 
+                              <tr key="bg-people-count" className="bg-sky-900/10 text-[13px]">
+                                <td colSpan={3} className="py-1 px-2 text-right text-sky-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 pl-4 whitespace-nowrap italic">
+                                  ↳ Số người DCBG thực tế
+                                </td>
+                                <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
+                                <td className="py-1 px-1 border-r border-slate-800 text-sky-300 font-bold text-center">
+                                  {formAggregates.formPersonCountBG}
+                                </td>
+                                <td colSpan={3}></td>
+                              </tr>
+
                               {/* Spacer */}
                               <tr key="bg-spacer" className="h-2 bg-slate-950">
                                 <td colSpan={formSlots.length + 7}></td>
@@ -924,7 +957,7 @@ export const LoggingTab = ({
                           {filterDivision === "ALL" && (
                             <tr key="grand-total-workers" className="bg-[#92D050] border-t border-green-600 text-slate-950 font-black text-[15px]">
                               <td colSpan={3} className="py-2 px-1 text-right border-r border-green-600 sticky left-0 bg-[#92D050] z-10 whitespace-nowrap uppercase tracking-wide">
-                                Tổng công các Dây chuyền
+                                TỔNG CÔNG (CÔNG THAO TÁC)
                               </td>
                               {formSlots.map(slot => {
                                 const totalH = (formOfficialWorkersRO[slot] || 0) + (formSeasonalWorkersRO[slot] || 0) + (formOfficialWorkersRMA[slot] || 0) + (formSeasonalWorkersRMA[slot] || 0) + (formOfficialWorkersBG[slot] || 0) + (formSeasonalWorkersBG[slot] || 0);
@@ -937,9 +970,9 @@ export const LoggingTab = ({
                               <td className="py-2 px-1 border-r border-green-600 text-center">
                                 {formWorkersCount}
                               </td>
-                              <td className="border-r border-green-600"></td>
-                              <td className="border-r border-green-600"></td>
-                              <td className="bg-slate-700/80"></td>
+                              <td colSpan={3} className="bg-[#92D050]/80 text-[13px] text-right pr-4 font-bold italic">
+                                Số người trung bình: {formAggregates.formPersonCount}
+                              </td>
                             </tr>
                           )}
                           
