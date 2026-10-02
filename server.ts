@@ -1,268 +1,218 @@
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { GoogleGenAI } from '@google/genai';
-import dotenv from 'dotenv';
-import { createServer as createViteServer } from 'vite';
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
 
+import express from "express";
+import path from "path";
+import dns from "dns";
+import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
+import dotenv from "dotenv";
+
+// Tải biến môi trường
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || "https://rxjvvfoxmdfakcbqskwn.supabase.co";
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_ANON_KEY || "sb_publishable_SJSVyW7MUw2FK4fs3IIgGw_0bor6Hzn";
 
-const app = express();
-const PORT = 3000;
-
-// Support large image payloads in base64
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Lazy initialize GoogleGenAI client
-let aiClient: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('GEMINI_API_KEY environment variable is required');
-    }
-    aiClient = new GoogleGenAI({ 
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return aiClient;
-}
-
-// Resilient Gemini generateContent with auto-retry and multi-model fallback
-async function generateWithFallback(ai: GoogleGenAI, contents: any[], config?: any): Promise<string> {
-  const candidateModels = [
-    'gemini-3.8-flash',
-    'gemini-3.1-pro-preview',
-    'gemini-3.1-flash-lite',
-    'gemini-flash-latest',
-  ];
-
-  let lastError: any = null;
-
-  for (const model of candidateModels) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          responseMimeType: 'application/json',
-          ...config,
-        },
-      });
-      if (response && response.text) {
-        return response.text;
-      }
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[Gemini OCR] Model ${model} failed, attempting next available model:`, err?.message || err);
-    }
-  }
-
-  throw lastError || new Error('Không thể kết nối tới mô hình AI. Vui lòng thử lại sau giây lát.');
-}
-
-// Health check endpoint
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+// Khởi tạo Gemini client từ bộ SDK @google/genai mới nhất
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      "User-Agent": "aistudio-build",
+    },
+  },
 });
 
-// AI OCR Image scanning for Defect & Quality tables
-app.post('/api/scan-defect-image', async (req, res) => {
-  try {
-    const { imageBase64, mimeType = 'image/jpeg', targetCategory = 'AUTO' } = req.body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ success: false, error: 'Vui lòng cung cấp dữ liệu hình ảnh (base64).' });
-    }
-
-    // Clean base64 string
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
-
-    const ai = getAI();
-
-    const prompt = `
-Bạn là chuyên gia OCR và phân tích dữ liệu sản xuất công nghiệp tại Phân xưởng Lắp ráp (PXLR).
-Hãy đọc kỹ hình ảnh bảng biểu / Excel / báo cáo dữ liệu hư hỏng hoặc chất lượng đính kèm và trích xuất TOÀN BỘ danh sách các dòng vật tư tổn thất/hư hỏng.
-
-Yêu cầu trích xuất chi tiết:
-1. Nhận diện nhóm sản phẩm (category):
-   - "RO" nếu là Máy lọc nước RO / DCRO / Lọc nước / Cốc lọc / Màng RO / Cút nối...
-   - "BG" nếu là Bếp Gas / DCBG / SHB / MMB / Cụm đánh lửa / Đĩa chống tràn / Nẹp kính...
-2. Mỗi dòng trích xuất bao gồm:
-   - itemCode (string): Mã linh kiện / mã VT (ví dụ: "04-28-03-BRA590N-0007", "04-29-06-SHA76622KL-0000", "02-33-01-SHB3223MT-0001", v.v.)
-   - itemName (string): Tên vật tư mô tả chính xác từ ảnh (ví dụ: "Van xả áp", "Vỏ carton MLN R.O Slim dùng chung", "Bộ dây nguồn tổng SHA76636KL", "Màng R.O TFC 100GPD", v.v.)
-   - quantity (number): Số lượng vật tư hỏng (số nguyên hoặc thập phân)
-   - unitPrice (number): Đơn giá (VND)
-   - amount (number): Thành tiền = quantity * unitPrice (VND)
-   - week (string): Tuần nếu có trong bảng (ví dụ: "W37", "W38", "W36", v.v.)
-   - isHighlighted (boolean): true nếu dòng đó được tô màu vàng, đỏ, hồng hoặc đánh dấu nổi bật trong ảnh
-   - category (string): "RO" hoặc "BG"
-3. Trích xuất tổng thành tiền (grandTotal) được hiển thị trong ảnh (ví dụ 607,649.38 đ hoặc 754,482.82 đ).
-4. Trích xuất các ghi chú hoặc đối sách nếu có trong ảnh.
-
-Hãy trả về định dạng JSON thuần túy theo cấu trúc sau:
-{
-  "detectedCategory": "RO" | "BG" | "BOTH",
-  "detectedTitle": "Tên báo cáo nhận diện được",
-  "grandTotal": 607649.38,
-  "items": [
-    {
-      "itemCode": "04-28-03-BRA590N-0007",
-      "itemName": "Van xả áp",
-      "quantity": 2,
-      "unitPrice": 9999.58,
-      "amount": 19999.16,
-      "week": "W37",
-      "category": "RO",
-      "isHighlighted": false
-    }
-  ],
-  "summaryNotes": "Ghi chú tóm tắt từ ảnh"
-}
-`;
-
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType || 'image/jpeg',
-              data: cleanBase64,
-            },
-          },
-          {
-            text: prompt,
-          },
-        ],
-      },
-    ];
-
-    const responseText = await generateWithFallback(ai, contents);
-    let parsedResult;
-    try {
-      parsedResult = JSON.parse(responseText);
-    } catch {
-      // Fallback regex to clean markdown code blocks
-      const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
-      parsedResult = JSON.parse(cleanJson);
-    }
-
-    return res.json({
-      success: true,
-      data: parsedResult,
-    });
-  } catch (error: any) {
-    console.error('Error scanning image with Gemini:', error);
-    return res.status(500).json({
-      success: false,
-      error: error?.message || 'Có lỗi xảy ra khi xử lý và quét hình ảnh bằng AI. Vui lòng thử lại.',
-    });
-  }
-});
-
-// AI OCR Image scanning for Quality / Daily / NSLD report images
-app.post('/api/scan-quality-image', async (req, res) => {
-  try {
-    const { imageBase64, mimeType = 'image/jpeg' } = req.body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ success: false, error: 'Vui lòng cung cấp dữ liệu hình ảnh (base64).' });
-    }
-
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, '');
-    const ai = getAI();
-
-    const prompt = `
-Bạn là chuyên gia phân tích báo cáo sản xuất công nghiệp PXLR.
-Hãy đọc hình ảnh biểu đồ / bảng biểu chất lượng hoặc NSLĐ đính kèm và trích xuất các thông số:
-- Các ngày hoặc tuần hoặc tháng
-- Số liệu ĐM Vật Tư (%), Vật Tư (%), Total Lỗi 4M (%) cho PXLR, Line RO, Line BG
-- Các lỗi trọng điểm và đối sách nếu có
-
-Trả về định dạng JSON:
-{
-  "reportType": "QUALITY" | "NSLD" | "OTHER",
-  "timeFrame": "day" | "week" | "month",
-  "items": [
-    {
-      "label": "18/09" | "W38" | "T9",
-      "pxlr": { "dmVatTu": number, "vatTu": number, "totalLoi4M": number },
-      "ro": { "dmVatTu": number, "vatTu": number, "totalLoi4M": number },
-      "bg": { "dmVatTu": number, "vatTu": number, "totalLoi4M": number }
-    }
-  ],
-  "keyDefects": ["..."],
-  "countermeasures": ["..."]
-}
-`;
-
-    const contents = [
-      {
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType || 'image/jpeg',
-              data: cleanBase64,
-            },
-          },
-          {
-            text: prompt,
-          },
-        ],
-      },
-    ];
-
-    const responseText = await generateWithFallback(ai, contents);
-    let parsedResult;
-    try {
-      parsedResult = JSON.parse(responseText);
-    } catch {
-      const cleanJson = responseText.replace(/```json/g, '').replace(/```/g, '').trim();
-      parsedResult = JSON.parse(cleanJson);
-    }
-
-    return res.json({
-      success: true,
-      data: parsedResult,
-    });
-  } catch (error: any) {
-    console.error('Error scanning quality image:', error);
-    return res.status(500).json({
-      success: false,
-      error: error?.message || 'Có lỗi xảy ra khi quét hình ảnh báo cáo chất lượng.',
-    });
-  }
-});
-
-// Vite & Static middleware
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
+  const app = express();
+  const PORT = 3000;
+
+  // Middleware phân tích JSON
+  app.use(express.json({ limit: "15mb" }));
+
+  // === CÁC TUYẾN API CHẠY TRÊN SERVER ===
+
+  // Tuyến proxy Supabase an toàn (chạy trên Node.js server, vượt qua mọi rào cản CORS & iframe sandbox của trình duyệt)
+  app.all("/api/supabase/*", async (req: express.Request, res: express.Response): Promise<void> => {
+    // Cho phép CORS đầy đủ
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD");
+    res.setHeader("Access-Control-Allow-Headers", "apikey, authorization, content-type, prefer, range, accept, x-client-info, content-profile");
+    res.setHeader("Access-Control-Expose-Headers", "content-range, content-location, preference-applied");
+
+    if (req.method === "OPTIONS") {
+      res.status(200).end();
+      return;
+    }
+
+    try {
+      const subPath = req.originalUrl.replace(/^\/api\/supabase/, "");
+      const targetUrl = `${SUPABASE_URL}${subPath}`;
+
+      const headers: Record<string, string> = {
+        apikey: (req.headers["apikey"] as string) || SUPABASE_ANON_KEY,
+        authorization: (req.headers["authorization"] as string) || `Bearer ${SUPABASE_ANON_KEY}`,
+      };
+
+      if (req.headers["content-type"]) {
+        headers["content-type"] = req.headers["content-type"] as string;
+      } else if (req.method !== "GET" && req.method !== "HEAD") {
+        headers["content-type"] = "application/json";
+      }
+
+      if (req.headers["prefer"]) headers["prefer"] = req.headers["prefer"] as string;
+      if (req.headers["range"]) headers["range"] = req.headers["range"] as string;
+      if (req.headers["accept"]) headers["accept"] = req.headers["accept"] as string;
+      if (req.headers["content-profile"]) headers["content-profile"] = req.headers["content-profile"] as string;
+      if (req.headers["x-client-info"]) headers["x-client-info"] = req.headers["x-client-info"] as string;
+
+      const fetchOptions: RequestInit = {
+        method: req.method,
+        headers,
+      };
+
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        if (typeof req.body === "string") {
+          fetchOptions.body = req.body;
+        } else if (req.body && (Array.isArray(req.body) ? req.body.length > 0 : Object.keys(req.body).length > 0)) {
+          fetchOptions.body = JSON.stringify(req.body);
+        }
+      }
+
+      const response = await fetch(targetUrl, fetchOptions);
+
+      response.headers.forEach((value, key) => {
+        const lower = key.toLowerCase();
+        if (!["content-encoding", "transfer-encoding", "content-length"].includes(lower)) {
+          res.setHeader(key, value);
+        }
+      });
+
+      res.status(response.status);
+      const text = await response.text();
+      
+      // Đảm bảo kiểu nội dung phù hợp cho response
+      if (!res.getHeader("content-type")) {
+        if (text && (text.startsWith("{") || text.startsWith("["))) {
+          res.setHeader("content-type", "application/json; charset=utf-8");
+        } else {
+          res.setHeader("content-type", "text/plain; charset=utf-8");
+        }
+      }
+
+      res.send(text);
+    } catch (error: any) {
+      console.error("[Supabase Proxy Error]:", error);
+      res.status(502).json({ error: "Lỗi kết nối Supabase qua Server", details: error.message });
+    }
+  });
+
+  // API kiểm tra trạng thái hoạt động
+  app.get("/api/health", (req, res) => {
+    res.json({ status: "healthy", timestamp: new Date().toISOString() });
+  });
+
+  // API sử dụng trí tuệ nhân tạo Gemini để phân tích dữ liệu sản xuất
+  app.post("/api/ai-analyze", async (req: express.Request, res: express.Response): Promise<void> => {
+    try {
+      const { selectedYear, yearlyMetricData, filterDivision, customLogs, weeklyAttendance, monthlyScrapReport, weeklyScrapReport, weeklyDclreErrorRate, monthlyDclreErrorRate } = req.body;
+
+      if (!yearlyMetricData || !Array.isArray(yearlyMetricData)) {
+        res.status(400).json({ error: "Missing statistical data payload." });
+        return;
+      }
+
+      // Tạo ngữ cảnh chi tiết cho AI
+      let prompt = `Bạn là Chuyên gia phân tích và Tối ưu hóa Sản xuất cao cấp (Industrial Engineer) của Tập đoàn Điện gia dụng SUNHOUSE Việt Nam.
+Hãy phân tích báo cáo hiệu suất sản xuất các dòng Máy lọc nước (MLN) và Bếp gas (BG) tại Nhà Máy Bình Dương dựa trên số liệu thực tế được cung cấp.
+
+THÔNG TIN BÁO CÁO:
+- Năm báo cáo: ${selectedYear}
+- Bộ phận phân tích lựa chọn: ${filterDivision === "ALL" ? "Tất cả (Máy lọc nước & Bếp gas)" : filterDivision === "MLN" ? "Phân xưởng Máy Lọc Nước" : "Phân xưởng Bếp Gas"}
+- Định mức Tiêu chuẩn của SUNHOUSE: 9.03 sản phẩm quy đổ / ngày công.
+- Mục tiêu hiệu suất Lao động lũy kế cả năm (Target): 110.0%.
+
+SỐ LIỆU SẢN XUẤT THEO BIỀU ĐỒ VÀ BẢNG EXCEL:
+${yearlyMetricData
+  .map(
+    (m: any) =>
+      `- Tháng ${m.month}/${m.year}: NSLĐ đạt ${m.laborProductivityPercent ? m.laborProductivityPercent + "%" : "Chưa có"}, Số ngày công lắp ráp DCLR: ${m.productionMandays ? m.productionMandays + " Công" : "Chưa có"}, Số lượng sản phẩm quy đổi: ${m.equivalentProducts ? m.equivalentProducts + " SP" : "Chưa có"}`
+  )
+  .join("\n")}
+
+DỮ LIỆU CHẤT LƯỢNG MỚI BỔ SUNG TỪ EXCEL:
+- Tổn thất hàng hỏng theo Tháng: T1: 7.8M, T2: 7M, T3: 28.39M (Đạt đỉnh!), T4: 17.49M, T5: 10M, T6: 5.08M, T7: 1.2M VND.
+- Tổn thất hàng hỏng theo Tuần: W23: 3.37M, W24: 1.7M, W27: 0.8M VND.
+- Tỉ lệ lỗi thao tác DCLR theo tuần: W21: 2.3%, W22: 2.6%, W23: 2.9%, W24: 1.7%, W27: 1.1%.
+- Tỉ lệ lỗi thao tác DCLR theo tháng: T1: 1.9%, T2: 3.6%, T3: 5.0% (Đạt đỉnh!), T4: 4.0%, T5: 2.6%, T6: 2.3%, T7: 1.5%.
+
+${
+  customLogs && customLogs.length > 0
+    ? `CÁC NHẬT KÝ SẢN XUẤT CA MỚI NHẤT TRONG HỆ THỐNG:
+${customLogs
+  .slice(0, 10)
+  .map(
+    (l: any) =>
+      `- Ngày ${l.date} | ${l.shift} | Chuyền: ${l.lineName} | Sản phẩm: ${l.productName} | Lượng lắp ráp: ${l.actualUnits} cái (Hệ số quy đổi: ${l.equivalentFactor}) | Số công nhân: ${l.workersCount} người | Hiệu suất ca đạt: ${l.laborProductivityPercent ? l.laborProductivityPercent.toFixed(1) + "%" : "Chưa tính"}`
+  )
+  .join("\n")}`
+    : ""
+}
+
+Nhiệm vụ của bạn là hãy viết một bản Đánh giá chuyên sâu, khúc chiết, phân tích bằng tiếng Việt, bao gồm các ý chính sau:
+1. **Tổng quan Đánh giá Hiệu suất**:
+    - Chỉ ra tháng nào có năng suất tăng đột biến cao nhất, thấp nhất trong năm. So sánh xem năm nay đã đạt được mục tiêu 110% hay chưa (lưu ý tháng 7/2026 có NSLĐ đột phá 113% nhưng sản lượng quy đổi mới đạt 4,708/12,167 KHSX, vì sao vậy?). Trả lời chi tiết: là do số lượng công sản xuất trong tháng 7 mới đạt 456 công (ít hơn hẳn các tháng trước như tháng 5 đạt 2,498 công), nghĩa là số ngày làm việc thực tế trong tháng 7 chỉ mới trôi qua một phần tính đến ngày hôm nay 12/07/2026!
+2. **Mối tương quan giữa Hao Hụt & Lỗi Thao tác (DCLR)**:
+   - Phân tích hiện tượng đặc biệt: Tháng 3 có tỷ lệ lỗi thao tác cao đỉnh điểm (5.0%) đồng bộ tịnh tiến với cước phí hàng hỏng đạt đỉnh lịch sử 28,391,248 VND.
+   - Khen ngợi nỗ lực giảm lỗi thao tác về mức 1.5% và chi phí hỏng về 1.2M VND trong Tháng 7 nhờ triển khai đào tạo nâng cấp kỹ năng.
+3. **Giải pháp Industrial Engineering (IE) độc quyền cho SUNHOUSE**:
+   - Đưa ra 3 khuyến nghị hành động thực tế nhằm tối ưu hóa dây chuyền sản xuất lắp ráp máy lọc nước và bếp gas (ví dụ: tối ưu hóa jig bấm lõi lọc nước để hạn chế lỗi trầy xước, lắp đặt chụp lò xo cân bằng chuyền lắp họng lửa ga hạn chế nứt kính tủ slim, tự động tắt áp sau test rò nước tránh rỉ họng sắt).
+
+Yêu cầu nội dung:
+- Trình bày chuyên nghiệp, ngắn gọn dưới dạng Markdown, có sơ đồ danh sách, ngôn ngữ sắc sảo, thực tế của quản lý nhà máy.
+- Không sáo rỗng, đi thẳng vào các chỉ số kỹ thuật và điều hành sản xuất.
+`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+      });
+
+      const analysisText = response.text;
+      res.json({ analysis: analysisText });
+    } catch (error: any) {
+      console.error("Gemini AI API Error:", error);
+      res.status(500).json({
+        error: "Đã xảy ra lỗi khi kết nối với máy chủ AI của Google. Vui lòng kiểm tra cấu hình khóa bí mật của bạn.",
+        details: error.message,
+      });
+    }
+  });
+
+  // === ĐIỀU HƯỚNG VÀ PHỤC VỤ TRANG CLIENT ===
+
+  if (process.env.NODE_ENV !== "production") {
+    // Luồng phát triển: Tích hợp Vite làm middleware cho Express
     const vite = await createViteServer({
       server: { middlewareMode: true },
-      appType: 'spa',
+      appType: "spa",
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    // Luồng sản xuất: Phục vụ các tệp tĩnh đã biên dịch trong thư mục dist
+    const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*", (req, res) => {
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  // Khởi động lắng nghe cổng 3000
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[SUNHOUSE SERVER] Hệ thống đang vận hành tại http://localhost:${PORT}`);
   });
 }
 

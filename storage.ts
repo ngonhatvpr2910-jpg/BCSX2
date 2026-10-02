@@ -1,886 +1,2300 @@
-import { 
-  DailyDCBGRecord, 
-  DailyDCRORecord, 
-  PushAlert, 
-  ThresholdConfig, 
-  User, 
-  MonthlyHistoryRecord,
-  WeeklyDCBGRecord,
-  MonthlyNSLDDCBGRecord,
-  DailyNSLDRMARecord,
-  ExcelMatrixROColumn,
-  ExcelMatrixBGColumn,
-  Slide1NSLDData,
-  Slide2QualityData,
-  SlideDefectCostData,
-  Slide4ProductionTargetData,
-  Slide5ProductionPlanData,
-  Slide6TaskPlanData,
+import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { isValidHourlySlot } from './appUtils';
+import {
+  Worker,
+  WorkerDivision,
+  WorkerType,
+  AttendanceRecord,
+  ProductDefinition,
+  ProductionLog,
+  MonthlyMetric,
+  DailyReportRowGas,
+  DailyReportRowAssembly,
+  MonthlyScrapReport,
+  WeeklyScrapReport,
+  WeeklyDclreErrorRate,
+  MonthlyDclreErrorRate,
 } from './types';
-import { 
-  INITIAL_DCBG_RECORDS, 
-  INITIAL_DCRO_RECORDS, 
-  DEFAULT_THRESHOLDS, 
-  INITIAL_USERS, 
-  MONTHLY_HISTORY,
-  INITIAL_WEEKLY_DCBG,
-  INITIAL_MONTHLY_NSLD_DCBG,
-  INITIAL_DAILY_NSLD_RMA,
-  INITIAL_MATRIX_RO,
-  INITIAL_MATRIX_BG,
-  INITIAL_SLIDE1_NSLD,
-  INITIAL_SLIDE2_QUALITY,
-  INITIAL_SLIDE3_DEFECT_COST,
-  INITIAL_SLIDE4_PRODUCTION_TARGET,
-  INITIAL_SLIDE5_PRODUCTION_PLAN,
-  INITIAL_SLIDE6_TASK_PLAN,
-} from './initialData';
-import { 
-  generateMonthBGMatrix, 
-  generateMonthROMatrix,
-  recalculateBGMatrix,
-  recalculateROMatrix,
-} from './matrixGenerator';
+import {
+  INITIAL_WORKERS,
+  INITIAL_ATTENDANCE,
+  SUNHOUSE_PRODUCTS,
+  INITIAL_PRODUCTION_LOGS,
+  HISTORICAL_2025,
+  HISTORICAL_2026,
+  INITIAL_GAS_DAILY_REPORTS,
+  INITIAL_ASSEMBLY_DAILY_REPORTS,
+  MONTHLY_SCRAP_REPORT,
+  WEEKLY_SCRAP_REPORT,
+  WEEKLY_DCLR_ERROR_RATE,
+  MONTHLY_DCLR_ERROR_RATE,
+} from './data';
 
+// ==========================================
+// LOCAL STORAGE KEYS (Fallback an toàn)
+// ==========================================
 const STORAGE_KEYS = {
-  DCBG: 'pxlr_dcbg_records_v1',
-  DCRO: 'pxlr_dcro_records_v1',
-  ALERTS: 'pxlr_push_alerts_v1',
-  THRESHOLDS: 'pxlr_thresholds_v1',
-  CURRENT_USER: 'pxlr_current_user_v1',
-  MONTHLY_HISTORY: 'pxlr_monthly_history_v1',
-  WEEKLY_DCBG: 'pxlr_weekly_dcbg_v1',
-  MONTHLY_NSLD_DCBG: 'pxlr_monthly_nsld_dcbg_v1',
-  DAILY_NSLD_RMA: 'pxlr_daily_nsld_rma_v1',
-  MATRIX_RO: 'pxlr_matrix_ro_v1',
-  MATRIX_BG: 'pxlr_matrix_bg_v1',
-  WEEK_LABEL_MODE: 'pxlr_week_label_mode_v1',
-  SLIDE1_NSLD: 'pxlr_slide1_nsld_v1',
-  SLIDE2_QUALITY: 'pxlr_slide2_quality_v1',
-  SLIDE3_DEFECT_COST: 'pxlr_slide3_defect_cost_v2',
-  SLIDE4_PRODUCTION_TARGET: 'pxlr_slide4_production_target_v10',
-  SLIDE5_PRODUCTION_PLAN: 'pxlr_slide5_production_plan_v1',
-  SLIDE6_TASK_PLAN: 'pxlr_slide6_task_plan_v1',
+  WORKERS: 'sunhouse_workers',
+  ATTENDANCE: 'sunhouse_attendance_logs',
+  PRODUCTS: 'sunhouse_products_v2',
+  PRODUCTION_LOGS: 'sunhouse_production_logs_v2',
+  MONTHLY_PLAN: 'sunhouse_monthly_plan_v2',
+  MONTHLY_TARGETS: 'sunhouse_monthly_targets_v2',
+  METRICS_2025: 'sunhouse_metrics_2025_v2',
+  METRICS_2026: 'sunhouse_metrics_2026_v2',
+  GAS_DAILY: 'sunhouse_gas_daily_reports_v2',
+  ASSEMBLY_DAILY: 'sunhouse_assembly_daily_reports_v2',
+  DECLARED_IMEIS: 'sunhouse_declared_imeis',
+  SCANNED_IMEIS: 'sunhouse_scanned_imeis',
+  MONTHLY_SCRAP: 'sunhouse_monthly_scrap_v2',
+  WEEKLY_SCRAP: 'sunhouse_weekly_scrap_v2',
+  WEEKLY_DCLR_ERROR: 'sunhouse_weekly_dclr_error_v2',
+  MONTHLY_DCLR_ERROR: 'sunhouse_monthly_dclr_error_v2',
 };
 
-
-export const StorageService = {
-  getDCBGRecords(): DailyDCBGRecord[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.DCBG);
-      if (!data) return INITIAL_DCBG_RECORDS;
-      const parsed: DailyDCBGRecord[] = JSON.parse(data);
-      // Filter out legacy mock records if present
-      const cleaned = parsed.filter(r => !['dcbg-01', 'dcbg-02', 'dcbg-03'].includes(r.id));
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(STORAGE_KEYS.DCBG, JSON.stringify(cleaned));
-      }
-      return cleaned;
-    } catch {
-      return INITIAL_DCBG_RECORDS;
-    }
-  },
-
-  saveDCBGRecords(records: DailyDCBGRecord[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.DCBG, JSON.stringify(records));
-    } catch (e) {
-      console.error('Failed to save DCBG records to local storage', e);
-    }
-  },
-
-  getDCRORecords(): DailyDCRORecord[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.DCRO);
-      if (!data) return INITIAL_DCRO_RECORDS;
-      const parsed: DailyDCRORecord[] = JSON.parse(data);
-      // Filter out legacy mock records if present
-      const cleaned = parsed.filter(r => !['dcro-01', 'dcro-02', 'dcro-03'].includes(r.id));
-      if (cleaned.length !== parsed.length) {
-        localStorage.setItem(STORAGE_KEYS.DCRO, JSON.stringify(cleaned));
-      }
-      return cleaned;
-    } catch {
-      return INITIAL_DCRO_RECORDS;
-    }
-  },
-
-  saveDCRORecords(records: DailyDCRORecord[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.DCRO, JSON.stringify(records));
-    } catch (e) {
-      console.error('Failed to save DCRO records to local storage', e);
-    }
-  },
-
-  getAlerts(): PushAlert[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.ALERTS);
-      return data ? JSON.parse(data) : [];
-    } catch {
-      return [];
-    }
-  },
-
-  saveAlerts(alerts: PushAlert[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.ALERTS, JSON.stringify(alerts));
-    } catch (e) {
-      console.error('Failed to save alerts to local storage', e);
-    }
-  },
-
-  getThresholds(): ThresholdConfig {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.THRESHOLDS);
-      return data ? JSON.parse(data) : DEFAULT_THRESHOLDS;
-    } catch {
-      return DEFAULT_THRESHOLDS;
-    }
-  },
-
-  saveThresholds(thresholds: ThresholdConfig) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.THRESHOLDS, JSON.stringify(thresholds));
-    } catch (e) {
-      console.error('Failed to save thresholds', e);
-    }
-  },
-
-  getCurrentUser(): User {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
-      if (data) {
-        const parsed = JSON.parse(data);
-        const matched = INITIAL_USERS.find(u => u.id === parsed.id || u.role === parsed.role);
-        if (matched) return matched;
-      }
-      return INITIAL_USERS[0];
-    } catch {
-      return INITIAL_USERS[0];
-    }
-  },
-
-  saveCurrentUser(user: User) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
-    } catch (e) {
-      console.error('Failed to save user', e);
-    }
-  },
-
-  getMonthlyHistory(): MonthlyHistoryRecord[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.MONTHLY_HISTORY);
-      return data ? JSON.parse(data) : MONTHLY_HISTORY;
-    } catch {
-      return MONTHLY_HISTORY;
-    }
-  },
-
-  saveMonthlyHistory(history: MonthlyHistoryRecord[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.MONTHLY_HISTORY, JSON.stringify(history));
-    } catch (e) {
-      console.error('Failed to save monthly history', e);
-    }
-  },
-
-  getWeeklyDCBG(): WeeklyDCBGRecord[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.WEEKLY_DCBG);
-      return data ? JSON.parse(data) : INITIAL_WEEKLY_DCBG;
-    } catch {
-      return INITIAL_WEEKLY_DCBG;
-    }
-  },
-
-  saveWeeklyDCBG(records: WeeklyDCBGRecord[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.WEEKLY_DCBG, JSON.stringify(records));
-    } catch (e) {
-      console.error('Failed to save weekly DCBG data', e);
-    }
-  },
-
-  getMonthlyNSLDDCBG(): MonthlyNSLDDCBGRecord[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.MONTHLY_NSLD_DCBG);
-      return data ? JSON.parse(data) : INITIAL_MONTHLY_NSLD_DCBG;
-    } catch {
-      return INITIAL_MONTHLY_NSLD_DCBG;
-    }
-  },
-
-  saveMonthlyNSLDDCBG(records: MonthlyNSLDDCBGRecord[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.MONTHLY_NSLD_DCBG, JSON.stringify(records));
-    } catch (e) {
-      console.error('Failed to save monthly NSLD DCBG', e);
-    }
-  },
-
-  getDailyNSLDRMA(): DailyNSLDRMARecord[] {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.DAILY_NSLD_RMA);
-      return data ? JSON.parse(data) : INITIAL_DAILY_NSLD_RMA;
-    } catch {
-      return INITIAL_DAILY_NSLD_RMA;
-    }
-  },
-
-  saveDailyNSLDRMA(records: DailyNSLDRMARecord[]) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.DAILY_NSLD_RMA, JSON.stringify(records));
-    } catch (e) {
-      console.error('Failed to save daily NSLD RMA', e);
-    }
-  },
-
-  getMatrixRO(): ExcelMatrixROColumn[] {
-    return this.getMatrixROForMonth(2026, 5); // default month 6 (index 5)
-  },
-
-  getMatrixROForMonth(year: number, monthIndex0: number): ExcelMatrixROColumn[] {
-    try {
-      const key = `${STORAGE_KEYS.MATRIX_RO}_${year}_${monthIndex0 + 1}`;
-      const dataStr = localStorage.getItem(key);
-      let parsed: ExcelMatrixROColumn[] | null = null;
-      if (dataStr) {
-        parsed = JSON.parse(dataStr);
-      } else if (monthIndex0 === 5 && year === 2026) {
-        const legacy = localStorage.getItem(STORAGE_KEYS.MATRIX_RO);
-        if (legacy) parsed = JSON.parse(legacy);
-      }
-
-      if (parsed && Array.isArray(parsed) && parsed.length > 0) {
-        let changed = false;
-        // Only run legacy isOff migration for historical June (monthIndex0 === 5)
-        if (monthIndex0 === 5 && year === 2026) {
-          parsed = parsed.map((col) => {
-            if (col.isOff) {
-              changed = true;
-              const baseCt = 54;
-              const baseTv = 15;
-              const sl = 680;
-              const dm = Number(((baseCt + baseTv) * 9.03).toFixed(3));
-              const nsld = dm > 0 ? Number(((sl / dm) * 100).toFixed(1)) : 0;
-              const khsx = 700;
-              const tiLeKhsx = Number(((sl / khsx) * 100).toFixed(1));
-              const nsLine = 55;
-              const nsNghi = 1;
-              const tiLe = Number((((nsLine - nsNghi) / nsLine) * 100).toFixed(1));
-              return {
-                ...col,
-                isOff: false,
-                congChinhThuc: col.congChinhThuc ?? baseCt,
-                congThoiVu: col.congThoiVu ?? baseTv,
-                sanLuongLineChinh: col.sanLuongLineChinh ?? sl,
-                dinhMucSlTheoNs: col.dinhMucSlTheoNs ?? dm,
-                nsldTheoNgay: col.nsldTheoNgay ?? nsld,
-                khsxNgay: col.khsxNgay ?? khsx,
-                tiLeHoanThanhKhsx: col.tiLeHoanThanhKhsx ?? tiLeKhsx,
-                tongNhanSuLine: col.tongNhanSuLine ?? nsLine,
-                nhanSuNghi: col.nhanSuNghi ?? nsNghi,
-                tiLeDiLam: col.tiLeDiLam ?? tiLe,
-              };
-            }
-            return col;
-          });
-        }
-
-        if (changed) {
-          parsed = recalculateROMatrix(parsed);
-          localStorage.setItem(key, JSON.stringify(parsed));
-        }
-        return parsed;
-      }
-      return generateMonthROMatrix(year, monthIndex0);
-    } catch {
-      return generateMonthROMatrix(year, monthIndex0);
-    }
-  },
-
-  saveMatrixRO(cols: ExcelMatrixROColumn[]) {
-    this.saveMatrixROForMonth(2026, 5, cols);
-  },
-
-  saveMatrixROForMonth(year: number, monthIndex0: number, cols: ExcelMatrixROColumn[]) {
-    try {
-      const key = `${STORAGE_KEYS.MATRIX_RO}_${year}_${monthIndex0 + 1}`;
-      localStorage.setItem(key, JSON.stringify(cols));
-      if (monthIndex0 === 5 && year === 2026) {
-        localStorage.setItem(STORAGE_KEYS.MATRIX_RO, JSON.stringify(cols));
-      }
-    } catch (e) {
-      console.error('Failed to save matrix RO data', e);
-    }
-  },
-
-  getMatrixBG(): ExcelMatrixBGColumn[] {
-    return this.getMatrixBGForMonth(2026, 5); // default month 6 (index 5)
-  },
-
-  getMatrixBGForMonth(year: number, monthIndex0: number): ExcelMatrixBGColumn[] {
-    try {
-      const key = `${STORAGE_KEYS.MATRIX_BG}_${year}_${monthIndex0 + 1}`;
-      const dataStr = localStorage.getItem(key);
-      let parsed: ExcelMatrixBGColumn[] | null = null;
-      if (dataStr) {
-        parsed = JSON.parse(dataStr);
-      } else if (monthIndex0 === 5 && year === 2026) {
-        const legacy = localStorage.getItem(STORAGE_KEYS.MATRIX_BG);
-        if (legacy) parsed = JSON.parse(legacy);
-      }
-
-      if (parsed && Array.isArray(parsed) && parsed.length > 0) {
-        let changed = false;
-        parsed = parsed.map((col) => {
-          let updatedCol = { ...col };
-          if (updatedCol.khsxNgay === undefined || updatedCol.tiLeHoanThanhKhsx === undefined) {
-            changed = true;
-            const initMatch = INITIAL_MATRIX_BG.find(ib => ib.id === col.id || ib.label === col.label);
-            if (initMatch) {
-              updatedCol.khsxNgay = initMatch.khsxNgay;
-              updatedCol.tiLeHoanThanhKhsx = initMatch.tiLeHoanThanhKhsx;
-            } else {
-              updatedCol.khsxNgay = col.isWeeklyTotal || col.isMonthlyTotal ? 0 : 720;
-              updatedCol.tiLeHoanThanhKhsx = 100.0;
-            }
-          }
-          if (updatedCol.isOff && monthIndex0 === 5 && year === 2026) {
-            changed = true;
-            const baseGa = 5.0;
-            const baseTv = 4.0;
-            const baseRma = 0;
-            const totalCong = baseGa + baseTv + baseRma;
-            const dm = Number((totalCong * 9.03).toFixed(3));
-            const slGa = 70;
-            const slRma = 0;
-            const totalSl = slGa + slRma;
-            const nsld = dm > 0 ? Number(((totalSl / dm) * 100).toFixed(1)) : 100;
-            const nsLine = 8;
-            const nsNghi = 0;
-            const tiLe = 100;
-            updatedCol = {
-              ...updatedCol,
-              isOff: false,
-              congBepGa: updatedCol.congBepGa ?? baseGa,
-              congThoiVu: updatedCol.congThoiVu ?? baseTv,
-              congRma: updatedCol.congRma ?? baseRma,
-              sanLuongBepGa: updatedCol.sanLuongBepGa ?? slGa,
-              sanLuongRma: updatedCol.sanLuongRma ?? slRma,
-              dinhMucSlTheoNs: updatedCol.dinhMucSlTheoNs ?? dm,
-              nsldTheoNgay: updatedCol.nsldTheoNgay ?? nsld,
-              tongNhanSuLine: updatedCol.tongNhanSuLine ?? nsLine,
-              nhanSuNghi: updatedCol.nhanSuNghi ?? nsNghi,
-              tiLeDiLam: updatedCol.tiLeDiLam ?? tiLe,
-            };
-          }
-          return updatedCol;
-        });
-
-        if (changed) {
-          parsed = recalculateBGMatrix(parsed);
-          localStorage.setItem(key, JSON.stringify(parsed));
-        }
-        return parsed;
-      }
-      return generateMonthBGMatrix(year, monthIndex0);
-    } catch {
-      return generateMonthBGMatrix(year, monthIndex0);
-    }
-  },
-
-  saveMatrixBG(cols: ExcelMatrixBGColumn[]) {
-    this.saveMatrixBGForMonth(2026, 5, cols);
-  },
-
-  saveMatrixBGForMonth(year: number, monthIndex0: number, cols: ExcelMatrixBGColumn[]) {
-    try {
-      const key = `${STORAGE_KEYS.MATRIX_BG}_${year}_${monthIndex0 + 1}`;
-      localStorage.setItem(key, JSON.stringify(cols));
-      if (monthIndex0 === 5 && year === 2026) {
-        localStorage.setItem(STORAGE_KEYS.MATRIX_BG, JSON.stringify(cols));
-      }
-    } catch (e) {
-      console.error('Failed to save matrix BG data', e);
-    }
-  },
-
-  getWeekLabelMode(): 'year' | 'year_month' | 'month' {
-    try {
-      const val = localStorage.getItem(STORAGE_KEYS.WEEK_LABEL_MODE);
-      if (val === 'year' || val === 'year_month' || val === 'month') return val;
-    } catch {}
-    return 'year'; // Default to year-based week calculation as requested (e.g. W38)
-  },
-
-  saveWeekLabelMode(mode: 'year' | 'year_month' | 'month') {
-    try {
-      localStorage.setItem(STORAGE_KEYS.WEEK_LABEL_MODE, mode);
-    } catch {}
-  },
-
-  exportFullBackup() {
-    return {
-      dcbg: this.getDCBGRecords(),
-      dcro: this.getDCRORecords(),
-      thresholds: this.getThresholds(),
-      exportDate: new Date().toISOString(),
-      version: '1.0.0',
-    };
-  },
-
-  importBackup(backupData: any): boolean {
-    try {
-      if (backupData && Array.isArray(backupData.dcbg) && Array.isArray(backupData.dcro)) {
-        this.saveDCBGRecords(backupData.dcbg);
-        this.saveDCRORecords(backupData.dcro);
-        if (backupData.thresholds) {
-          this.saveThresholds(backupData.thresholds);
-        }
-        return true;
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  },
-
-  getSlide1NSLD(): Slide1NSLDData {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.SLIDE1_NSLD);
-      if (data) {
-        const parsed: Slide1NSLDData = JSON.parse(data);
-        if (parsed.subTitle === 'So Sánh NSLĐ Tháng' || !parsed.subTitle) {
-          parsed.subTitle = 'Năng Suất';
-        }
-        // Helper to ensure all weeks from INITIAL are present in stored data, plus new ones
-        const ensureAllWeeks = (stored: any[], initial: any[], prefix: string) => {
-          const combined = [...stored];
-          const storedIds = new Set(stored.map(i => i.id));
-          
-          initial.forEach(initItem => {
-            if (!storedIds.has(initItem.id)) {
-              combined.push(initItem);
-            }
-          });
-          
-          return combined.sort((a, b) => {
-            const getNum = (s: string) => parseInt(s.replace(/\D/g, ''), 10) || 0;
-            return getNum(a.label) - getNum(b.label);
-          });
-        };
-
-        parsed.pxlr.weekly = ensureAllWeeks(parsed.pxlr.weekly, INITIAL_SLIDE1_NSLD.pxlr.weekly, 'pxlr');
-        parsed.ro.weekly = ensureAllWeeks(parsed.ro.weekly, INITIAL_SLIDE1_NSLD.ro.weekly, 'ro');
-        parsed.bg.weekly = ensureAllWeeks(parsed.bg.weekly, INITIAL_SLIDE1_NSLD.bg.weekly, 'bg');
-
-        // Fix historical values (W32-W35)
-        const fixValues = (items: any[], prefix: string, values: Record<string, number>) => {
-          return items.map(w => {
-            const weekId = w.id.replace(`${prefix}-`, '');
-            if (values[weekId] !== undefined) {
-              return { ...w, value: values[weekId] };
-            }
-            return w;
-          });
-        };
-
-        parsed.pxlr.weekly = fixValues(parsed.pxlr.weekly, 'pxlr', { 'w32': 122.1, 'w33': 118.5, 'w34': 125.0, 'w35': 100.8 });
-        parsed.ro.weekly = fixValues(parsed.ro.weekly, 'ro', { 'w32': 115.2, 'w33': 110.0, 'w34': 118.4, 'w35': 104.2 });
-        parsed.bg.weekly = fixValues(parsed.bg.weekly, 'bg', { 'w32': 95.5, 'w33': 102.1, 'w34': 108.0, 'w35': 111.7 });
-
-        parsed.pxlr.monthly = parsed.pxlr.monthly.map(m => {
-          if (m.id === 'pxlr-m06') return { ...m, value: 131.6 };
-          if (m.id === 'pxlr-m07') return { ...m, value: 135.5 };
-          if (m.id === 'pxlr-m08') return { ...m, value: 133.6 };
-          if (m.id === 'pxlr-m09' && (!m.value || m.value <= 0)) return { ...m, value: 117.0 };
-          return m;
-        });
-        parsed.ro.monthly = parsed.ro.monthly.map(m => {
-          if (m.id === 'ro-m07') return { ...m, value: 117.1 };
-          if (m.id === 'ro-m08') return { ...m, value: 111.2 };
-          if (m.id === 'ro-m09' && (!m.value || m.value <= 0)) return { ...m, value: 117.0 };
-          return m;
-        });
-        parsed.bg.monthly = parsed.bg.monthly.map(m => {
-          if (m.id === 'bg-m07') return { ...m, value: 87.1 };
-          if (m.id === 'bg-m08') return { ...m, value: 108.2 };
-          if (m.id === 'bg-m09' && (!m.value || m.value <= 0)) return { ...m, value: 97.0 };
-          return m;
-        });
-
-        localStorage.setItem(STORAGE_KEYS.SLIDE1_NSLD, JSON.stringify(parsed));
-        return parsed;
-      }
-      return INITIAL_SLIDE1_NSLD;
-    } catch {
-      return INITIAL_SLIDE1_NSLD;
-    }
-  },
-
-  saveSlide1NSLD(data: Slide1NSLDData) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SLIDE1_NSLD, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save slide 1 NSLD data', e);
-    }
-  },
-
-  resetSlide1NSLD(): Slide1NSLDData {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.SLIDE1_NSLD);
-    } catch {}
-    return INITIAL_SLIDE1_NSLD;
-  },
-
-  getSlide2Quality(): Slide2QualityData {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.SLIDE2_QUALITY);
-      if (data) {
-        const parsed: Slide2QualityData = JSON.parse(data);
-        if (parsed.pxlr?.items) {
-          parsed.pxlr.items = parsed.pxlr.items.filter(i => i.month !== 'T5');
-        }
-        if (parsed.ro?.items) {
-          parsed.ro.items = parsed.ro.items.filter(i => i.month !== 'T5');
-        }
-        if (parsed.bg) {
-          parsed.bg.benchmarkDmLoi = 7.74;
-          if (parsed.bg.items) {
-            parsed.bg.items = parsed.bg.items.filter(i => i.month !== 'T5');
-          }
-        }
-        if (parsed.monthly) {
-          if (!parsed.monthly.pxlr.items || parsed.monthly.pxlr.items.length === 0) {
-            parsed.monthly.pxlr.items = INITIAL_SLIDE2_QUALITY.monthly.pxlr.items;
-          }
-          if (!parsed.monthly.ro.items || parsed.monthly.ro.items.length === 0) {
-            parsed.monthly.ro.items = INITIAL_SLIDE2_QUALITY.monthly.ro.items;
-          }
-          if (!parsed.monthly.bg.items || parsed.monthly.bg.items.length === 0) {
-            parsed.monthly.bg.items = INITIAL_SLIDE2_QUALITY.monthly.bg.items;
-          }
-          parsed.monthly.bg.benchmarkDmLoi = 7.74;
-        }
-        if (parsed.weekly) {
-          parsed.weekly.pxlr.title = INITIAL_SLIDE2_QUALITY.weekly.pxlr.title;
-          if (!parsed.weekly.pxlr.items || parsed.weekly.pxlr.items.length < 8) {
-            parsed.weekly.pxlr.items = INITIAL_SLIDE2_QUALITY.weekly.pxlr.items;
-            parsed.weekly.ro.items = INITIAL_SLIDE2_QUALITY.weekly.ro.items;
-            parsed.weekly.bg.items = INITIAL_SLIDE2_QUALITY.weekly.bg.items;
-          }
-          parsed.weekly.bg.benchmarkDmLoi = 7.74;
-        }
-        if (parsed.daily) {
-          parsed.daily.pxlr.title = INITIAL_SLIDE2_QUALITY.daily.pxlr.title;
-          parsed.daily.pxlr.items = INITIAL_SLIDE2_QUALITY.daily.pxlr.items;
-          parsed.daily.ro.items = INITIAL_SLIDE2_QUALITY.daily.ro.items;
-          parsed.daily.bg.benchmarkDmLoi = 7.74;
-          parsed.daily.bg.items = INITIAL_SLIDE2_QUALITY.daily.bg.items;
-        }
-        if (!parsed.dailyRecords || parsed.dailyRecords.length === 0) {
-          parsed.dailyRecords = INITIAL_SLIDE2_QUALITY.dailyRecords;
-        }
-        // If current active is month, make sure parsed.bg, parsed.ro, parsed.pxlr match monthly
-        if (parsed.activeTimeFrame === 'month' || !parsed.activeTimeFrame) {
-          parsed.bg = parsed.monthly?.bg || INITIAL_SLIDE2_QUALITY.monthly.bg;
-          parsed.ro = parsed.monthly?.ro || INITIAL_SLIDE2_QUALITY.monthly.ro;
-          parsed.pxlr = parsed.monthly?.pxlr || INITIAL_SLIDE2_QUALITY.monthly.pxlr;
-        } else if (parsed.activeTimeFrame === 'week') {
-          parsed.bg = parsed.weekly?.bg || INITIAL_SLIDE2_QUALITY.weekly.bg;
-          parsed.ro = parsed.weekly?.ro || INITIAL_SLIDE2_QUALITY.weekly.ro;
-          parsed.pxlr = parsed.weekly?.pxlr || INITIAL_SLIDE2_QUALITY.weekly.pxlr;
-        } else if (parsed.activeTimeFrame === 'day') {
-          parsed.bg = parsed.daily?.bg || INITIAL_SLIDE2_QUALITY.daily.bg;
-          parsed.ro = parsed.daily?.ro || INITIAL_SLIDE2_QUALITY.daily.ro;
-          parsed.pxlr = parsed.daily?.pxlr || INITIAL_SLIDE2_QUALITY.daily.pxlr;
-        }
-        return parsed;
-      }
-      return INITIAL_SLIDE2_QUALITY;
-    } catch {
-      return INITIAL_SLIDE2_QUALITY;
-    }
-  },
-
-  saveSlide2Quality(data: Slide2QualityData) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SLIDE2_QUALITY, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save slide 2 Quality data', e);
-    }
-  },
-
-  resetSlide2Quality(): Slide2QualityData {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.SLIDE2_QUALITY);
-    } catch {}
-    return INITIAL_SLIDE2_QUALITY;
-  },
-
-  getSlide3DefectCost(): SlideDefectCostData {
-    try {
-      // Check current key, then fallback to legacy keys to preserve user's previously updated data
-      const data = 
-        localStorage.getItem(STORAGE_KEYS.SLIDE3_DEFECT_COST) || 
-        localStorage.getItem('pxlr_slide3_defect_cost_v1') || 
-        localStorage.getItem('pxlr_slide3_defect_cost');
-
-      // Chuẩn hóa dữ liệu lịch sử cố định từ Tháng 6 đến Tháng 8
-      const historicalMonths: Record<string, number> = {
-        'Tháng 6': 10.8,
-        'Tháng 7': 7.1,
-        'Tháng 8': 5.9,
-      };
-      const historicalWeeks: Record<string, number> = {
-        'W32': 2.2,
-        'W33': 0.6,
-        'W34': 1.8,
-        'W35': 1.4,
-      };
-
-      const getNum = (label: string) => {
-        const m = (label || '').match(/\d+/);
-        return m ? parseInt(m[0], 10) : 0;
-      };
-
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (parsed && typeof parsed === 'object') {
-          const rawWeekly = Array.isArray(parsed.weeklyData) && parsed.weeklyData.length > 0 ? parsed.weeklyData : INITIAL_SLIDE3_DEFECT_COST.weeklyData;
-          const rawMonthly = Array.isArray(parsed.monthlyData) && parsed.monthlyData.length > 0 ? parsed.monthlyData : INITIAL_SLIDE3_DEFECT_COST.monthlyData;
-
-          // Bảo lưu nguyên vẹn 100% dữ liệu lịch sử từ Tháng 6 đến Tháng 8
-          const preservedMonthly = rawMonthly.map((m: any) => {
-            const hist = historicalMonths[m.label];
-            if (hist !== undefined && (!m.value || m.value <= 0)) {
-              return { ...m, value: hist, displayLabel: `${hist}M` };
-            }
-            return m;
-          });
-
-          // Nếu thiếu Tháng 6, 7, 8 thì tự động bổ sung
-          Object.entries(historicalMonths).forEach(([mLabel, mVal]) => {
-            if (!preservedMonthly.some((m: any) => m.label === mLabel)) {
-              preservedMonthly.push({ id: `m-${mLabel}`, label: mLabel, value: mVal, displayLabel: `${mVal}M` });
-            }
-          });
-          preservedMonthly.sort((a: any, b: any) => getNum(a.label) - getNum(b.label));
-
-          const preservedWeekly = rawWeekly.map((w: any) => {
-            const hist = historicalWeeks[w.label];
-            if (hist !== undefined && (!w.value || w.value <= 0)) {
-              return { ...w, value: hist, displayLabel: `${hist}M` };
-            }
-            if (w.label === 'W38' && (!w.value || w.value <= 0)) {
-              return { ...w, value: 1.8, displayLabel: '1.8M' };
-            }
-            if (w.label === 'W39' && (!w.value || w.value <= 0 || w.value === 2.0)) {
-              return { ...w, value: 1.0, displayLabel: '1.0M' };
-            }
-            return w;
-          });
-          // Nếu thiếu tuần lịch sử W32-W35 thì tự động bổ sung
-          Object.entries(historicalWeeks).forEach(([wLabel, wVal]) => {
-            if (!preservedWeekly.some((w: any) => w.label === wLabel)) {
-              preservedWeekly.push({ id: `w-${wLabel.toLowerCase()}`, label: wLabel, value: wVal, displayLabel: `${wVal}M` });
-            }
-          });
-          // Đảm bảo W38 và W39 có mặt trong danh sách tuần
-          if (!preservedWeekly.some((w: any) => w.label === 'W38')) {
-            preservedWeekly.push({ id: 'w-38', label: 'W38', value: 1.8, displayLabel: '1.8M' });
-          }
-          if (!preservedWeekly.some((w: any) => w.label === 'W39')) {
-            preservedWeekly.push({ id: 'w-39', label: 'W39', value: 1.0, displayLabel: '1.0M' });
-          }
-          preservedWeekly.sort((a: any, b: any) => getNum(a.label) - getNum(b.label));
-
-          let finalItemsRO = Array.isArray(parsed.itemsRO) && parsed.itemsRO.length > 0 ? [...parsed.itemsRO] : [...INITIAL_SLIDE3_DEFECT_COST.itemsRO];
-          let finalItemsBG = Array.isArray(parsed.itemsBG) && parsed.itemsBG.length > 0 ? [...parsed.itemsBG] : [...INITIAL_SLIDE3_DEFECT_COST.itemsBG];
-
-          // Tuần 39 (W39): Line RO KHÔNG CÓ LỖI (0 lỗi, 0 linh kiện hỏng, 0 VNĐ)
-          // Xóa bỏ hoàn toàn mọi item lỗi W39 của Line RO nếu từng bị lưu vào localStorage
-          finalItemsRO = finalItemsRO.filter((item: any) => {
-            const isW39 = (item.week || '').toUpperCase().includes('39');
-            const isRO = item.category === 'RO' || (item.id && String(item.id).startsWith('ro-dam-'));
-            const isFakeW39Id = ['ro-dam-9', 'ro-dam-10', 'ro-dam-11', 'ro-dam-12', 'ro-dam-13', 'ro-dam-14'].includes(item.id);
-            return !(isFakeW39Id || (isW39 && isRO));
-          });
-
-          const hasW39BG = finalItemsBG.some((item: any) => (item.week || '').toUpperCase().includes('39'));
-          if (!hasW39BG) {
-            const w39BG = INITIAL_SLIDE3_DEFECT_COST.itemsBG.filter(i => (i.week || '').toUpperCase().includes('39'));
-            finalItemsBG = [...finalItemsBG, ...w39BG];
-          }
-
-          const preservedMonthlyFinal = preservedMonthly.map((m: any) => {
-            if (m.label === 'Tháng 9' && (!m.value || m.value <= 0)) {
-              return { ...m, value: 5.2, displayLabel: '5.2M' };
-            }
-            return m;
-          });
-
-          const result: SlideDefectCostData = {
-            ...INITIAL_SLIDE3_DEFECT_COST,
-            ...parsed,
-            weeklyData: preservedWeekly,
-            monthlyData: preservedMonthlyFinal,
-            itemsRO: finalItemsRO,
-            itemsBG: finalItemsBG,
-          };
-
-          // Đồng bộ lưu lại vào storage key chuẩn
-          localStorage.setItem(STORAGE_KEYS.SLIDE3_DEFECT_COST, JSON.stringify(result));
-          return result;
-        }
-      }
-      return INITIAL_SLIDE3_DEFECT_COST;
-    } catch {
-      return INITIAL_SLIDE3_DEFECT_COST;
-    }
-  },
-
-  saveSlide3DefectCost(data: SlideDefectCostData) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SLIDE3_DEFECT_COST, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save slide 3 Defect Cost data', e);
-    }
-  },
-
-  resetSlide3DefectCost(): SlideDefectCostData {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.SLIDE3_DEFECT_COST);
-    } catch {}
-    return INITIAL_SLIDE3_DEFECT_COST;
-  },
-
-  getSlide4ProductionTarget(): Slide4ProductionTargetData {
-    try {
-      // Check current key, then fallback to legacy keys to preserve user updates
-      let stored = localStorage.getItem(STORAGE_KEYS.SLIDE4_PRODUCTION_TARGET);
-      if (!stored) {
-        for (let v = 9; v >= 1; v--) {
-          const legacy = localStorage.getItem(`pxlr_slide4_production_target_v${v}`);
-          if (legacy) {
-            stored = legacy;
-            break;
-          }
-        }
-        if (!stored) {
-          stored = localStorage.getItem('pxlr_slide4_production_target');
-        }
-      }
-
-      // Always start with a fresh clone of initial data to guarantee 12 months structure
-      const baseData = JSON.parse(JSON.stringify(INITIAL_SLIDE4_PRODUCTION_TARGET));
-      
-      if (!stored) return baseData;
-      
-      const parsed = JSON.parse(stored);
-      
-      // Merge base properties
-      const result = { ...baseData, ...parsed };
-      
-      // Force merge monthly targets to ensure EXACTLY 12 months exist and have correct labels
-      const mergedTargets = JSON.parse(JSON.stringify(INITIAL_SLIDE4_PRODUCTION_TARGET.monthlyTargets));
-      
-      if (Array.isArray(parsed.monthlyTargets)) {
-        parsed.monthlyTargets.forEach((target: any, idx: number) => {
-          if (idx < 12) {
-            // Only merge numeric data, keep month name from INITIAL
-            mergedTargets[idx] = { 
-              ...mergedTargets[idx], 
-              nsld: typeof target.nsld === 'number' ? target.nsld : mergedTargets[idx].nsld,
-              sanLuong: typeof target.sanLuong === 'number' ? target.sanLuong : mergedTargets[idx].sanLuong,
-              cong: typeof target.cong === 'number' ? target.cong : mergedTargets[idx].cong,
-              tonThat: typeof target.tonThat === 'number' ? target.tonThat : mergedTargets[idx].tonThat
-            };
-          }
-        });
-      }
-      
-      result.monthlyTargets = mergedTargets;
-      return result;
-    } catch {
-      return JSON.parse(JSON.stringify(INITIAL_SLIDE4_PRODUCTION_TARGET));
-    }
-  },
-
-  saveSlide4ProductionTarget(data: Slide4ProductionTargetData) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SLIDE4_PRODUCTION_TARGET, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save slide 4 production target data', e);
-    }
-  },
-
-  resetSlide4ProductionTarget(): Slide4ProductionTargetData {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.SLIDE4_PRODUCTION_TARGET);
-    } catch {}
-    return INITIAL_SLIDE4_PRODUCTION_TARGET;
-  },
-
-  getSlide5ProductionPlan(): Slide5ProductionPlanData {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.SLIDE5_PRODUCTION_PLAN);
-      return data ? JSON.parse(data) : INITIAL_SLIDE5_PRODUCTION_PLAN;
-    } catch {
-      return INITIAL_SLIDE5_PRODUCTION_PLAN;
-    }
-  },
-
-  saveSlide5ProductionPlan(data: Slide5ProductionPlanData) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SLIDE5_PRODUCTION_PLAN, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save slide 5 production plan data', e);
-    }
-  },
-
-  resetSlide5ProductionPlan(): Slide5ProductionPlanData {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.SLIDE5_PRODUCTION_PLAN);
-    } catch {}
-    return INITIAL_SLIDE5_PRODUCTION_PLAN;
-  },
-
-  getSlide6TaskPlan(): Slide6TaskPlanData {
-    try {
-      const data = localStorage.getItem(STORAGE_KEYS.SLIDE6_TASK_PLAN);
-      return data ? JSON.parse(data) : INITIAL_SLIDE6_TASK_PLAN;
-    } catch {
-      return INITIAL_SLIDE6_TASK_PLAN;
-    }
-  },
-
-  saveSlide6TaskPlan(data: Slide6TaskPlanData) {
-    try {
-      localStorage.setItem(STORAGE_KEYS.SLIDE6_TASK_PLAN, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save slide 6 task plan data', e);
-    }
-  },
-
-  resetSlide6TaskPlan(): Slide6TaskPlanData {
-    try {
-      localStorage.removeItem(STORAGE_KEYS.SLIDE6_TASK_PLAN);
-    } catch {}
-    return INITIAL_SLIDE6_TASK_PLAN;
-  },
-
-  resetToDefault() {
-    localStorage.removeItem(STORAGE_KEYS.DCBG);
-    localStorage.removeItem(STORAGE_KEYS.DCRO);
-    localStorage.removeItem(STORAGE_KEYS.ALERTS);
-    localStorage.removeItem(STORAGE_KEYS.THRESHOLDS);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-    localStorage.removeItem(STORAGE_KEYS.SLIDE1_NSLD);
-    localStorage.removeItem(STORAGE_KEYS.SLIDE2_QUALITY);
-    localStorage.removeItem(STORAGE_KEYS.SLIDE3_DEFECT_COST);
+// Helper đọc localStorage an toàn
+function getLocal<T>(key: string, fallback: T): T {
+  try {
+    const saved = localStorage.getItem(key);
+    if (!saved) return fallback;
+    return JSON.parse(saved) as T;
+  } catch (err) {
+    console.warn(`[storage] Lỗi đọc localStorage key "${key}":`, err);
+    return fallback;
   }
+}
+
+// Helper ghi localStorage an toàn
+function setLocal<T>(key: string, data: T): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch (err) {
+    console.warn(`[storage] Lỗi ghi localStorage key "${key}":`, err);
+  }
+}
+
+// Định danh duy nhất cho phiên trình duyệt/tab hiện tại để lọc bỏ phản hồi ngược (self-echo)
+export const CLIENT_SESSION_ID = typeof window !== 'undefined'
+  ? ((window as any).__SUNHOUSE_CLIENT_ID ||= 'cli_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now())
+  : 'cli_srv';
+
+// Live broadcast channel dùng chung toàn ứng dụng
+let sharedBroadcastChannel: any = null;
+export function getSharedBroadcastChannel(): any {
+  if (!supabase || !isSupabaseConfigured) return null;
+  if (!sharedBroadcastChannel) {
+    sharedBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
+      config: { broadcast: { self: false } },
+    });
+    sharedBroadcastChannel.subscribe((status: string) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Kênh Broadcast liên tab đã sẵn sàng');
+      }
+    });
+  }
+  return sharedBroadcastChannel;
+}
+
+// Helper phát broadcast đồng bộ tức thì cho tất cả các máy/tab đang mở (Tối ưu Egress: chỉ gửi tín hiệu nhẹ, không gửi payload lớn)
+export function broadcastTableUpdate(tableName: string, extraData?: any): void {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    // Gửi thông tin cần thiết và metadata nhẹ, hoặc payload thay đổi tức thì
+    const payloadToSend: any = { table: tableName, senderId: CLIENT_SESSION_ID, timestamp: Date.now() };
+    if (extraData && typeof extraData === 'object') {
+      Object.assign(payloadToSend, extraData);
+    }
+    ch.send({
+      type: 'broadcast',
+      event: 'table_sync_event',
+      payload: payloadToSend,
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi broadcast đồng bộ bảng thất bại:', err);
+  }
+}
+
+// ==========================================
+// 1. QUẢN LÝ NHÂN SỰ (WORKERS)
+// ==========================================
+// Helper dọn dẹp và gộp trùng lặp bản ghi nhật ký ca theo khóa duy nhất (date, shift, productId, lineId)
+export function deduplicateProductionLogs(logs: ProductionLog[]): { deduplicated: ProductionLog[]; duplicateIds: string[] } {
+  if (!logs || logs.length === 0) return { deduplicated: [], duplicateIds: [] };
+
+  const map = new Map<string, ProductionLog>();
+  const duplicateIds: string[] = [];
+
+  // Duyệt qua danh sách. Bản ghi có id xác định theo composite key hoặc id hợp lệ
+  logs.forEach((log) => {
+    // Chuẩn hóa key theo date, shift, productId và lineId
+    const key = `${log.date}_${(log.shift || '').trim()}_${(log.productId || '').trim()}_${(log.lineId || '').trim()}`;
+    if (!map.has(key)) {
+      map.set(key, log);
+    } else {
+      const existing = map.get(key)!;
+      // Thu thập ID của bản ghi trùng lặp để xóa nếu cần
+      if (log.id && log.id !== existing.id) {
+        duplicateIds.push(log.id);
+      }
+      // Ưu tiên giữ bản ghi có actualUnits lớn hơn hoặc có hourlyActuals đầy đủ hơn
+      const existingHourlyKeys = Object.keys(existing.hourlyActuals || {}).length;
+      const logHourlyKeys = Object.keys(log.hourlyActuals || {}).length;
+      if (logHourlyKeys > existingHourlyKeys || (log.actualUnits || 0) > (existing.actualUnits || 0)) {
+        // Giữ id của existing để duy trì tính nhất quán của ID đã lưu
+        map.set(key, { ...log, id: existing.id || log.id });
+      }
+    }
+  });
+
+  return { deduplicated: Array.from(map.values()), duplicateIds };
+}
+
+export async function getWorkers(): Promise<Worker[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      // Tối ưu Egress: Chỉ select đúng các cột cần hiển thị trên bảng, tuyệt đối KHÔNG dùng '*'
+      let res: any = await supabase
+        .from('workers')
+        .select('id, name, division, type, qr_code, image_url')
+        .order('id', { ascending: true })
+        .limit(5000);
+
+      // Hỗ trợ trường hợp bảng dùng tên cột biến thể (worker_code, full_name, department, status)
+      if (res.error && res.error.message?.includes('does not exist')) {
+        res = await supabase
+          .from('workers')
+          .select('id, worker_code, full_name, department, status')
+          .order('id', { ascending: true })
+          .limit(5000);
+      }
+
+      if (res.error) throw res.error;
+
+      if (res.data) {
+        const mapped: Worker[] = res.data.map((row: any) => ({
+          id: String(row.id || row.worker_code || ''),
+          name: String(row.name || row.full_name || ''),
+          division: (row.division || row.department || 'RO') as WorkerDivision,
+          type: (row.type || row.status || 'OFFICIAL') as WorkerType,
+          qrCode: String(row.qr_code || row.worker_code || row.id || ''),
+          imageUrl: row.image_url || row.imageUrl || undefined,
+        }));
+        setLocal(STORAGE_KEYS.WORKERS, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải workers từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+}
+
+export const fetchWorkers = getWorkers;
+
+export async function insertWorker(worker: Worker): Promise<void> {
+  // Gọi trực tiếp lên Supabase trước
+  if (supabase && isSupabaseConfigured) {
+    const { error } = await supabase.from('workers').insert([
+      {
+        id: worker.id,
+        name: worker.name,
+        division: worker.division,
+        type: worker.type,
+        qr_code: worker.qrCode,
+        image_url: worker.imageUrl || null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      },
+    ]);
+    if (error) {
+      console.warn('[storage] Lỗi thêm mới worker lên Supabase:', error.message || error);
+      throw error;
+    }
+  }
+
+  // Chỉ cập nhật Local Storage sau khi Supabase trả về kết quả thành công
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const updated = [worker, ...localList.filter((w) => w.id !== worker.id)];
+  setLocal(STORAGE_KEYS.WORKERS, updated);
+}
+
+export async function updateWorker(id: string, updatedData: Partial<Worker>): Promise<void> {
+  // Gọi trực tiếp update lên Supabase trước
+  if (supabase && isSupabaseConfigured) {
+    const payload: Record<string, any> = {
+      updated_at: new Date().toISOString(),
+    };
+    if (updatedData.name !== undefined) payload.name = updatedData.name;
+    if (updatedData.division !== undefined) payload.division = updatedData.division;
+    if (updatedData.type !== undefined) payload.type = updatedData.type;
+    if (updatedData.qrCode !== undefined) payload.qr_code = updatedData.qrCode;
+    if (updatedData.imageUrl !== undefined) payload.image_url = updatedData.imageUrl || null;
+    if (updatedData.id !== undefined && updatedData.id !== id) payload.id = updatedData.id;
+
+    const { error } = await supabase.from('workers').update(payload).eq('id', id);
+    if (error) {
+      console.warn('[storage] Lỗi cập nhật worker trên Supabase:', error.message || error);
+      throw error;
+    }
+  }
+
+  // Chỉ cập nhật Local Storage sau khi Supabase trả về kết quả thành công
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const updated = localList.map((w) => (w.id === id ? { ...w, ...updatedData } : w));
+  setLocal(STORAGE_KEYS.WORKERS, updated);
+}
+
+export async function deleteWorker(id: string): Promise<void> {
+  // Gọi trực tiếp xóa trên Supabase trước
+  if (supabase && isSupabaseConfigured) {
+    const { error } = await supabase.from('workers').delete().eq('id', id);
+    if (error) {
+      console.warn('[storage] Lỗi xóa worker trên Supabase:', error.message || error);
+      throw error;
+    }
+  }
+
+  // Chỉ cập nhật Local Storage sau khi Supabase trả về kết quả thành công
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  setLocal(STORAGE_KEYS.WORKERS, localList.filter((w) => w.id !== id));
+}
+
+export async function saveWorker(worker: Worker): Promise<void> {
+  const localList = getLocal<Worker[]>(STORAGE_KEYS.WORKERS, INITIAL_WORKERS);
+  const exists = localList.some((w) => w.id === worker.id);
+  const updated = exists
+    ? localList.map((w) => (w.id === worker.id ? worker : w))
+    : [...localList, worker];
+  setLocal(STORAGE_KEYS.WORKERS, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      if (exists) {
+        await updateWorker(worker.id, worker);
+      } else {
+        await insertWorker(worker);
+      }
+      broadcastTableUpdate('workers');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu worker:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllWorkers(workers: Worker[]): Promise<void> {
+  setLocal(STORAGE_KEYS.WORKERS, workers);
+
+  if (supabase && isSupabaseConfigured && workers.length > 0) {
+    try {
+      const rows = workers.map((w) => ({
+        id: w.id,
+        name: w.name,
+        division: w.division,
+        type: w.type,
+        qr_code: w.qrCode,
+        image_url: w.imageUrl || null,
+      }));
+      const { error } = await supabase.from('workers').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ workers lên Supabase:', error.message || error);
+      broadcastTableUpdate('workers');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu workers lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 2. NHẬT KÝ ĐIỂM DANH (ATTENDANCE LOGS)
+// ==========================================
+export async function getAttendanceLogs(limitCount: number = 1000): Promise<AttendanceRecord[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('attendance_records')
+        .select('id, worker_id, date, slot, check_in_time, check_out_time, scanned_division')
+        .order('date', { ascending: false })
+        .limit(limitCount);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: AttendanceRecord[] = data.map((row: any) => ({
+          id: row.id,
+          workerId: row.worker_id || row.workerId,
+          date: row.date,
+          slot: row.slot || undefined,
+          checkInTime: row.check_in_time || row.checkInTime,
+          checkOutTime: row.check_out_time || row.checkOutTime || undefined,
+          scannedDivision: row.scanned_division || row.scannedDivision || undefined,
+        }));
+        setLocal(STORAGE_KEYS.ATTENDANCE, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải attendance_records từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+}
+
+export async function saveAttendanceLog(record: AttendanceRecord): Promise<void> {
+  const localList = getLocal<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+  const updated = localList.some((r) => r.id === record.id)
+    ? localList.map((r) => (r.id === record.id ? record : r))
+    : [...localList, record];
+  setLocal(STORAGE_KEYS.ATTENDANCE, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('attendance_records').upsert({
+        id: record.id,
+        worker_id: record.workerId,
+        date: record.date,
+        slot: record.slot || null,
+        check_in_time: record.checkInTime,
+        check_out_time: record.checkOutTime || null,
+        scanned_division: record.scannedDivision || null,
+      });
+      if (error) console.warn('[storage] Lưu attendance_record lên Supabase:', error.message || error);
+      broadcastTableUpdate('attendance_records');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu attendance_record:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteAttendanceLog(id: string): Promise<void> {
+  const localList = getLocal<AttendanceRecord[]>(STORAGE_KEYS.ATTENDANCE, INITIAL_ATTENDANCE);
+  setLocal(STORAGE_KEYS.ATTENDANCE, localList.filter((r) => r.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('attendance_records').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa attendance_record trên Supabase:', error.message || error);
+      broadcastTableUpdate('attendance_records');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa attendance_record:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllAttendanceLogs(logs: AttendanceRecord[]): Promise<void> {
+  setLocal(STORAGE_KEYS.ATTENDANCE, logs);
+
+  if (supabase && isSupabaseConfigured && logs.length > 0) {
+    try {
+      const rows = logs.map((record) => ({
+        id: record.id,
+        worker_id: record.workerId,
+        date: record.date,
+        slot: record.slot || null,
+        check_in_time: record.checkInTime,
+        check_out_time: record.checkOutTime || null,
+        scanned_division: record.scannedDivision || null,
+      }));
+      const { error } = await supabase.from('attendance_records').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ attendance_records lên Supabase:', error.message || error);
+      broadcastTableUpdate('attendance_records');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu attendance lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 3. DANH MỤC SẢN PHẨM (PRODUCTS)
+// ==========================================
+export async function getProducts(): Promise<ProductDefinition[]> {
+  const defaultProducts = SUNHOUSE_PRODUCTS.map((p) => ({
+    ...p,
+    price: p.price === null || Number.isNaN(Number(p.price)) ? (p.group === 'MLN' ? 4500000 : 1800000) : Number(p.price),
+    factor: p.factor === null || Number.isNaN(Number(p.factor)) ? 1 : Number(p.factor),
+  }));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, group, code, factor, description, price')
+        .order('id', { ascending: true });
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: ProductDefinition[] = data.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          group: row.group,
+          code: row.code,
+          factor: Number(row.factor ?? 1),
+          description: row.description || '',
+          price: row.price !== null ? Number(row.price) : undefined,
+        }));
+        setLocal(STORAGE_KEYS.PRODUCTS, mapped);
+        return mapped;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải products từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, defaultProducts);
+}
+
+export async function saveProduct(product: ProductDefinition): Promise<void> {
+  const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
+  const updated = localList.some((p) => p.id === product.id)
+    ? localList.map((p) => (p.id === product.id ? product : p))
+    : [...localList, product];
+  setLocal(STORAGE_KEYS.PRODUCTS, updated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('products').upsert({
+        id: product.id,
+        name: product.name,
+        group: product.group,
+        code: product.code,
+        factor: product.factor,
+        description: product.description || '',
+        price: product.price ?? null,
+      });
+      if (error) console.warn('[storage] Lưu product lên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu product:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteProduct(id: string): Promise<void> {
+  const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
+  setLocal(STORAGE_KEYS.PRODUCTS, localList.filter((p) => p.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('products').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa product trên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa product:', err?.message || err);
+    }
+  }
+}
+
+export async function upsertProducts(products: ProductDefinition[]): Promise<void> {
+  if (!products || products.length === 0) return;
+  const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
+  const prodMap = new Map<string, ProductDefinition>(localList.map((p) => [p.id, p]));
+  products.forEach((p) => prodMap.set(p.id, p));
+  setLocal(STORAGE_KEYS.PRODUCTS, Array.from(prodMap.values()));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const rows = products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        group: p.group,
+        code: p.code,
+        factor: p.factor,
+        description: p.description || '',
+        price: p.price ?? null,
+      }));
+      const { error } = await supabase.from('products').upsert(rows);
+      if (error) console.warn('[storage] Upsert products lên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi upsert products:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllProducts(products: ProductDefinition[]): Promise<void> {
+  setLocal(STORAGE_KEYS.PRODUCTS, products);
+
+  if (supabase && isSupabaseConfigured && products.length > 0) {
+    try {
+      const rows = products.map((p) => ({
+        id: p.id,
+        name: p.name,
+        group: p.group,
+        code: p.code,
+        factor: p.factor,
+        description: p.description || '',
+        price: p.price ?? null,
+      }));
+      const { error } = await supabase.from('products').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ products lên Supabase:', error.message || error);
+      broadcastTableUpdate('products');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu products lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 4. NHẬT KÝ SẢN XUẤT (PRODUCTION LOGS)
+// ==========================================
+export async function getProductionLogs(limitCount: number = 1000): Promise<ProductionLog[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('production_logs')
+        .select(
+          'id, date, line_id, line_name, product_id, product_name, product_group, ' +
+          'actual_units, workers_count, official_workers, seasonal_workers, equivalent_factor, ' +
+          'equivalent_products, labor_productivity_percent, shift, technician_name, ' +
+          'hourly_actuals, hourly_workers, hourly_official_workers, hourly_seasonal_workers'
+        )
+        .order('date', { ascending: false })
+        .limit(limitCount);
+
+      if (error) throw error;
+
+      if (data && data.length > 0) {
+        const mapped: ProductionLog[] = data.map((row: any) => {
+          const hw = row.hourly_workers || row.hourlyWorkers || {};
+          let official = row.hourly_official_workers || row.hourlyOfficialWorkers || hw["__official"];
+          let seasonal = row.hourly_seasonal_workers || row.hourlySeasonalWorkers || hw["__seasonal"];
+          
+          const cleanedHw = { ...hw };
+          delete cleanedHw["__official"];
+          delete cleanedHw["__seasonal"];
+
+          return {
+            id: row.id,
+            date: row.date,
+            lineId: row.line_id || row.lineId,
+            lineName: row.line_name || row.lineName,
+            productId: row.product_id || row.productId,
+            productName: row.product_name || row.productName,
+            productGroup: row.product_group || row.productGroup,
+            actualUnits: Number(row.actual_units ?? row.actualUnits ?? 0),
+            workersCount: Number(row.workers_count ?? row.workersCount ?? 0),
+            officialWorkers: row.official_workers !== null ? Number(row.official_workers) : undefined,
+            seasonalWorkers: row.seasonal_workers !== null ? Number(row.seasonal_workers) : undefined,
+            equivalentFactor: Number(row.equivalent_factor ?? row.equivalentFactor ?? 1),
+            equivalentProducts: Number(row.equivalent_products ?? row.equivalentProducts ?? 0),
+            laborProductivityPercent: Number(row.labor_productivity_percent ?? row.laborProductivityPercent ?? 0),
+            shift: row.shift,
+            technicianName: row.technician_name || row.technicianName || '',
+            hourlyActuals: row.hourly_actuals || row.hourlyActuals || {},
+            hourlyWorkers: cleanedHw,
+            hourlyOfficialWorkers: official || {},
+            hourlySeasonalWorkers: seasonal || {},
+          };
+        });
+        // Tự động dọn dẹp các bản ghi trùng lặp (nếu có từ trước)
+        const { deduplicated } = deduplicateProductionLogs(mapped);
+        setLocal(STORAGE_KEYS.PRODUCTION_LOGS, deduplicated);
+        return deduplicated;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải production_logs từ Supabase, dùng local fallback:', err);
+    }
+  }
+  const fallback = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  const { deduplicated: cleanFallback } = deduplicateProductionLogs(fallback);
+  return cleanFallback;
+}
+
+export async function saveProductionLog(log: ProductionLog): Promise<void> {
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  // Khớp theo composite key (date, shift, productId, lineId) hoặc ID
+  const matchIdx = localList.findIndex(
+    (l) => l.id === log.id || (l.date === log.date && l.shift === log.shift && l.productId === log.productId && l.lineId === log.lineId)
+  );
+
+  let updatedList: ProductionLog[];
+  let finalLog = log;
+  if (matchIdx !== -1) {
+    // Giữ nguyên ID của bản ghi đã tồn tại để tránh tạo ID mới
+    finalLog = { ...log, id: localList[matchIdx].id };
+    updatedList = [...localList];
+    updatedList[matchIdx] = finalLog;
+  } else {
+    updatedList = [finalLog, ...localList];
+  }
+
+  const { deduplicated } = deduplicateProductionLogs(updatedList);
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, deduplicated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('production_logs').upsert({
+        id: finalLog.id,
+        date: finalLog.date,
+        line_id: finalLog.lineId,
+        line_name: finalLog.lineName,
+        product_id: finalLog.productId,
+        product_name: finalLog.productName,
+        product_group: finalLog.productGroup,
+        actual_units: finalLog.actualUnits,
+        workers_count: finalLog.workersCount,
+        official_workers: finalLog.officialWorkers ?? null,
+        seasonal_workers: finalLog.seasonalWorkers ?? null,
+        equivalent_factor: finalLog.equivalentFactor,
+        equivalent_products: finalLog.equivalentProducts,
+        labor_productivity_percent: finalLog.laborProductivityPercent,
+        shift: finalLog.shift,
+        technician_name: finalLog.technicianName,
+        hourly_actuals: finalLog.hourlyActuals || {},
+        hourly_workers: { ...(finalLog.hourlyWorkers || {}), "__official": finalLog.hourlyOfficialWorkers || {}, "__seasonal": finalLog.hourlySeasonalWorkers || {} },
+        hourly_official_workers: finalLog.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: finalLog.hourlySeasonalWorkers || {},
+      });
+      if (error) console.warn('[storage] Lưu production_log lên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu production_log:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteProductionLog(id: string): Promise<void> {
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, localList.filter((l) => l.id !== id));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('production_logs').delete().eq('id', id);
+      if (error) console.warn('[storage] Xóa production_log trên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa production_log:', err?.message || err);
+    }
+  }
+}
+
+export async function deleteMultipleProductionLogs(ids: string[]): Promise<void> {
+  if (!ids || ids.length === 0) return;
+  const idSet = new Set(ids);
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, localList.filter((l) => !idSet.has(l.id)));
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('production_logs').delete().in('id', ids);
+      if (error) console.warn('[storage] Xóa danh sách duplicate production_logs trên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa nhiều production_logs:', err?.message || err);
+    }
+  }
+}
+
+export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void> {
+  if (!logs || logs.length === 0) return;
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  
+  // Xây dựng map theo cả ID và composite key
+  const compositeMap = new Map<string, ProductionLog>();
+  localList.forEach((l) => {
+    const key = `${l.date}_${(l.shift || '').trim()}_${(l.productId || '').trim()}_${(l.lineId || '').trim()}`;
+    compositeMap.set(key, l);
+  });
+
+  const normalizedLogs = logs.map((incoming) => {
+    const key = `${incoming.date}_${(incoming.shift || '').trim()}_${(incoming.productId || '').trim()}_${(incoming.lineId || '').trim()}`;
+    const existing = compositeMap.get(key);
+    if (existing) {
+      // Giữ nguyên id của bản ghi đã có để lệnh upsert trên Supabase và local cập nhật chính xác dòng đó
+      return { ...incoming, id: existing.id };
+    }
+    return incoming;
+  });
+
+  const logMap = new Map<string, ProductionLog>(localList.map((l) => [l.id, l]));
+  normalizedLogs.forEach((l) => logMap.set(l.id, l));
+  
+  const { deduplicated } = deduplicateProductionLogs(Array.from(logMap.values()));
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, deduplicated);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const rows = normalizedLogs.map((log) => ({
+        id: log.id,
+        date: log.date,
+        line_id: log.lineId,
+        line_name: log.lineName,
+        product_id: log.productId,
+        product_name: log.productName,
+        product_group: log.productGroup,
+        actual_units: log.actualUnits,
+        workers_count: log.workersCount,
+        official_workers: log.officialWorkers ?? null,
+        seasonal_workers: log.seasonalWorkers ?? null,
+        equivalent_factor: log.equivalentFactor,
+        equivalent_products: log.equivalentProducts,
+        labor_productivity_percent: log.laborProductivityPercent,
+        shift: log.shift,
+        technician_name: log.technicianName,
+        hourly_actuals: log.hourlyActuals || {},
+        hourly_workers: { ...(log.hourlyWorkers || {}), "__official": log.hourlyOfficialWorkers || {}, "__seasonal": log.hourlySeasonalWorkers || {} },
+        hourly_official_workers: log.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
+      }));
+      const { error } = await supabase.from('production_logs').upsert(rows);
+      if (error) console.warn('[storage] Upsert production_logs lên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi upsert production_logs:', err?.message || err);
+    }
+  }
+}
+
+export async function saveAllProductionLogs(logs: ProductionLog[]): Promise<void> {
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, logs);
+
+  if (supabase && isSupabaseConfigured && logs.length > 0) {
+    try {
+      const rows = logs.map((log) => ({
+        id: log.id,
+        date: log.date,
+        line_id: log.lineId,
+        line_name: log.lineName,
+        product_id: log.productId,
+        product_name: log.productName,
+        product_group: log.productGroup,
+        actual_units: log.actualUnits,
+        workers_count: log.workersCount,
+        official_workers: log.officialWorkers ?? null,
+        seasonal_workers: log.seasonalWorkers ?? null,
+        equivalent_factor: log.equivalentFactor,
+        equivalent_products: log.equivalentProducts,
+        labor_productivity_percent: log.laborProductivityPercent,
+        shift: log.shift,
+        technician_name: log.technicianName,
+        hourly_actuals: log.hourlyActuals || {},
+        hourly_workers: { ...(log.hourlyWorkers || {}), "__official": log.hourlyOfficialWorkers || {}, "__seasonal": log.hourlySeasonalWorkers || {} },
+        hourly_official_workers: log.hourlyOfficialWorkers || {},
+        hourly_seasonal_workers: log.hourlySeasonalWorkers || {},
+      }));
+      const { error } = await supabase.from('production_logs').upsert(rows);
+      if (error) console.warn('[storage] Lưu trữ production_logs lên Supabase:', error.message || error);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu production_logs lên Supabase:', err?.message || err);
+    }
+  }
+}
+
+// --------------------------------------------------------------------
+// ĐỒNG BỘ RIÊNG CHO TAB 'GHI NHẬT KÝ CA' (SHIFT LOG / HOURLY LOGS)
+// --------------------------------------------------------------------
+let hasGranularSchema: boolean | null = false; // Mặc định dùng schema tiêu chuẩn (hourly_actuals JSONB) để đạt hiệu năng cao nhất và tương thích 100%
+
+export interface HourlyLogPayload {
+  work_date: string;
+  department: string;
+  product_code: string;
+  shift: string;
+  quantity: number;
+  status?: string;
+  productId?: string;
+  productName?: string;
+  allHourlyActuals?: Record<string, number>;
+}
+
+// Helper phát hiện lỗi kết nối / timeout mạng tạm thời (Failed to fetch, timeout, 57014, NetworkError)
+export function isTransientNetworkError(err: any): boolean {
+  if (!err) return false;
+  const msg = (typeof err === 'string' ? err : err.message || err.details || '') + '';
+  const code = (err.code || '') + '';
+  return (
+    msg.includes('Failed to fetch') ||
+    msg.includes('NetworkError') ||
+    msg.includes('Load failed') ||
+    msg.includes('timeout') ||
+    msg.includes('AbortError') ||
+    msg.includes('socket') ||
+    msg.includes('offline') ||
+    code === '57014'
+  );
+}
+
+// Background queue để tự động đồng bộ lại khi có mạng
+const pendingOfflineRecords = new Map<string, any>();
+
+async function flushPendingOfflineQueue() {
+  if (!supabase || !isSupabaseConfigured || pendingOfflineRecords.size === 0) return;
+  const records = Array.from(pendingOfflineRecords.values());
+  console.info(`[storage] Đang đồng bộ lại ${records.length} bản ghi chờ lên Supabase...`);
+  try {
+    const { error } = await supabase.from('production_logs').upsert(records);
+    if (!error) {
+      console.info('✅ Đã đồng bộ thành công các bản ghi ngoại tuyến lên Supabase.');
+      pendingOfflineRecords.clear();
+      broadcastTableUpdate('production_logs');
+    }
+  } catch (e) {
+    console.warn('[storage] Thử đồng bộ ngoại tuyến chưa thành công, sẽ thử lại sau:', e);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    console.info('[storage] Trình duyệt đã kết nối mạng trở lại, kích hoạt đồng bộ.');
+    flushPendingOfflineQueue();
+  });
+  setInterval(() => {
+    if (pendingOfflineRecords.size > 0 && navigator.onLine !== false) {
+      flushPendingOfflineQueue();
+    }
+  }, 25000);
+}
+
+export async function fetchShiftProductionLogs(
+  selectedDate: string,
+  selectedDept?: string
+): Promise<{ data: any[] | null; error: any }> {
+  if (!supabase || !isSupabaseConfigured) {
+    return { data: null, error: new Error('Supabase chưa được cấu hình') };
+  }
+
+  try {
+    let rows: any[] = [];
+
+    // Nếu chưa xác định hoặc đã xác nhận database hỗ trợ cột work_date
+    if (hasGranularSchema === true) {
+      let res: any = null;
+      try {
+        res = await supabase.from('production_logs').select('*').eq('work_date', selectedDate);
+      } catch (e: any) {
+        res = { error: e };
+      }
+      
+      // Nếu bảng chưa có cột work_date (lỗi PGRST204 hoặc 42703), fallback sang cột date
+      if (res?.error && (res.error.code === 'PGRST204' || res.error.code === '42703' || res.error.message?.includes('work_date') || res.error.message?.includes('schema cache'))) {
+        hasGranularSchema = false;
+        try {
+          res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+        } catch (e: any) {
+          res = { error: e };
+        }
+      }
+
+      if (res?.error) {
+        if (isTransientNetworkError(res.error)) {
+          console.warn('[storage] Mạng gián đoạn khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
+          const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+          rows = localLogs.filter((l) => l.date === selectedDate);
+          return { data: rows, error: null };
+        }
+        console.warn('[storage] Lỗi query production_logs theo ngày:', res.error);
+        return { data: null, error: res.error };
+      }
+      rows = res?.data || [];
+    } else {
+      // Schema tiêu chuẩn (cột date)
+      let res: any = null;
+      try {
+        res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+      } catch (e: any) {
+        res = { error: e };
+      }
+
+      if (res?.error) {
+        if (isTransientNetworkError(res.error)) {
+          console.warn('[storage] Mạng gián đoạn khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
+          const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+          rows = localLogs.filter((l) => l.date === selectedDate);
+          return { data: rows, error: null };
+        }
+        console.warn('[storage] Lỗi query production_logs theo date:', res.error);
+        return { data: null, error: res.error };
+      }
+      rows = res?.data || [];
+    }
+
+    if (selectedDept && selectedDept !== 'ALL') {
+      rows = rows.filter((r: any) => {
+        const d = r.department || r.product_group;
+        return !d || d === selectedDept;
+      });
+    }
+
+    return { data: rows, error: null };
+  } catch (err: any) {
+    if (isTransientNetworkError(err)) {
+      console.warn('[storage] Ngoại lệ mạng khi fetch shift production logs, nạp từ local storage:', err?.message || err);
+      const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+      const rows = localLogs.filter((l) => l.date === selectedDate);
+      return { data: rows, error: null };
+    }
+    console.error('[storage] Ngoại lệ khi fetch shift production logs:', err);
+    return { data: null, error: err };
+  }
+}
+
+// Hàng đợi đơn chuyến (Single-flight Queue) để chống xung đột khóa hàng (Row Lock Contention / Deadlock)
+const inFlightHourlyUpserts = new Map<string, Promise<any>>();
+
+export async function upsertHourlyProductionLog(
+  payload: HourlyLogPayload
+): Promise<{ data: any; error: any }> {
+  if (!supabase || !isSupabaseConfigured) {
+    return { data: null, error: new Error('Supabase chưa được cấu hình. Dữ liệu đang được lưu vào bộ nhớ cục bộ.') };
+  }
+
+  const queueKey = `${payload.work_date}_${payload.productId || payload.product_code}`;
+  const previousOp = inFlightHourlyUpserts.get(queueKey) || Promise.resolve();
+
+  const currentOp = previousOp
+    .catch(() => {})
+    .then(async () => {
+      return executeUpsertHourlyInternal(payload);
+    });
+
+  inFlightHourlyUpserts.set(queueKey, currentOp);
+
+  try {
+    const res = await currentOp;
+    return res;
+  } finally {
+    if (inFlightHourlyUpserts.get(queueKey) === currentOp) {
+      inFlightHourlyUpserts.delete(queueKey);
+    }
+  }
+}
+
+async function executeUpsertHourlyInternal(
+  payload: HourlyLogPayload
+): Promise<{ data: any; error: any }> {
+  const cleanSlot = (payload.shift || '').replace(/\s+/g, ''); // Ví dụ: '8H-9H'
+  const qty = Number(payload.quantity || 0);
+
+  // 1. Thử ghi theo Granular Schema (nếu database đã xác nhận có các cột work_date, department, product_code,...)
+  if (hasGranularSchema === true) {
+    try {
+      const record = {
+        work_date: payload.work_date,
+        department: payload.department,
+        product_code: payload.product_code,
+        shift: cleanSlot,
+        quantity: qty,
+        status: payload.status || 'OK'
+      };
+
+      const res = await supabase.from('production_logs').upsert(record, {
+        onConflict: 'work_date,product_code,shift'
+      });
+
+      if (!res.error) {
+        broadcastTableUpdate('production_logs');
+        return { data: res.data, error: null };
+      }
+
+      if (
+        res.error.code === 'PGRST204' || 
+        res.error.code === '42703' || 
+        res.error.code === '42P10' || 
+        res.error.message?.includes('department') || 
+        res.error.message?.includes('work_date')
+      ) {
+        hasGranularSchema = false;
+      } else {
+        console.warn('[storage] Lỗi UPSERT granular:', res.error);
+        return { data: null, error: res.error };
+      }
+    } catch {
+      hasGranularSchema = false;
+    }
+  }
+
+  // 2. Schema Tiêu Chuẩn (Bảng production_logs chuẩn với hourly_actuals JSONB)
+  try {
+    const localProducts = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, SUNHOUSE_PRODUCTS);
+    const prod = localProducts.find(
+      (p) => p.id === payload.productId || p.code === payload.product_code || p.id === payload.product_code || p.name.includes(payload.product_code)
+    );
+
+    const targetProdId = prod ? prod.id : (payload.productId || payload.product_code);
+    const targetProdName = prod ? prod.name : (payload.productName || payload.product_code);
+    const targetDept = prod ? prod.group : (payload.department === 'BG' ? 'BG' : payload.department === 'RMA' ? 'RMA' : 'MLN');
+    const factor = prod ? prod.factor : 1.0;
+
+    const lineId = targetDept === 'BG' ? 'line-bg-02' : targetDept === 'RMA' ? 'line-rma-03' : 'line-mln-01';
+    const lineName = targetDept === 'BG' ? 'DCBG' : targetDept === 'RMA' ? 'DCRMA' : 'DCRO';
+
+    // Cập nhật Local Storage NGAY LẬP TỨC để đảm bảo 100% dữ liệu không bị mất
+    const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, []);
+    const localIdx = localLogs.findIndex(
+      (l) => l.date === payload.work_date && (l.productId === targetProdId || l.productId === payload.product_code)
+    );
+
+    let rowId = `log-${payload.work_date}-${targetProdId}`;
+    let existingLog: ProductionLog | undefined = localIdx !== -1 ? localLogs[localIdx] : undefined;
+    if (existingLog) {
+      rowId = existingLog.id;
+    }
+
+    const rawHourly: Record<string, number> = payload.allHourlyActuals
+      ? { ...payload.allHourlyActuals }
+      : { ...(existingLog?.hourlyActuals || {}), [cleanSlot]: qty };
+
+    const sanitizedHourly: Record<string, number> = {};
+    Object.entries(rawHourly).forEach(([k, v]) => {
+      if (isValidHourlySlot(k)) {
+        sanitizedHourly[k] = Number(v) || 0;
+      }
+    });
+
+    const totalUnits = Object.values(sanitizedHourly).reduce((sum, v) => sum + (Number(v) || 0), 0);
+    const currentFactor = existingLog?.equivalentFactor || factor;
+    const eqUnits = Math.round(totalUnits * currentFactor);
+
+    const updatedLog: ProductionLog = {
+      id: rowId,
+      date: payload.work_date,
+      lineId: existingLog?.lineId || lineId,
+      lineName: existingLog?.lineName || lineName,
+      productId: targetProdId,
+      productName: existingLog?.productName || targetProdName,
+      productGroup: existingLog?.productGroup || targetDept,
+      actualUnits: totalUnits,
+      workersCount: existingLog?.workersCount || 0,
+      officialWorkers: existingLog?.officialWorkers,
+      seasonalWorkers: existingLog?.seasonalWorkers,
+      equivalentFactor: currentFactor,
+      equivalentProducts: eqUnits,
+      laborProductivityPercent: existingLog?.laborProductivityPercent || 0,
+      shift: existingLog?.shift || "Ca HC (08:00 - 17:00)",
+      technicianName: existingLog?.technicianName || '',
+      hourlyActuals: sanitizedHourly,
+      hourlyWorkers: existingLog?.hourlyWorkers || {},
+      hourlyOfficialWorkers: existingLog?.hourlyOfficialWorkers || {},
+      hourlySeasonalWorkers: existingLog?.hourlySeasonalWorkers || {},
+    };
+
+    if (localIdx !== -1) {
+      localLogs[localIdx] = updatedLog;
+    } else {
+      localLogs.unshift(updatedLog);
+    }
+    setLocal(STORAGE_KEYS.PRODUCTION_LOGS, localLogs);
+
+    // Chuẩn bị payload đồng bộ lên Supabase tương thích chính xác với schema tiêu chuẩn
+    const standardRecord = {
+      id: updatedLog.id,
+      date: updatedLog.date,
+      line_id: updatedLog.lineId,
+      line_name: updatedLog.lineName,
+      product_id: updatedLog.productId,
+      product_name: updatedLog.productName,
+      product_group: updatedLog.productGroup,
+      actual_units: updatedLog.actualUnits,
+      workers_count: updatedLog.workersCount,
+      official_workers: updatedLog.officialWorkers ?? null,
+      seasonal_workers: updatedLog.seasonalWorkers ?? null,
+      equivalent_factor: updatedLog.equivalentFactor,
+      equivalent_products: updatedLog.equivalentProducts,
+      labor_productivity_percent: updatedLog.laborProductivityPercent,
+      shift: updatedLog.shift,
+      technician_name: updatedLog.technicianName,
+      hourly_actuals: updatedLog.hourlyActuals,
+      hourly_workers: updatedLog.hourlyWorkers,
+      hourly_official_workers: updatedLog.hourlyOfficialWorkers,
+      hourly_seasonal_workers: updatedLog.hourlySeasonalWorkers,
+    };
+
+    let res: any = null;
+    try {
+      res = await supabase.from('production_logs').upsert(standardRecord);
+    } catch (e: any) {
+      res = { error: e };
+    }
+
+    // Nếu gặp lỗi mạng tạm thời hoặc timeout (Failed to fetch, 57014), tự động thử gửi lại sau 600ms
+    if (res?.error && isTransientNetworkError(res.error)) {
+      console.warn('[storage] Phát hiện mạng chập chờn hoặc timeout, tự động gửi lại sau 600ms...', res.error?.message || res.error);
+      await new Promise((r) => setTimeout(r, 600));
+      try {
+        res = await supabase.from('production_logs').upsert(standardRecord);
+      } catch (e: any) {
+        res = { error: e };
+      }
+    }
+
+    if (res?.error) {
+      // Nếu là lỗi mất kết nối mạng hoặc timeout (Failed to fetch, 57014, NetworkError)
+      if (isTransientNetworkError(res.error)) {
+        console.warn('[storage] Mất kết nối mạng tạm thời (Failed to fetch / Timeout). Bản ghi đã được bảo toàn an toàn trên máy cục bộ (LocalStorage) và lưu vào hàng đợi đồng bộ tự động.');
+        pendingOfflineRecords.set(standardRecord.id, standardRecord);
+        broadcastTableUpdate('production_logs', { action: 'hourly_upsert', id: standardRecord.id });
+        return { data: null, error: null }; // Bỏ qua lỗi toast làm phiền người dùng vì đã lưu an toàn vào LocalStorage
+      }
+      console.error('[storage] Lỗi lưu production_logs (schema tiêu chuẩn):', res.error);
+      return { data: null, error: res.error };
+    }
+
+    pendingOfflineRecords.delete(standardRecord.id);
+    broadcastTableUpdate('production_logs', { action: 'hourly_upsert', id: standardRecord.id });
+    return { data: res?.data, error: null };
+  } catch (err: any) {
+    if (isTransientNetworkError(err)) {
+      console.warn('[storage] Ngoại lệ mạng (Failed to fetch / Timeout). Dữ liệu đã được bảo toàn an toàn trên máy cục bộ.');
+      broadcastTableUpdate('production_logs', { action: 'hourly_upsert', id: payload.productId || payload.product_code });
+      return { data: null, error: null };
+    }
+    console.error('[storage] Ngoại lệ khi lưu production_logs:', err);
+    return { data: null, error: err };
+  }
+}
+
+// ==========================================
+// 5. KẾ HOẠCH THÁNG (MONTHLY PLAN)
+// ==========================================
+export type MonthlyPlanData = {
+  [yearMonth: string]: { [productId: string]: { [day: number]: number } };
 };
+
+export async function getMonthlyPlan(): Promise<MonthlyPlanData> {
+  const today = new Date();
+  const currentYearMonthStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0');
+  const initial: MonthlyPlanData = { [currentYearMonthStr]: {} };
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('monthly_plan')
+        .select('id, plan_data')
+        .eq('id', 'default_plan')
+        .single();
+
+      if (!error && data && data.plan_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_PLAN, data.plan_data);
+        return data.plan_data as MonthlyPlanData;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_plan từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<MonthlyPlanData>(STORAGE_KEYS.MONTHLY_PLAN, initial);
+}
+
+export async function saveMonthlyPlan(plan: MonthlyPlanData): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_PLAN, plan);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('monthly_plan').upsert({
+        id: 'default_plan',
+        plan_data: plan,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_plan lên Supabase:', error.message || error);
+      broadcastTableUpdate('monthly_plan');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_plan:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 6. MỤC TIÊU NSLĐ THÁNG (MONTHLY TARGETS)
+// ==========================================
+export async function getMonthlyTargets(): Promise<Record<string, number>> {
+  const defaults: Record<string, number> = {};
+  for (const y of [2025, 2026]) {
+    for (let m = 1; m <= 12; m++) {
+      defaults[`${y}-${m}`] = 110;
+    }
+  }
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('monthly_targets')
+        .select('id, targets_data')
+        .eq('id', 'default_targets')
+        .single();
+
+      if (!error && data && data.targets_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_TARGETS, data.targets_data);
+        return data.targets_data as Record<string, number>;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_targets từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<Record<string, number>>(STORAGE_KEYS.MONTHLY_TARGETS, defaults);
+}
+
+export async function saveMonthlyTargets(targets: Record<string, number>): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_TARGETS, targets);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('monthly_targets').upsert({
+        id: 'default_targets',
+        targets_data: targets,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_targets lên Supabase:', error.message || error);
+      broadcastTableUpdate('monthly_targets');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_targets:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 7. SỐ LIỆU LỊCH SỬ THÁNG (METRICS 2025 / 2026)
+// ==========================================
+export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetric[]> {
+  const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
+  const initial = year === 2025 ? HISTORICAL_2025 : HISTORICAL_2026;
+
+  const enforceLocked2026 = (list: MonthlyMetric[]) => {
+    if (year !== 2026 || !Array.isArray(list)) return list;
+    return list.map((m) => {
+      if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
+      if (m.month === 2) return { ...m, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704 };
+      if (m.month === 3) return { ...m, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609 };
+      if (m.month === 4) return { ...m, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070 };
+      if (m.month === 5) return { ...m, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311 };
+      if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
+      if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+      if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+      return m;
+    });
+  };
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('monthly_metrics')
+        .select('id, year, metrics_data')
+        .eq('id', `metrics_${year}`)
+        .single();
+
+      if (!error && data && data.metrics_data) {
+        const guarded = enforceLocked2026(data.metrics_data as MonthlyMetric[]);
+        setLocal(key, guarded);
+        return guarded;
+      }
+    } catch (err) {
+      console.warn(`[storage] Không thể tải metrics ${year} từ Supabase, dùng local fallback:`, err);
+    }
+  }
+  const localVal = getLocal<MonthlyMetric[]>(key, initial);
+  return enforceLocked2026(localVal);
+}
+
+export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetric[]): Promise<void> {
+  const key = year === 2025 ? STORAGE_KEYS.METRICS_2025 : STORAGE_KEYS.METRICS_2026;
+  const metricsToSave = (year === 2026 && Array.isArray(metrics)) ? metrics.map((m) => {
+    if (m.month === 1) return { ...m, laborProductivityPercent: 90.14, productionMandays: 1790.86, equivalentProducts: 14577, actualProducts: 12747 };
+    if (m.month === 2) return { ...m, laborProductivityPercent: 96.69, productionMandays: 1277.2, equivalentProducts: 11151, actualProducts: 7704 };
+    if (m.month === 3) return { ...m, laborProductivityPercent: 93.95, productionMandays: 2770.55, equivalentProducts: 23503, actualProducts: 16609 };
+    if (m.month === 4) return { ...m, laborProductivityPercent: 94.41, productionMandays: 2416.591, equivalentProducts: 20601, actualProducts: 15070 };
+    if (m.month === 5) return { ...m, laborProductivityPercent: 108.4, productionMandays: 2498.403, equivalentProducts: 24456, actualProducts: 13311 };
+    if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
+    if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
+    if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+    return m;
+  }) : metrics;
+
+  setLocal(key, metricsToSave);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('monthly_metrics').upsert({
+        id: `metrics_${year}`,
+        year: year,
+        metrics_data: metricsToSave,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn(`[storage] Lưu metrics ${year} lên Supabase:`, error.message || error);
+      broadcastTableUpdate('monthly_metrics');
+    } catch (err: any) {
+      console.warn(`[storage] Trạng thái kết nối khi lưu metrics ${year}:`, err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 8. BÁO CÁO HÀNG NGÀY CHI TIẾT (GAS & ASSEMBLY)
+// ==========================================
+export interface AllDailyReportsBundle {
+  gas: DailyReportRowGas[];
+  assembly: DailyReportRowAssembly[];
+  monthlyScrap: MonthlyScrapReport[];
+  weeklyScrap: WeeklyScrapReport[];
+  weeklyDclr: WeeklyDclreErrorRate[];
+  monthlyDclr: MonthlyDclreErrorRate[];
+  declaredImeis: any[];
+  scannedImeis: any[];
+  declaredImeisUpdatedAt?: string;
+  scannedImeisUpdatedAt?: string;
+}
+
+// Gom toàn bộ 8 bảng báo cáo hàng ngày vào 1 query duy nhất để tiết kiệm 87% Egress và tải siêu tốc
+export async function getAllDailyReports(): Promise<AllDailyReportsBundle> {
+  const result: AllDailyReportsBundle = {
+    gas: getLocal<DailyReportRowGas[]>(STORAGE_KEYS.GAS_DAILY, INITIAL_GAS_DAILY_REPORTS),
+    assembly: getLocal<DailyReportRowAssembly[]>(STORAGE_KEYS.ASSEMBLY_DAILY, INITIAL_ASSEMBLY_DAILY_REPORTS),
+    monthlyScrap: getLocal<MonthlyScrapReport[]>(STORAGE_KEYS.MONTHLY_SCRAP, MONTHLY_SCRAP_REPORT),
+    weeklyScrap: getLocal<WeeklyScrapReport[]>(STORAGE_KEYS.WEEKLY_SCRAP, WEEKLY_SCRAP_REPORT),
+    weeklyDclr: getLocal<WeeklyDclreErrorRate[]>(STORAGE_KEYS.WEEKLY_DCLR_ERROR, WEEKLY_DCLR_ERROR_RATE),
+    monthlyDclr: getLocal<MonthlyDclreErrorRate[]>(STORAGE_KEYS.MONTHLY_DCLR_ERROR, MONTHLY_DCLR_ERROR_RATE),
+    declaredImeis: getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []),
+    scannedImeis: getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []),
+  };
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('id, report_type, report_data, updated_at')
+        .in('id', [
+          'gas_daily_reports',
+          'assembly_daily_reports',
+          'monthly_scrap_report',
+          'weekly_scrap_report',
+          'weekly_dclr_error',
+          'monthly_dclr_error',
+          'declared_imeis',
+          'scanned_imeis',
+        ]);
+
+      if (!error && data && data.length > 0) {
+        data.forEach((row: any) => {
+          if (row.report_data === undefined || row.report_data === null) return;
+          if (row.id === 'gas_daily_reports') {
+            result.gas = row.report_data;
+            setLocal(STORAGE_KEYS.GAS_DAILY, row.report_data);
+          } else if (row.id === 'assembly_daily_reports') {
+            result.assembly = row.report_data;
+            setLocal(STORAGE_KEYS.ASSEMBLY_DAILY, row.report_data);
+          } else if (row.id === 'monthly_scrap_report') {
+            result.monthlyScrap = row.report_data;
+            setLocal(STORAGE_KEYS.MONTHLY_SCRAP, row.report_data);
+          } else if (row.id === 'weekly_scrap_report') {
+            result.weeklyScrap = row.report_data;
+            setLocal(STORAGE_KEYS.WEEKLY_SCRAP, row.report_data);
+          } else if (row.id === 'weekly_dclr_error') {
+            result.weeklyDclr = row.report_data;
+            setLocal(STORAGE_KEYS.WEEKLY_DCLR_ERROR, row.report_data);
+          } else if (row.id === 'monthly_dclr_error') {
+            result.monthlyDclr = row.report_data;
+            setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, row.report_data);
+          } else if (row.id === 'declared_imeis') {
+            const rowTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+            const currentLocalTs = Number(getLocal('sunhouse_declared_imeis_ts', 0)) || 0;
+            if (rowTs >= currentLocalTs) {
+              result.declaredImeis = Array.isArray(row.report_data) ? row.report_data : [];
+              result.declaredImeisUpdatedAt = row.updated_at;
+              setLocal(STORAGE_KEYS.DECLARED_IMEIS, result.declaredImeis);
+              if (row.updated_at) {
+                setLocal('sunhouse_declared_imeis_ts', rowTs);
+              }
+            } else {
+              result.declaredImeis = getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
+              result.declaredImeisUpdatedAt = new Date(currentLocalTs).toISOString();
+            }
+          } else if (row.id === 'scanned_imeis') {
+            const rowTs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+            const currentLocalTs = Number(getLocal('sunhouse_scanned_imeis_ts', 0)) || 0;
+            if (rowTs >= currentLocalTs) {
+              result.scannedImeis = Array.isArray(row.report_data) ? row.report_data : [];
+              result.scannedImeisUpdatedAt = row.updated_at;
+              setLocal(STORAGE_KEYS.SCANNED_IMEIS, result.scannedImeis);
+              if (row.updated_at) {
+                setLocal('sunhouse_scanned_imeis_ts', rowTs);
+              }
+            } else {
+              result.scannedImeis = getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+              result.scannedImeisUpdatedAt = new Date(currentLocalTs).toISOString();
+            }
+          }
+        });
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể nạp gói daily_reports từ Supabase:', err);
+    }
+  }
+
+  return result;
+}
+export async function getGasDailyReports(): Promise<DailyReportRowGas[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('id, report_type, report_data')
+        .eq('id', 'gas_daily_reports')
+        .single();
+
+      if (!error && data && data.report_data) {
+        setLocal(STORAGE_KEYS.GAS_DAILY, data.report_data);
+        return data.report_data as DailyReportRowGas[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải gas_daily_reports từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<DailyReportRowGas[]>(STORAGE_KEYS.GAS_DAILY, INITIAL_GAS_DAILY_REPORTS);
+}
+
+export async function saveGasDailyReports(reports: DailyReportRowGas[]): Promise<void> {
+  setLocal(STORAGE_KEYS.GAS_DAILY, reports);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'gas_daily_reports',
+        report_type: 'gas',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu gas_daily_reports lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu gas_daily_reports:', err?.message || err);
+    }
+  }
+}
+
+export async function getAssemblyDailyReports(): Promise<DailyReportRowAssembly[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('id, report_type, report_data')
+        .eq('id', 'assembly_daily_reports')
+        .single();
+
+      if (!error && data && data.report_data) {
+        setLocal(STORAGE_KEYS.ASSEMBLY_DAILY, data.report_data);
+        return data.report_data as DailyReportRowAssembly[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải assembly_daily_reports từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<DailyReportRowAssembly[]>(STORAGE_KEYS.ASSEMBLY_DAILY, INITIAL_ASSEMBLY_DAILY_REPORTS);
+}
+
+export async function saveAssemblyDailyReports(reports: DailyReportRowAssembly[]): Promise<void> {
+  setLocal(STORAGE_KEYS.ASSEMBLY_DAILY, reports);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'assembly_daily_reports',
+        report_type: 'assembly',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu assembly_daily_reports lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu assembly_daily_reports:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 8B. BÁO CÁO PHẾ PHẨM & TỶ LỆ LỖI (SCRAP & DCLR ERROR)
+// ==========================================
+export async function getMonthlyScrapReport(): Promise<MonthlyScrapReport[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'monthly_scrap_report')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_SCRAP, data.report_data);
+        return data.report_data as MonthlyScrapReport[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_scrap từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<MonthlyScrapReport[]>(STORAGE_KEYS.MONTHLY_SCRAP, MONTHLY_SCRAP_REPORT);
+}
+
+export async function saveMonthlyScrapReport(reports: MonthlyScrapReport[]): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_SCRAP, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'monthly_scrap_report',
+        report_type: 'scrap',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_scrap lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_scrap:', err?.message || err);
+    }
+  }
+}
+
+export async function getWeeklyScrapReport(): Promise<WeeklyScrapReport[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'weekly_scrap_report')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.WEEKLY_SCRAP, data.report_data);
+        return data.report_data as WeeklyScrapReport[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải weekly_scrap từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<WeeklyScrapReport[]>(STORAGE_KEYS.WEEKLY_SCRAP, WEEKLY_SCRAP_REPORT);
+}
+
+export async function saveWeeklyScrapReport(reports: WeeklyScrapReport[]): Promise<void> {
+  setLocal(STORAGE_KEYS.WEEKLY_SCRAP, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'weekly_scrap_report',
+        report_type: 'scrap',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu weekly_scrap lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu weekly_scrap:', err?.message || err);
+    }
+  }
+}
+
+export async function getWeeklyDclrErrorRate(): Promise<WeeklyDclreErrorRate[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'weekly_dclr_error')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.WEEKLY_DCLR_ERROR, data.report_data);
+        return data.report_data as WeeklyDclreErrorRate[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải weekly_dclr_error từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<WeeklyDclreErrorRate[]>(STORAGE_KEYS.WEEKLY_DCLR_ERROR, WEEKLY_DCLR_ERROR_RATE);
+}
+
+export async function saveWeeklyDclrErrorRate(reports: WeeklyDclreErrorRate[]): Promise<void> {
+  setLocal(STORAGE_KEYS.WEEKLY_DCLR_ERROR, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'weekly_dclr_error',
+        report_type: 'dclr_error',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu weekly_dclr_error lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu weekly_dclr_error:', err?.message || err);
+    }
+  }
+}
+
+export async function getMonthlyDclrErrorRate(): Promise<MonthlyDclreErrorRate[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', 'monthly_dclr_error')
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, data.report_data);
+        return data.report_data as MonthlyDclreErrorRate[];
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải monthly_dclr_error từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<MonthlyDclreErrorRate[]>(STORAGE_KEYS.MONTHLY_DCLR_ERROR, MONTHLY_DCLR_ERROR_RATE);
+}
+
+export async function saveMonthlyDclrErrorRate(reports: MonthlyDclreErrorRate[]): Promise<void> {
+  setLocal(STORAGE_KEYS.MONTHLY_DCLR_ERROR, reports);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'monthly_dclr_error',
+        report_type: 'dclr_error',
+        report_data: reports,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu monthly_dclr_error lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu monthly_dclr_error:', err?.message || err);
+    }
+  }
+}
+
+// ==========================================
+// 9. QUẢN LÝ IMEI, GIAO DỊCH & CHẤT LƯỢNG (TRANSACTIONS, LABELS, INVENTORY)
+// ==========================================
+export async function getDeclaredImeis(): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data, updated_at')
+        .eq('id', 'declared_imeis')
+        .maybeSingle();
+
+      if (!error && data && data.report_data !== undefined) {
+        const rowTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+        const localTs = Number(getLocal('sunhouse_declared_imeis_ts', 0)) || 0;
+        if (rowTs >= localTs) {
+          const list = Array.isArray(data.report_data) ? data.report_data : [];
+          setLocal(STORAGE_KEYS.DECLARED_IMEIS, list);
+          if (data.updated_at) {
+            setLocal('sunhouse_declared_imeis_ts', rowTs);
+          }
+          return list;
+        } else {
+          return getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
+        }
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải declared_imeis từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<any[]>(STORAGE_KEYS.DECLARED_IMEIS, []);
+}
+
+export async function saveDeclaredImeis(records: any[], timestamp?: number): Promise<void> {
+  const ts = timestamp || Date.now();
+  setLocal(STORAGE_KEYS.DECLARED_IMEIS, records);
+  setLocal('sunhouse_declared_imeis_ts', ts);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'declared_imeis',
+        report_type: 'declared_imei',
+        report_data: records,
+        updated_at: new Date(ts).toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu declared_imeis lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports', { subType: 'declared_imeis', data: records, timestamp: ts });
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu declared_imeis:', err?.message || err);
+    }
+  }
+}
+
+export async function getScannedImeis(): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data, updated_at')
+        .eq('id', 'scanned_imeis')
+        .maybeSingle();
+
+      if (!error && data && data.report_data !== undefined) {
+        const rowTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
+        const localTs = Number(getLocal('sunhouse_scanned_imeis_ts', 0)) || 0;
+        if (rowTs >= localTs) {
+          const list = Array.isArray(data.report_data) ? data.report_data : [];
+          setLocal(STORAGE_KEYS.SCANNED_IMEIS, list);
+          if (data.updated_at) {
+            setLocal('sunhouse_scanned_imeis_ts', rowTs);
+          }
+          return list;
+        } else {
+          return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+        }
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải scanned_imeis từ Supabase, dùng local fallback:', err);
+    }
+  }
+  return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+}
+
+export async function saveScannedImeis(records: any[], timestamp?: number): Promise<void> {
+  const ts = timestamp || Date.now();
+  setLocal(STORAGE_KEYS.SCANNED_IMEIS, records);
+  setLocal('sunhouse_scanned_imeis_ts', ts);
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: 'scanned_imeis',
+        report_type: 'scanned_imei',
+        report_data: records,
+        updated_at: new Date(ts).toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu scanned_imeis lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports', { subType: 'scanned_imeis', data: records, timestamp: ts });
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu scanned_imeis:', err?.message || err);
+    }
+  }
+}
+
+// Bảng nhật ký giao dịch (Transactions) - Giới hạn 100 bản ghi mới nhất để tiết kiệm tối đa Egress
+export async function getTransactions(limit: number = 100): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('id, type, amount, status, reference_id, created_at, metadata')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải transactions:', err);
+    }
+  }
+  return [];
+}
+
+// Bảng nhật ký nhãn/tem (Labels) - Giới hạn 100 bản ghi mới nhất để tiết kiệm tối đa Egress
+export async function getLabels(limit: number = 100): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('labels')
+        .select('id, imei, product_id, status, print_date, batch_number')
+        .order('print_date', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải labels:', err);
+    }
+  }
+  return [];
+}
+
+// Bảng tồn kho (Inventory) - Chỉ chọn các cột cần thiết
+export async function getInventory(): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('inventory')
+        .select('id, product_id, quantity, warehouse, updated_at')
+        .order('updated_at', { ascending: false });
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải inventory:', err);
+    }
+  }
+  return [];
+}
+
+// Bảng lệnh sản xuất (Production Orders) - Giới hạn 100 bản ghi gần nhất
+export async function getProductionOrders(limit: number = 100): Promise<any[]> {
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const { data, error } = await supabase
+        .from('production_orders')
+        .select('id, order_code, product_id, target_quantity, status, start_date, end_date')
+        .order('start_date', { ascending: false })
+        .limit(limit);
+
+      if (!error && data) return data;
+    } catch (err) {
+      console.warn('[storage] Không thể tải production_orders:', err);
+    }
+  }
+  return [];
+}
+
+// ==========================================
+// 9B. BẢN NHÁP FORM NHẬT KÝ CA (FORM DRAFTS & LIVE SYNC)
+// ==========================================
+export interface FormDraftData {
+  date: string;
+  shift: string;
+  slots: string[];
+  items: any[];
+  officialRO: Record<string, number>;
+  seasonalRO: Record<string, number>;
+  officialBG: Record<string, number>;
+  seasonalBG: Record<string, number>;
+  officialRMA: Record<string, number>;
+  seasonalRMA: Record<string, number>;
+  technician: string;
+  updatedAt: string;
+}
+
+
+
+export function getTodayDateString(): string {
+  const d = new Date();
+  return (
+    d.getFullYear() +
+    '-' +
+    String(d.getMonth() + 1).padStart(2, '0') +
+    '-' +
+    String(d.getDate()).padStart(2, '0')
+  );
+}
+
+export function isDraftFromPastDay(draftDate?: string): boolean {
+  if (!draftDate) return false;
+  const todayStr = getTodayDateString();
+  return draftDate < todayStr;
+}
+
+export async function getFormDraft(date: string, shift: string): Promise<FormDraftData | null> {
+  // Nếu ngày của bản nháp nhỏ hơn ngày hôm nay (dữ liệu ca hôm trước không được ghi nhận), tự động xóa bỏ
+  if (isDraftFromPastDay(date)) {
+    clearFormDraft(date, shift);
+    return null;
+  }
+
+  const localKey = `sunhouse_draft_${date}_${shift}`;
+  const localData = getLocal<FormDraftData | null>(localKey, null);
+
+  if (localData && isDraftFromPastDay(localData.date)) {
+    clearFormDraft(date, shift);
+    return null;
+  }
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const draftId = `draft_${date || ''}_${(shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const { data, error } = await supabase
+        .from('daily_reports')
+        .select('report_data')
+        .eq('id', draftId)
+        .maybeSingle();
+
+      if (!error && data?.report_data) {
+        const cloudDraft = data.report_data as FormDraftData;
+        if (cloudDraft && isDraftFromPastDay(cloudDraft.date)) {
+          clearFormDraft(date, shift);
+          return null;
+        }
+        setLocal(localKey, data.report_data);
+        return cloudDraft;
+      }
+    } catch (err) {
+      console.warn('[storage] Không thể tải form draft từ Supabase:', err);
+    }
+  }
+  return localData;
+}
+
+export async function saveFormDraft(draft: FormDraftData): Promise<void> {
+  const localKey = `sunhouse_draft_${draft.date}_${draft.shift}`;
+  setLocal(localKey, draft);
+  setLocal('sunhouse_last_active_form_draft', draft);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const draftId = `draft_${draft.date || ''}_${(draft.shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
+      const { error } = await supabase.from('daily_reports').upsert({
+        id: draftId,
+        report_type: 'form_draft',
+        report_data: draft,
+        updated_at: new Date().toISOString(),
+      });
+      if (error) console.warn('[storage] Lưu form draft lên Supabase:', error.message || error);
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi lưu form draft:', err?.message || err);
+    }
+  }
+}
+
+export async function clearFormDraft(date: string, shift: string): Promise<void> {
+  const localKey = `sunhouse_draft_${date}_${shift}`;
+  try {
+    localStorage.removeItem(localKey);
+    localStorage.removeItem('sunhouse_last_active_form_draft');
+  } catch (e) {}
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      const draftId = `draft_${date || ''}_${(shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
+      await supabase.from('daily_reports').delete().eq('id', draftId);
+    } catch (err) {
+      console.warn('[storage] Xóa form draft thất bại:', err);
+    }
+  }
+}
+
+export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'form_cell_change',
+      payload: { ...draft, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi broadcast thất bại:', err);
+  }
+}
+
+export function sendSyncSignal(): void {
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'system_sync_signal',
+      payload: { senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi tín hiệu đồng bộ thất bại:', err);
+  }
+}
+
+// ==========================================
+// 10. REALTIME SUBSCRIPTION (LẮNG NGHE THAY ĐỔI TỐI ƯU)
+// ==========================================
+export interface RealtimeCallbacks {
+  // Các bảng dữ liệu biến động liên tục (ưu tiên hàng đầu)
+  onProductionLogsChange?: (payload: any) => void;
+  onAttendanceChange?: (payload: any) => void;
+  onTransactionsChange?: (payload: any) => void;
+  onInventoryChange?: (payload: any) => void;
+  onProductionOrdersChange?: (payload: any) => void;
+
+  // Các bảng danh mục và kế hoạch
+  onWorkersChange?: (payload: any) => void;
+  onProductsChange?: (payload: any) => void;
+  onMonthlyPlanChange?: (payload: any) => void;
+  onMonthlyTargetsChange?: (payload: any) => void;
+  onMonthlyMetricsChange?: (payload: any) => void;
+  onDailyReportsChange?: (payload: any) => void;
+  onLiveFormChange?: (payload: any) => void;
+  onTableSyncChange?: (table: string, payload: any) => void;
+  onSyncSignal?: (payload: any) => void;
+}
+
+/**
+ * Đăng ký lắng nghe Realtime tối ưu băng thông (Egress) và Connection Quota:
+ * - Chỉ tạo event listener cho đúng các bảng có callback thực tế.
+ * - Cung cấp hàm cleanup (unsubscribe) đảm bảo không bị trùng lặp kết nối khi component re-render.
+ */
+export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
+  if (!supabase || !isSupabaseConfigured) {
+    return () => {};
+  }
+
+  try {
+    const channelName = `sunhouse_realtime_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    let channel = supabase.channel(channelName);
+
+    // 1. Lắng nghe các bảng biến động liên tục
+    if (callbacks.onProductionLogsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'production_logs' },
+        (payload) => {
+          callbacks.onProductionLogsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onAttendanceChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'attendance_records' },
+        (payload) => {
+          callbacks.onAttendanceChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onTransactionsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'transactions' },
+        (payload) => {
+          callbacks.onTransactionsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onInventoryChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'inventory' },
+        (payload) => {
+          callbacks.onInventoryChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onProductionOrdersChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'production_orders' },
+        (payload) => {
+          callbacks.onProductionOrdersChange?.(payload);
+        }
+      );
+    }
+
+    // 2. Lắng nghe các bảng cấu hình / danh mục / kế hoạch
+    if (callbacks.onWorkersChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'workers' },
+        (payload) => {
+          callbacks.onWorkersChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onProductsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'products' },
+        (payload) => {
+          callbacks.onProductsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onMonthlyPlanChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'monthly_plan' },
+        (payload) => {
+          callbacks.onMonthlyPlanChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onMonthlyTargetsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'monthly_targets' },
+        (payload) => {
+          callbacks.onMonthlyTargetsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onMonthlyMetricsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'monthly_metrics' },
+        (payload) => {
+          callbacks.onMonthlyMetricsChange?.(payload);
+        }
+      );
+    }
+
+    if (callbacks.onDailyReportsChange) {
+      channel = channel.on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'daily_reports' },
+        (payload) => {
+          callbacks.onDailyReportsChange?.(payload);
+        }
+      );
+    }
+
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        console.log('[Realtime] Kênh đồng bộ postgres_changes đã sẵn sàng');
+      }
+    });
+
+    // 3. Đăng ký phòng Broadcast chung (sunhouse_live_form_room) để đồng bộ tức thì các tab/thiết bị
+    let broadcastRoom = getSharedBroadcastChannel();
+    if (broadcastRoom) {
+      if (callbacks.onLiveFormChange) {
+        broadcastRoom.on(
+          'broadcast',
+          { event: 'form_cell_change' },
+          (payload: any) => {
+            // Lọc bỏ tin nhắn do chính tab này gửi ra để tránh gián đoạn nhập liệu
+            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+            callbacks.onLiveFormChange?.(payload);
+          }
+        );
+      }
+
+      if (callbacks.onTableSyncChange) {
+        broadcastRoom.on(
+          'broadcast',
+          { event: 'table_sync_event' },
+          (payload: any) => {
+            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+            const tbl = payload?.payload?.table;
+            if (tbl) {
+              callbacks.onTableSyncChange?.(tbl, payload.payload);
+            }
+          }
+        );
+      }
+
+      if (callbacks.onSyncSignal) {
+        broadcastRoom.on(
+          'broadcast',
+          { event: 'system_sync_signal' },
+          (payload: any) => {
+            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+            callbacks.onSyncSignal?.(payload);
+          }
+        );
+      }
+    }
+
+    // Cleanup function để hủy kết nối channel khi unmount
+    return () => {
+      try {
+        supabase?.removeChannel(channel);
+      } catch (err) {
+        console.warn('[Realtime] Lỗi dọn dẹp kênh kết nối:', err);
+      }
+    };
+  } catch (err) {
+    console.warn('[Realtime] Không thể kết nối kênh Realtime:', err);
+    return () => {};
+  }
+}
+
+// ==========================================
+// 10. TỐI ƯU HÓA DUNG LƯỢNG & BẢO VỆ HIỆU NĂNG APP
+// Không lưu file đệm, dọn dẹp khóa cũ, tránh tràn bộ nhớ
+// ==========================================
+export interface StorageUsageInfo {
+  bytes: number;
+  kb: string;
+  mb: string;
+  itemCount: number;
+  percentage: number;
+  status: 'optimal' | 'moderate' | 'heavy';
+}
+
+export function getStorageUsage(): StorageUsageInfo {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { bytes: 0, kb: '0.0', mb: '0.0', itemCount: 0, percentage: 0, status: 'optimal' };
+  }
+  let totalBytes = 0;
+  let itemCount = 0;
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key) {
+      const val = localStorage.getItem(key) || '';
+      totalBytes += (key.length + val.length) * 2;
+      itemCount++;
+    }
+  }
+  const kbNum = totalBytes / 1024;
+  const mbNum = kbNum / 1024;
+  const percentage = Math.min(100, Math.round((totalBytes / (5 * 1024 * 1024)) * 100));
+  const status = percentage > 60 ? 'heavy' : percentage > 25 ? 'moderate' : 'optimal';
+  return {
+    bytes: totalBytes,
+    kb: kbNum.toFixed(1),
+    mb: mbNum.toFixed(2),
+    itemCount,
+    percentage,
+    status,
+  };
+}
+
+export function cleanupAndOptimizeStorage(): { freedBytes: number; removedKeys: string[] } {
+  if (typeof window === 'undefined' || !window.localStorage) {
+    return { freedBytes: 0, removedKeys: [] };
+  }
+  const beforeBytes = getStorageUsage().bytes;
+  const removedKeys: string[] = [];
+
+  // 1. Dọn dẹp triệt để các key phiên bản cũ (v1) và dữ liệu thừa
+  const legacyKeys = [
+    'sunhouse_production_logs',
+    'sunhouse_gas_daily_reports',
+    'sunhouse_assembly_daily_reports',
+    'sunhouse_metrics_2025',
+    'sunhouse_metrics_2026',
+    'sunhouse_monthly_targets',
+  ];
+  for (const k of legacyKeys) {
+    if (localStorage.getItem(k) !== null) {
+      try {
+        localStorage.removeItem(k);
+        removedKeys.push(k);
+      } catch (e) {
+        console.warn('[storage] Không thể xóa legacy key:', k, e);
+      }
+    }
+  }
+
+  // 2. Dọn các bản nháp ca của ngày hôm trước (chưa được ghi nhận vào cuối ca qua ngày sau tự động xóa)
+  // và các nháp cũ/rỗng
+  const todayStr = getTodayDateString();
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith('sunhouse_draft_')) {
+      try {
+        const raw = localStorage.getItem(k);
+        const item = raw ? JSON.parse(raw) : null;
+        
+        // Trích xuất ngày từ key: sunhouse_draft_YYYY-MM-DD_shift
+        const parts = k.replace('sunhouse_draft_', '').split('_');
+        const draftDate = item?.date || parts[0];
+
+        // Nếu ngày nhỏ hơn ngày hôm nay (qua ngày sau) hoặc nháp hỏng/rỗng => Xóa ngay
+        if (!item || !draftDate || draftDate < todayStr) {
+          localStorage.removeItem(k);
+          removedKeys.push(k);
+        }
+      } catch {
+        localStorage.removeItem(k);
+        removedKeys.push(k);
+      }
+    }
+  }
+
+  // 3. Kiểm tra và dọn dẹp sunhouse_last_active_form_draft nếu thuộc ngày hôm trước
+  const lastActiveKey = 'sunhouse_last_active_form_draft';
+  const rawLastActive = localStorage.getItem(lastActiveKey);
+  if (rawLastActive) {
+    try {
+      const activeDraft = JSON.parse(rawLastActive);
+      if (!activeDraft || !activeDraft.date || activeDraft.date < todayStr) {
+        localStorage.removeItem(lastActiveKey);
+        removedKeys.push(lastActiveKey);
+      }
+    } catch {
+      localStorage.removeItem(lastActiveKey);
+      removedKeys.push(lastActiveKey);
+    }
+  }
+
+  const afterBytes = getStorageUsage().bytes;
+  return {
+    freedBytes: Math.max(0, beforeBytes - afterBytes),
+    removedKeys,
+  };
+}
+
