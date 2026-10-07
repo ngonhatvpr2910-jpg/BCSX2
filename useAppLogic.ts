@@ -5262,33 +5262,72 @@ const [isScrolled, setIsScrolled] = useState(false);
       setFormMessage("⚠️ Khung giờ đã tồn tại");
       return;
     }
-    setFormSlots((prev) => {
-      const nextSlots = [...prev, cleanSlot];
-      return nextSlots.sort((a, b) => {
-        const hourA = parseInt(a.match(/^(\d+)/)?.[1] || "0", 10);
-        const hourB = parseInt(b.match(/^(\d+)/)?.[1] || "0", 10);
-        return hourA - hourB;
-      });
+    const nextSlots = [...formSlots, cleanSlot].sort((a, b) => {
+      const hourA = parseInt(a.match(/^(\d+)/)?.[1] || "0", 10);
+      const hourB = parseInt(b.match(/^(\d+)/)?.[1] || "0", 10);
+      return hourA - hourB;
     });
+    setFormSlots(nextSlots);
     setFormOfficialWorkersRO((prev) => ({ ...prev, [cleanSlot]: 0 }));
     setFormSeasonalWorkersRO((prev) => ({ ...prev, [cleanSlot]: 0 }));
     setFormOfficialWorkersBG((prev) => ({ ...prev, [cleanSlot]: 0 }));
     setFormSeasonalWorkersBG((prev) => ({ ...prev, [cleanSlot]: 0 }));
-    setFormModelItems((prev) =>
-      prev.map((item) => ({
-        ...item,
-        hourlyActuals: { ...item.hourlyActuals, [cleanSlot]: 0 },
-      }))
-    );
+    setFormOfficialWorkersRMA((prev) => ({ ...prev, [cleanSlot]: 0 }));
+    setFormSeasonalWorkersRMA((prev) => ({ ...prev, [cleanSlot]: 0 }));
+    const updatedItems = formModelItems.map((item) => ({
+      ...item,
+      hourlyActuals: { ...item.hourlyActuals, [cleanSlot]: item.hourlyActuals[cleanSlot] || 0 },
+    }));
+    setFormModelItems(updatedItems);
     setNewSlotInput("");
     setFormMessage(`✅ Đã thêm khung giờ ${cleanSlot} thành công!`);
     setTimeout(() => setFormMessage(""), 3500);
+
+    // Lưu ngay lập tức để không bị mất dữ liệu
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: nextSlots,
+      items: updatedItems,
+      officialRO: { ...formOfficialWorkersRO, [cleanSlot]: 0 },
+      seasonalRO: { ...formSeasonalWorkersRO, [cleanSlot]: 0 },
+      officialBG: { ...formOfficialWorkersBG, [cleanSlot]: 0 },
+      seasonalBG: { ...formSeasonalWorkersBG, [cleanSlot]: 0 },
+      officialRMA: { ...formOfficialWorkersRMA, [cleanSlot]: 0 },
+      seasonalRMA: { ...formSeasonalWorkersRMA, [cleanSlot]: 0 },
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+    storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
   };
 
   const handleDeleteSlot = (slotToDelete: string) => {
-    setFormSlots((prev) => prev.filter((s) => s !== slotToDelete));
+    const nextSlots = formSlots.filter((s) => s !== slotToDelete);
+    setFormSlots(nextSlots);
     setFormMessage(`❌ Đã xóa khung giờ ${slotToDelete}.`);
     setTimeout(() => setFormMessage(""), 3500);
+
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: nextSlots,
+      items: formModelItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+    storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
   };
 
   const handleUpdateOfficialWorkerRO = (slot: string, value: number) => {
