@@ -392,9 +392,15 @@ export const LoggingTab = ({
                                   <td className="py-1 px-2 font-bold text-sky-400 border-r border-slate-800 bg-slate-900/30 text-center min-w-[115px] w-[115px]">
                                     {Math.max(0, (item.dailyPlan || 0) + (getPrevDayLeftover(item.productId, formDate) || 0) - (modelActual || 0))}
                                   </td>
-                                  <td className="py-1 px-2">
-                                    <button type="button" onClick={() => handleRemoveItem(item.id)} className="text-rose-500 hover:text-rose-400 transition" disabled={activeFormModelItems.length === 1}>
-                                      <Trash2 className="w-3.5 h-3.5 mx-auto" />
+                                  <td className="py-1 px-2 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveItem(item.id || item.productId)}
+                                      className="text-rose-500 hover:text-rose-400 hover:bg-rose-950/50 p-1 rounded transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                      disabled={activeFormModelItems.length === 1}
+                                      title={activeFormModelItems.length === 1 ? "Cần giữ ít nhất 1 model trong bảng" : "Xóa model này khỏi bảng"}
+                                    >
+                                      <Trash2 className="w-4 h-4 mx-auto" />
                                     </button>
                                   </td>
                                 </tr>

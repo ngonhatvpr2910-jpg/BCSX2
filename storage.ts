@@ -744,6 +744,28 @@ export async function deleteMultipleProductionLogs(ids: string[]): Promise<void>
   }
 }
 
+export async function deleteProductionLogsForModel(date: string, shift: string, productId: string, productCode?: string): Promise<void> {
+  const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+  const targetIds = [productId, productCode].filter(Boolean) as string[];
+  const filtered = localList.filter(l => {
+    if (l.date === date && (l.shift || '').trim() === (shift || '').trim()) {
+      if (targetIds.includes(l.productId)) return false;
+    }
+    return true;
+  });
+  setLocal(STORAGE_KEYS.PRODUCTION_LOGS, filtered);
+
+  if (supabase && isSupabaseConfigured) {
+    try {
+      await supabase.from('production_logs').delete().eq('work_date', date).in('product_code', targetIds);
+      await supabase.from('production_logs').delete().eq('date', date).in('productId', targetIds);
+      broadcastTableUpdate('production_logs');
+    } catch (err: any) {
+      console.warn('[storage] Trạng thái kết nối khi xóa model khỏi production_logs:', err?.message || err);
+    }
+  }
+}
+
 export async function upsertProductionLogs(logs: ProductionLog[]): Promise<void> {
   if (!logs || logs.length === 0) return;
   const localList = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);

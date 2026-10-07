@@ -5399,19 +5399,90 @@ const [isScrolled, setIsScrolled] = useState(false);
     const dayNum = parseInt(day);
     const planVal = (monthlyPlan[ym]?.[defaultProdId]?.[dayNum]) || 0;
 
-    setFormModelItems((prev) => deduplicateFormModelItems([
-      ...prev,
+    const nextItems = deduplicateFormModelItems([
+      ...formModelItems,
       {
         id: "item-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
         productId: defaultProdId,
         dailyPlan: planVal,
         hourlyActuals: initialHrs,
       },
-    ], products));
+    ], products);
+
+    setFormModelItems(nextItems);
+
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: nextItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+    storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
   };
 
-  const handleRemoveItem = (id: string) => {
-    setFormModelItems((prev) => prev.filter((item) => item.id !== id));
+  const handleRemoveItem = async (id: string) => {
+    const itemToRemove = formModelItems.find(it => it.id === id || it.productId === id);
+    const prodDef = itemToRemove ? (products.find(p => p.id === itemToRemove.productId) || { name: itemToRemove.productId, code: itemToRemove.productId }) : null;
+    const modelCode = prodDef ? (getProductModelCode(prodDef.name) || prodDef.code || prodDef.name) : id;
+
+    const updatedItems = formModelItems.filter(item => {
+      if (item.id === id || item.productId === id) return false;
+      if (itemToRemove && isSameProduct(item.productId, itemToRemove.productId, products)) return false;
+      return true;
+    });
+
+    setFormModelItems(updatedItems);
+
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: updatedItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 1. Lưu bản nháp cục bộ
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+
+    // 2. Lưu bản nháp lên Supabase và phát Realtime Broadcast
+    storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
+
+    // 3. Xóa các bản ghi đã lưu của model này trong productionLogs để không bị tải lại
+    if (itemToRemove) {
+      setProductionLogs(prev => {
+        const matchingLogs = prev.filter(l => l.date === formDate && (l.shift || '').trim() === (formShift || '').trim() && isSameProduct(l.productId, itemToRemove.productId, products));
+        if (matchingLogs.length > 0) {
+          matchingLogs.forEach(l => {
+            storage.deleteProductionLog(l.id).catch(e => console.warn('Lỗi xóa log:', e));
+          });
+        }
+        return prev.filter(l => !(l.date === formDate && (l.shift || '').trim() === (formShift || '').trim() && isSameProduct(l.productId, itemToRemove.productId, products)));
+      });
+
+      storage.deleteProductionLogsForModel(formDate, formShift, itemToRemove.productId, prodDef?.code);
+    }
+
+    showToastSuccess(`Đã xóa model [${modelCode}] khỏi bảng nhật ký ca ✓`);
   };
 
   const handleUpdateItem = (id: string, updates: Partial<FormModelItem>) => {
