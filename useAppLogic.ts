@@ -6,7 +6,7 @@ import {
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
-import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot } from './appUtils';
+import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems } from './appUtils';
 import * as storage from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -799,39 +799,6 @@ const [isScrolled, setIsScrolled] = useState(false);
 
 
 
-  // Hàm so khớp sản phẩm đa năng (theo ID, Code hoặc Model Tên sản phẩm)
-  const isSameProduct = (id1?: string, id2?: string, prodList: ProductDefinition[] = products): boolean => {
-    if (!id1 || !id2) return false;
-    const c1 = String(id1).trim().toUpperCase();
-    const c2 = String(id2).trim().toUpperCase();
-    if (c1 === c2) return true;
-
-    const p1 = prodList.find(p => 
-      (p.id && p.id.toUpperCase() === c1) || 
-      (p.code && p.code.toUpperCase() === c1) || 
-      (p.name && getProductModelCode(p.name).toUpperCase() === c1)
-    );
-    const p2 = prodList.find(p => 
-      (p.id && p.id.toUpperCase() === c2) || 
-      (p.code && p.code.toUpperCase() === c2) || 
-      (p.name && getProductModelCode(p.name).toUpperCase() === c2)
-    );
-
-    if (p1 && p2 && p1.id === p2.id) return true;
-    if (p1 && (
-      (p1.id && p1.id.toUpperCase() === c2) || 
-      (p1.code && p1.code.toUpperCase() === c2) || 
-      (p1.name && getProductModelCode(p1.name).toUpperCase() === c2)
-    )) return true;
-    if (p2 && (
-      (p2.id && p2.id.toUpperCase() === c1) || 
-      (p2.code && p2.code.toUpperCase() === c1) || 
-      (p2.name && getProductModelCode(p2.name).toUpperCase() === c1)
-    )) return true;
-
-    return false;
-  };
-
   const handleScanSubmit = (scannedValue?: any) => {
     let rawVal = typeof scannedValue === 'string' ? scannedValue : scanInput;
     if (!rawVal || typeof rawVal !== 'string' || !rawVal.trim()) return;
@@ -958,9 +925,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       return;
     }
 
-    // (4) CẬP NHẬT HOẶC THÊM MODEL VÀO BẢNG FORM NHẬT KÝ CA
-    let updatedItems = [...formModelItems];
-    let itemIndex = updatedItems.findIndex(m => isSameProduct(m.productId, resolvedProductId));
+    // (4) CẬP NHẬT HOẶC THÊM MODEL VÀO BẢNG FORM NHẬT KÝ CA (ĐẢM BẢO KHÔNG CÓ 2 MODEL TRÙNG NHAU)
+    let updatedItems = deduplicateFormModelItems([...formModelItems], products);
+    let itemIndex = updatedItems.findIndex(m => isSameProduct(m.productId, resolvedProductId, products));
     
     if (itemIndex === -1) {
       // Tự động thêm hàng model mới vào bảng nếu chưa có
@@ -992,6 +959,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     };
     
+    updatedItems = deduplicateFormModelItems(updatedItems, products);
     setFormModelItems(updatedItems);
     
     // (6) LƯU VÀO DANH SÁCH IMEI ĐÃ QUÉT & ĐỒNG BỘ SUPABASE
@@ -1008,7 +976,6 @@ const [isScrolled, setIsScrolled] = useState(false);
     setScannedImeis(nextScannedList);
     localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(nextScannedList));
     localStorage.setItem("sunhouse_scanned_imeis_ts", String(ts));
-    storage.saveScannedImeis(nextScannedList, ts);
 
     // (7) TẠO GÓI DRAFT VÀ PHÁT BROADCAST ĐỒNG THỜI LƯU LÊN SUPABASE (ĐỒNG BỘ 2 CHIỀU ĐA LINK)
     const draftData: storage.FormDraftData = {
@@ -1026,17 +993,56 @@ const [isScrolled, setIsScrolled] = useState(false);
       updatedAt: new Date().toISOString(),
     };
 
-    // Lưu cục bộ
+    // Lưu cục bộ ngay lập tức
     localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
     localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
 
-    // Lưu bản nháp lên Supabase Cloud
-    storage.saveFormDraft(draftData);
-
-    // Gửi realtime broadcast đồng bộ lập tức sang máy/link/tab thứ 2
+    // 1. PHÁT BROADCAST REALTIME TỨC THÌ (< 30ms) ĐỂ TẤT CẢ CÁC MÁY TÍNH ĐANG MỞ ĐỀU THẤY SỐ LIỆU NHẢY NGAY
+    storage.sendImeiScannedBroadcast({
+      date: formDate,
+      shift: formShift,
+      slot: currentSlot,
+      productId: resolvedProductId,
+      productName: productDisplayName,
+      imei: val,
+      newQty: updatedQty,
+      updatedItems,
+      draftData,
+      scannedImei: newImei,
+    });
     storage.sendLiveFormBroadcast(draftData);
 
-    setFormMessage(`✅ Đã ghi nhận +1 sản phẩm [${productDisplayName}] cho khung giờ ${currentSlot} (Mã quét: ${val})`);
+    // 2. LƯU LÊN SUPABASE CLOUD CHẠY SONG SONG TRONG NỀN
+    Promise.all([
+      storage.saveFormDraft(draftData),
+      storage.saveScannedImeis(nextScannedList, ts),
+    ]).catch((err) => console.warn('Lỗi lưu Supabase khi quét IMEI:', err));
+
+    // 3. ĐỒNG BỘ LUÔN VÀO PRODUCTION_LOGS NẾU CA ĐÃ ĐƯỢC LƯU TRƯỚC ĐÓ
+    setProductionLogs((prev) => {
+      const matchIdx = prev.findIndex(
+        (l) => l.date === formDate && l.shift === formShift && isSameProduct(l.productId, resolvedProductId, products)
+      );
+      if (matchIdx !== -1) {
+        const cur = prev[matchIdx];
+        const nextActuals = { ...(cur.hourlyActuals || {}), [currentSlot]: updatedQty };
+        const nextUnits = Object.values(nextActuals).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0);
+        const nextEq = Math.round(Number(nextUnits) * Number(cur.equivalentFactor || 1));
+        const updatedLog: ProductionLog = {
+          ...cur,
+          hourlyActuals: nextActuals,
+          actualUnits: nextUnits,
+          equivalentProducts: nextEq,
+        };
+        const updatedList = [...prev];
+        updatedList[matchIdx] = updatedLog;
+        storage.upsertProductionLogs([updatedLog]).catch((e) => console.warn('Lỗi sync log khi scan:', e));
+        return updatedList;
+      }
+      return prev;
+    });
+
+    setFormMessage(`⚡ Đã quét IMEI [${val}] → +1 ${productDisplayName} (${currentSlot}) & đồng bộ Supabase thành công!`);
     setScanInput("");
   };
 
@@ -1411,8 +1417,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   // Quản lý đồng bộ trực tiếp hai chiều & Realtime cho Form Nhật ký ca
   const formDateRef = useRef(formDate);
   const formShiftRef = useRef(formShift);
+  const formModelItemsRef = useRef(formModelItems);
   formDateRef.current = formDate;
   formShiftRef.current = formShift;
+  formModelItemsRef.current = formModelItems;
   const isSyncingFromExternalRef = useRef(false);
   const lastLoadedDateShiftRef = useRef<string>("");
   const activeEditingCellRef = useRef<{ id: string; slotName: string; timestamp: number } | null>(null);
@@ -1448,7 +1456,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         });
         return { ...it, hourlyActuals: cleanHourly };
       });
-      setFormModelItems(cleanItems);
+      setFormModelItems(deduplicateFormModelItems(cleanItems, products));
       if (draft.officialRO) setFormOfficialWorkersRO(draft.officialRO);
       if (draft.seasonalRO) setFormSeasonalWorkersRO(draft.seasonalRO);
       if (draft.officialBG) setFormOfficialWorkersBG(draft.officialBG);
@@ -1500,18 +1508,18 @@ const [isScrolled, setIsScrolled] = useState(false);
             hourlyActuals: initialHrs,
           };
         });
-        setFormModelItems(newItems);
+        setFormModelItems(deduplicateFormModelItems(newItems, products));
       } else {
         const initialHrs: Record<string, number> = {};
         shiftSlots.forEach(s => { initialHrs[s] = 0; });
-        setFormModelItems([
+        setFormModelItems(deduplicateFormModelItems([
           {
             id: `item-init-${formDate}-${formShift}-${Math.random().toString(36).substr(2, 5)}`,
             productId: products[0].id,
             dailyPlan: monthlyPlan[ym]?.[products[0].id]?.[dayNum] || 0,
             hourlyActuals: initialHrs,
           }
-        ]);
+        ], products));
       }
     }
   }, [formDate, formShift, productionLogs]);
@@ -2419,7 +2427,114 @@ const [isScrolled, setIsScrolled] = useState(false);
               localStorage.setItem('sunhouse_scanned_imeis_ts', String(rowTs));
               setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
             }
+          } else if (id?.startsWith('draft_') || repType === 'form_draft') {
+            // ĐỒNG BỘ REALTIME TỨC THÌ KHI MÁY KHÁC QUÉT IMEI HOẶC LƯU DRAFT LÊN SUPABASE
+            const incomingDraft = payload.new.report_data as storage.FormDraftData;
+            if (incomingDraft && incomingDraft.date && incomingDraft.shift) {
+              const localKey = `sunhouse_draft_${incomingDraft.date}_${incomingDraft.shift}`;
+              localStorage.setItem(localKey, JSON.stringify(incomingDraft));
+              localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(incomingDraft));
+
+              if (incomingDraft.date === formDateRef.current && incomingDraft.shift === formShiftRef.current) {
+                isSyncingFromExternalRef.current = true;
+                if (Array.isArray(incomingDraft.items)) {
+                  setFormModelItems(deduplicateFormModelItems(incomingDraft.items, products));
+                }
+                if (Array.isArray(incomingDraft.slots)) {
+                  const cleanSlots = incomingDraft.slots.filter(isValidHourlySlot);
+                  if (cleanSlots.length > 0) setFormSlots(cleanSlots);
+                }
+                if (incomingDraft.officialRO) setFormOfficialWorkersRO(incomingDraft.officialRO);
+                if (incomingDraft.seasonalRO) setFormSeasonalWorkersRO(incomingDraft.seasonalRO);
+                if (incomingDraft.officialBG) setFormOfficialWorkersBG(incomingDraft.officialBG);
+                if (incomingDraft.seasonalBG) setFormSeasonalWorkersBG(incomingDraft.seasonalBG);
+                if (incomingDraft.officialRMA) setFormOfficialWorkersRMA(incomingDraft.officialRMA);
+                if (incomingDraft.seasonalRMA) setFormSeasonalWorkersRMA(incomingDraft.seasonalRMA);
+                if (incomingDraft.technician) setFormTechnician(incomingDraft.technician);
+                setTimeout(() => { isSyncingFromExternalRef.current = false; }, 200);
+              }
+            }
           }
+        }
+      },
+
+      // (8.5) Lắng nghe broadcast quét mã IMEI tức thì từ các máy khác (< 30ms)
+      onImeiScannedChange: (payload) => {
+        const data = payload?.payload;
+        if (!data) return;
+        if (data.senderId === storage.CLIENT_SESSION_ID) return;
+
+        // 1. Cập nhật danh sách IMEI đã quét
+        if (data.scannedImei) {
+          const incomingImei: ScannedImei = data.scannedImei;
+          setScannedImeis((prev) => {
+            if (prev.some((s) => s.imei.toUpperCase() === incomingImei.imei.toUpperCase())) return prev;
+            const updated = [incomingImei, ...prev];
+            localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(updated));
+            return updated;
+          });
+        }
+
+        // 2. Lưu bản nháp vào bộ nhớ cục bộ
+        if (data.draftData && data.date && data.shift) {
+          const draftKey = `sunhouse_draft_${data.date}_${data.shift}`;
+          localStorage.setItem(draftKey, JSON.stringify(data.draftData));
+          localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(data.draftData));
+        }
+
+        // 3. Nếu máy này đang mở đúng Ngày và Ca được quét: CẬP NHẬT TRỰC TIẾP FORM NGAY LẬP TỨC (0ms)
+        const isSameDate = String(data.date).trim() === String(formDateRef.current).trim();
+        const isSameShift = String(data.shift || '').replace(/\s+/g, '').toUpperCase() === String(formShiftRef.current || '').replace(/\s+/g, '').toUpperCase();
+
+        if (isSameDate && isSameShift) {
+          if (data.updatedItems && Array.isArray(data.updatedItems)) {
+            setFormModelItems(deduplicateFormModelItems(data.updatedItems, products));
+          } else if (data.productId && data.slot) {
+            setFormModelItems((prev) =>
+              deduplicateFormModelItems(
+                prev.map((item) => {
+                  if (isSameProduct(item.productId, data.productId, products)) {
+                    return {
+                      ...item,
+                      hourlyActuals: {
+                        ...item.hourlyActuals,
+                        [data.slot]: data.newQty,
+                      },
+                    };
+                  }
+                  return item;
+                }),
+                products
+              )
+            );
+          }
+          setFormMessage(`⚡ Máy khác vừa quét IMEI [${data.imei}] cho [${data.productName || data.productId}] (+1 vào ${data.slot})`);
+          setTimeout(() => setFormMessage(''), 4000);
+        }
+
+        // 4. Cập nhật productionLogs nếu bản ghi ca này đã tồn tại
+        if (data.date && data.shift && data.productId && data.slot) {
+          setProductionLogs((prev) => {
+            const logIdx = prev.findIndex(
+              (l) => l.date === data.date && l.shift === data.shift && isSameProduct(l.productId, data.productId, products)
+            );
+            if (logIdx !== -1) {
+              const cur = prev[logIdx];
+              const nextActuals = { ...(cur.hourlyActuals || {}), [data.slot]: data.newQty };
+              const nextUnits = Object.values(nextActuals).reduce((sum: number, v: any) => sum + (Number(v) || 0), 0);
+              const nextEq = Math.round(Number(nextUnits) * Number(cur.equivalentFactor || 1));
+              const updated = {
+                ...cur,
+                hourlyActuals: nextActuals,
+                actualUnits: nextUnits,
+                equivalentProducts: nextEq,
+              };
+              const copy = [...prev];
+              copy[logIdx] = updated;
+              return copy;
+            }
+            return prev;
+          });
         }
       },
 
@@ -2430,7 +2545,10 @@ const [isScrolled, setIsScrolled] = useState(false);
         // Bỏ qua nếu tin nhắn xuất phát từ chính phiên trình duyệt / tab này
         if (data.senderId === storage.CLIENT_SESSION_ID) return;
 
-        if (data.date === formDateRef.current && data.shift === formShiftRef.current) {
+        const isSameDate = String(data.date).trim() === String(formDateRef.current).trim();
+        const isSameShift = String(data.shift || '').replace(/\s+/g, '').toUpperCase() === String(formShiftRef.current || '').replace(/\s+/g, '').toUpperCase();
+
+        if (isSameDate && isSameShift) {
           isSyncingFromExternalRef.current = true;
           if (data.items && Array.isArray(data.items)) {
             const cleanItems = (data.items as FormModelItem[]).map(it => {
@@ -2478,7 +2596,7 @@ const [isScrolled, setIsScrolled] = useState(false);
                 }
               });
 
-              return mergedList;
+              return deduplicateFormModelItems(mergedList, products);
             });
           }
           if (data.slots) {
@@ -2560,6 +2678,15 @@ const [isScrolled, setIsScrolled] = useState(false);
               setTimeout(() => { isRemoteSyncRef.current = false; }, 300);
             }
           } else if (table === 'daily_reports') {
+            if (extraPayload?.subType === 'form_draft') {
+              const incomingDraft = extraPayload.data as storage.FormDraftData;
+              if (incomingDraft && incomingDraft.date === formDateRef.current && incomingDraft.shift === formShiftRef.current) {
+                if (Array.isArray(incomingDraft.items)) {
+                  setFormModelItems(deduplicateFormModelItems(incomingDraft.items, products));
+                }
+              }
+              return;
+            }
             // Khi nhận broadcast cập nhật báo cáo ngày, tải lại dữ liệu mới nhất
             const allDaily = await storage.getAllDailyReports();
             if (allDaily.gas && allDaily.gas.length > 0) setGasDailyReports(allDaily.gas);
@@ -2614,6 +2741,77 @@ const [isScrolled, setIsScrolled] = useState(false);
       unsubscribe();
     };
   }, [refreshFromCloud]);
+
+  // Cơ chế đồng bộ nhịp tim (Heartbeat pulse) kiểm tra dữ liệu Supabase định kỳ (mỗi 1.2 giây) & khi chuyển tab
+  // Đảm bảo mọi máy tính đều đồng bộ 100% tức thì ngay cả khi mạng lag hoặc WebSocket gián đoạn
+  useEffect(() => {
+    let isCancelled = false;
+
+    const performHeartbeatSync = async () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      try {
+        // 1. Kiểm tra bản nháp ca hiện tại trên Supabase
+        if (formDateRef.current && formShiftRef.current && !isSyncingFromExternalRef.current) {
+          const cloudDraft = await storage.getFormDraft(formDateRef.current, formShiftRef.current);
+          if (cloudDraft && !isCancelled && cloudDraft.items && Array.isArray(cloudDraft.items)) {
+            const localKey = `sunhouse_draft_${formDateRef.current}_${formShiftRef.current}`;
+            const localRaw = localStorage.getItem(localKey);
+            const localDraft = localRaw ? JSON.parse(localRaw) : null;
+            const cloudTs = cloudDraft.updatedAt ? new Date(cloudDraft.updatedAt).getTime() : 0;
+            const localTs = localDraft?.updatedAt ? new Date(localDraft.updatedAt).getTime() : 0;
+
+            const isDiff = JSON.stringify(cloudDraft.items) !== JSON.stringify(formModelItemsRef.current);
+            const isNotRecentlyTyping = !activeEditingCellRef.current || (Date.now() - activeEditingCellRef.current.timestamp > 2000);
+
+            if ((cloudTs > localTs || isDiff) && isNotRecentlyTyping) {
+              setFormModelItems(deduplicateFormModelItems(cloudDraft.items, products));
+              if (cloudDraft.slots) {
+                const cleanSlots = cloudDraft.slots.filter(isValidHourlySlot);
+                if (cleanSlots.length > 0) setFormSlots(cleanSlots);
+              }
+              if (cloudDraft.officialRO) setFormOfficialWorkersRO(cloudDraft.officialRO);
+              if (cloudDraft.seasonalRO) setFormSeasonalWorkersRO(cloudDraft.seasonalRO);
+              if (cloudDraft.officialBG) setFormOfficialWorkersBG(cloudDraft.officialBG);
+              if (cloudDraft.seasonalBG) setFormSeasonalWorkersBG(cloudDraft.seasonalBG);
+              if (cloudDraft.officialRMA) setFormOfficialWorkersRMA(cloudDraft.officialRMA);
+              if (cloudDraft.seasonalRMA) setFormSeasonalWorkersRMA(cloudDraft.seasonalRMA);
+              localStorage.setItem(localKey, JSON.stringify(cloudDraft));
+            }
+          }
+        }
+
+        // 2. Kiểm tra danh sách IMEI đã quét trên Cloud
+        const cloudImeis = await storage.getScannedImeis();
+        if (Array.isArray(cloudImeis) && !isCancelled) {
+          setScannedImeis((prev) => {
+            if (cloudImeis.length !== prev.length || (cloudImeis[0]?.id !== prev[0]?.id)) {
+              localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(cloudImeis));
+              return cloudImeis;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        // Bỏ qua lỗi ngầm
+      }
+    };
+
+    const intervalId = setInterval(performHeartbeatSync, 1200);
+
+    const handleFocus = () => {
+      performHeartbeatSync();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('visibilitychange', handleFocus);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('visibilitychange', handleFocus);
+    };
+  }, []);
 
   // === DỮ LIỆU TÍNH TỔNG CHUNG 2 DÂY CHUYỀN ===
   const combinedDailyReports = useMemo<CombinedDailyReportRow[]>(() => {
@@ -4758,8 +4956,14 @@ const [isScrolled, setIsScrolled] = useState(false);
       totalEquivalent += Math.round(actualUnits * prodDef.factor);
     }
 
+    // 1 BẢNG NHẬT KÝ CA KHÔNG ĐƯỢC CÓ 2 MODEL SẢN XUẤT TRÙNG NHAU:
+    const validModelItems = deduplicateFormModelItems(formModelItems, products);
+    if (validModelItems.length !== formModelItems.length) {
+      setFormModelItems(validModelItems);
+    }
+
     // Tạo danh sách bản ghi mới cho từng model trong ca
-    const newLogs: ProductionLog[] = formModelItems.map((item, idx) => {
+    const newLogs: ProductionLog[] = validModelItems.map((item, idx) => {
       const prodDef = products.find((p) => p.id === item.productId) || products[0];
       const actualUnits = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
       const equivalentProducts = Math.round(actualUnits * prodDef.factor);
@@ -4830,11 +5034,12 @@ const [isScrolled, setIsScrolled] = useState(false);
       };
     });
 
-    // --- ĐỒNG BỘ & DỌN DẸP DỮ LIỆU CŨ ---
+    // --- ĐỒNG BỘ & DỌN DẸP DỮ LIỆU CŨ (BẢO LƯU AN TOÀN CHO CÁC DÂY CHUYỀN KHÁC) ---
     const existingLogsInShift = productionLogs.filter(l => l.date === formDate && l.shift === formShift);
     const incomingProductIds = new Set(newLogs.map(nl => nl.productId));
+    const currentDivisions = new Set(newLogs.map(nl => nl.productGroup));
     const idsToDelete = existingLogsInShift
-      .filter(el => !incomingProductIds.has(el.productId))
+      .filter(el => currentDivisions.has(el.productGroup) && !incomingProductIds.has(el.productId))
       .map(el => el.id);
 
     if (idsToDelete.length > 0) {
@@ -4845,7 +5050,13 @@ const [isScrolled, setIsScrolled] = useState(false);
     
     let updatedLogs: ProductionLog[] = [];
     setProductionLogs((prev) => {
-      const filtered = prev.filter((log) => log.date !== formDate || log.shift !== formShift);
+      // Chỉ thay thế các log của division hiện tại trong ca này, bảo lưu nguyên vẹn các division khác
+      const filtered = prev.filter((log) => {
+        if (log.date === formDate && log.shift === formShift) {
+          return !incomingProductIds.has(log.productId) && !idsToDelete.includes(log.id);
+        }
+        return true;
+      });
       const combined = [...newLogs, ...filtered];
       const { deduplicated } = storage.deduplicateProductionLogs(combined);
       updatedLogs = deduplicated;
@@ -4860,9 +5071,8 @@ const [isScrolled, setIsScrolled] = useState(false);
 
     const logMonth = parseInt(formDate.split("-")[1], 10) || 1;
     const logYear = parseInt(formDate.split("-")[0], 10) || 2026;
-    setFormMessage(`✅ Đã đồng bộ & lưu thành công ${newLogs.length} bản ghi nhật ký ca (Tháng ${logMonth}/${logYear})!`);
+    setFormMessage(`✅ Đã cố định & đồng bộ thành công ${newLogs.length} bản ghi nhật ký ca lên toàn hệ thống (Tháng ${logMonth}/${logYear})!`);
     storage.clearFormDraft(formDate, formShift);
-    resetFormFields();
     setTimeout(() => setFormMessage(""), 4500);
   };
 
@@ -4950,7 +5160,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         hourlyActuals: log.hourlyActuals || {}
       };
     });
-    setFormModelItems(newFormModelItems);
+    setFormModelItems(deduplicateFormModelItems(newFormModelItems, products));
 
     const newOffRO: Record<string, number> = {}, newSeasRO: Record<string, number> = {};
     const newOffRMA: Record<string, number> = {}, newSeasRMA: Record<string, number> = {};
@@ -5133,13 +5343,24 @@ const [isScrolled, setIsScrolled] = useState(false);
     const availableProducts = filterDivision === "ALL" 
       ? products 
       : products.filter(p => p.group === filterDivision);
-    const defaultProdId = availableProducts[0]?.id || products[0]?.id || "mln-01";
+
+    // 1 BẢNG NHẬT KÝ CA KHÔNG ĐƯỢC CÓ 2 MODEL SẢN XUẤT TRÙNG NHAU:
+    const unselectedProd = availableProducts.find(p => 
+      !formModelItems.some(it => isSameProduct(it.productId, p.id, products))
+    );
+
+    if (!unselectedProd) {
+      showToastError("Tất cả các model sản xuất thuộc phân xưởng này đã có trong bảng nhật ký ca! 1 bảng nhật ký ca không được có 2 model trùng nhau.");
+      return;
+    }
+
+    const defaultProdId = unselectedProd.id;
     const [year, month, day] = formDate.split("-");
     const ym = `${year}-${month}`;
     const dayNum = parseInt(day);
     const planVal = (monthlyPlan[ym]?.[defaultProdId]?.[dayNum]) || 0;
 
-    setFormModelItems((prev) => [
+    setFormModelItems((prev) => deduplicateFormModelItems([
       ...prev,
       {
         id: "item-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
@@ -5147,7 +5368,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         dailyPlan: planVal,
         hourlyActuals: initialHrs,
       },
-    ]);
+    ], products));
   };
 
   const handleRemoveItem = (id: string) => {
@@ -5157,6 +5378,19 @@ const [isScrolled, setIsScrolled] = useState(false);
   const handleUpdateItem = (id: string, updates: Partial<FormModelItem>) => {
     const itemToUpdate = formModelItems.find(it => it.id === id);
     if (!itemToUpdate) return;
+
+    if (updates.productId && updates.productId !== itemToUpdate.productId) {
+      // 1 BẢNG NHẬT KÝ CA KHÔNG ĐƯỢC CÓ 2 MODEL SẢN XUẤT TRÙNG NHAU:
+      const isDuplicate = formModelItems.some(
+        it => it.id !== id && isSameProduct(it.productId, updates.productId!, products)
+      );
+      if (isDuplicate) {
+        const prod = products.find(p => p.id === updates.productId);
+        const name = prod ? (getProductModelCode(prod.name) || prod.code || prod.name) : updates.productId;
+        showToastError(`Model [${name}] đã có trong bảng! 1 bảng nhật ký ca không được có 2 model sản xuất trùng nhau.`);
+        return;
+      }
+    }
 
     const currentProductId = updates.productId || itemToUpdate.productId;
 
@@ -5179,20 +5413,23 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
 
     setFormModelItems((prev) =>
-      prev.map((item) => {
-        if (item.id !== id) return item;
-        const newUpdates = { ...updates };
-        
-        // Auto-fill dailyPlan if productId changed
-        if (updates.productId && updates.productId !== item.productId) {
-          const [year, month, day] = formDate.split("-");
-          const ym = `${year}-${month}`;
-          const dayNum = parseInt(day);
-          newUpdates.dailyPlan = (monthlyPlan[ym]?.[updates.productId]?.[dayNum]) || 0;
-        }
-        
-        return { ...item, ...newUpdates };
-      })
+      deduplicateFormModelItems(
+        prev.map((item) => {
+          if (item.id !== id) return item;
+          const newUpdates = { ...updates };
+          
+          // Auto-fill dailyPlan if productId changed
+          if (updates.productId && updates.productId !== item.productId) {
+            const [year, month, day] = formDate.split("-");
+            const ym = `${year}-${month}`;
+            const dayNum = parseInt(day);
+            newUpdates.dailyPlan = (monthlyPlan[ym]?.[updates.productId]?.[dayNum]) || 0;
+          }
+          
+          return { ...item, ...newUpdates };
+        }),
+        products
+      )
     );
   };
 
@@ -5260,6 +5497,9 @@ const [isScrolled, setIsScrolled] = useState(false);
     // Lưu vào draft cục bộ ngay lập tức
     localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
     localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+
+    // Lưu bản nháp lên Supabase Cloud
+    storage.saveFormDraft(draftData);
 
     // Phát realtime broadcast tới các máy / tab khác
     storage.sendLiveFormBroadcast(draftData);

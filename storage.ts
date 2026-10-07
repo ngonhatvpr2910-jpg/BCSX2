@@ -78,17 +78,78 @@ export const CLIENT_SESSION_ID = typeof window !== 'undefined'
   ? ((window as any).__SUNHOUSE_CLIENT_ID ||= 'cli_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now())
   : 'cli_srv';
 
-// Live broadcast channel dùng chung toàn ứng dụng
+// Live broadcast channel dùng chung toàn ứng dụng (Đồng bộ đa thiết bị tức thì)
 let sharedBroadcastChannel: any = null;
+type BroadcastListener = (payload: any) => void;
+const broadcastListenersMap = new Map<string, Set<BroadcastListener>>();
+
+// Kênh BroadcastChannel cục bộ đồng bộ đa tab/cửa sổ trên cùng máy tính với độ trễ 0ms
+let localTabChannel: any = null;
+if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+  try {
+    localTabChannel = new BroadcastChannel('sunhouse_local_tab_broadcast');
+    localTabChannel.onmessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || !data.event) return;
+      if (data.payload?.senderId === CLIENT_SESSION_ID) return;
+      broadcastListenersMap.get(data.event)?.forEach((fn) => {
+        try { fn(data); } catch (e) { console.warn(e); }
+      });
+    };
+  } catch (e) {}
+}
+
+export function registerBroadcastListener(event: string, callback: BroadcastListener): () => void {
+  if (!broadcastListenersMap.has(event)) {
+    broadcastListenersMap.set(event, new Set());
+    if (sharedBroadcastChannel) {
+      sharedBroadcastChannel.on('broadcast', { event }, (payload: any) => {
+        if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+        broadcastListenersMap.get(event)?.forEach((fn) => {
+          try { fn(payload); } catch (e) { console.warn(e); }
+        });
+      });
+    }
+  }
+  broadcastListenersMap.get(event)!.add(callback);
+  return () => {
+    broadcastListenersMap.get(event)?.delete(callback);
+  };
+}
+
 export function getSharedBroadcastChannel(): any {
   if (!supabase || !isSupabaseConfigured) return null;
   if (!sharedBroadcastChannel) {
     sharedBroadcastChannel = supabase.channel('sunhouse_live_form_room', {
       config: { broadcast: { self: false } },
     });
+
+    // Gắn sẵn các sự kiện Realtime broadcast quan trọng TRƯỚC KHI subscribe
+    const standardEvents = ['form_cell_change', 'imei_scanned_event', 'table_sync_event', 'system_sync_signal'];
+    standardEvents.forEach((event) => {
+      if (!broadcastListenersMap.has(event)) {
+        broadcastListenersMap.set(event, new Set());
+      }
+      sharedBroadcastChannel.on('broadcast', { event }, (payload: any) => {
+        if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
+        broadcastListenersMap.get(event)?.forEach((fn) => {
+          try { fn(payload); } catch (e) { console.warn(e); }
+        });
+      });
+    });
+
     sharedBroadcastChannel.subscribe((status: string) => {
       if (status === 'SUBSCRIBED') {
-        console.log('[Realtime] Kênh Broadcast liên tab đã sẵn sàng');
+        console.log('[Realtime] Kênh Broadcast đa máy tính sunhouse_live_form_room đã kết nối thành công');
+      } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+        console.warn(`[Realtime] Kênh Broadcast ở trạng thái ${status}, lên lịch kết nối lại...`);
+        setTimeout(() => {
+          try {
+            if (supabase && sharedBroadcastChannel) {
+              sharedBroadcastChannel.subscribe();
+            }
+          } catch (e) {}
+        }, 1500);
       }
     });
   }
@@ -101,7 +162,6 @@ export function broadcastTableUpdate(tableName: string, extraData?: any): void {
   try {
     const ch = getSharedBroadcastChannel();
     if (!ch) return;
-    // Gửi thông tin cần thiết và metadata nhẹ, hoặc payload thay đổi tức thì
     const payloadToSend: any = { table: tableName, senderId: CLIENT_SESSION_ID, timestamp: Date.now() };
     if (extraData && typeof extraData === 'object') {
       Object.assign(payloadToSend, extraData);
@@ -1706,6 +1766,7 @@ export async function saveDeclaredImeis(records: any[], timestamp?: number): Pro
 }
 
 export async function getScannedImeis(): Promise<any[]> {
+  const localList = getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
   if (supabase && isSupabaseConfigured) {
     try {
       const { data, error } = await supabase
@@ -1715,30 +1776,47 @@ export async function getScannedImeis(): Promise<any[]> {
         .maybeSingle();
 
       if (!error && data && data.report_data !== undefined) {
-        const rowTs = data.updated_at ? new Date(data.updated_at).getTime() : 0;
-        const localTs = Number(getLocal('sunhouse_scanned_imeis_ts', 0)) || 0;
-        if (rowTs >= localTs) {
-          const list = Array.isArray(data.report_data) ? data.report_data : [];
-          setLocal(STORAGE_KEYS.SCANNED_IMEIS, list);
-          if (data.updated_at) {
-            setLocal('sunhouse_scanned_imeis_ts', rowTs);
+        const cloudList = Array.isArray(data.report_data) ? data.report_data : [];
+        // Hợp nhất danh sách IMEI từ Cloud và Local để đảm bảo không mất bất kỳ mã IMEI nào từ bất kỳ máy nào
+        const map = new Map<string, any>();
+        cloudList.forEach((it: any) => {
+          if (it?.imei) map.set(String(it.imei).toUpperCase(), it);
+        });
+        localList.forEach((it: any) => {
+          if (it?.imei && !map.has(String(it.imei).toUpperCase())) {
+            map.set(String(it.imei).toUpperCase(), it);
           }
-          return list;
-        } else {
-          return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
-        }
+        });
+        const combined = Array.from(map.values()).sort(
+          (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+        );
+        setLocal(STORAGE_KEYS.SCANNED_IMEIS, combined);
+        const rowTs = data.updated_at ? new Date(data.updated_at).getTime() : Date.now();
+        setLocal('sunhouse_scanned_imeis_ts', rowTs);
+        return combined;
       }
     } catch (err) {
       console.warn('[storage] Không thể tải scanned_imeis từ Supabase, dùng local fallback:', err);
     }
   }
-  return getLocal<any[]>(STORAGE_KEYS.SCANNED_IMEIS, []);
+  return localList;
 }
 
 export async function saveScannedImeis(records: any[], timestamp?: number): Promise<void> {
   const ts = timestamp || Date.now();
   setLocal(STORAGE_KEYS.SCANNED_IMEIS, records);
   setLocal('sunhouse_scanned_imeis_ts', ts);
+
+  // Phát broadcast cục bộ ngay lập tức cho các tab khác
+  try {
+    if (localTabChannel) {
+      localTabChannel.postMessage({
+        event: 'table_sync_event',
+        payload: { table: 'daily_reports', subType: 'scanned_imeis', data: records, timestamp: ts, senderId: CLIENT_SESSION_ID }
+      });
+    }
+  } catch (e) {}
+
   if (supabase && isSupabaseConfigured) {
     try {
       const { error } = await supabase.from('daily_reports').upsert({
@@ -1918,6 +1996,7 @@ export async function saveFormDraft(draft: FormDraftData): Promise<void> {
         updated_at: new Date().toISOString(),
       });
       if (error) console.warn('[storage] Lưu form draft lên Supabase:', error.message || error);
+      broadcastTableUpdate('daily_reports', { subType: 'form_draft', draftId, data: draft, timestamp: Date.now() });
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu form draft:', err?.message || err);
     }
@@ -1942,6 +2021,16 @@ export async function clearFormDraft(date: string, shift: string): Promise<void>
 }
 
 export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
+  // Đồng bộ đa tab tức thì qua BroadcastChannel cục bộ (0ms)
+  try {
+    if (localTabChannel) {
+      localTabChannel.postMessage({
+        event: 'form_cell_change',
+        payload: { ...draft, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+      });
+    }
+  } catch (e) {}
+
   if (!supabase || !isSupabaseConfigured) return;
   try {
     const ch = getSharedBroadcastChannel();
@@ -1953,6 +2042,31 @@ export function sendLiveFormBroadcast(draft: Partial<FormDraftData>): void {
     });
   } catch (err) {
     console.warn('[storage] Gửi broadcast thất bại:', err);
+  }
+}
+
+export function sendImeiScannedBroadcast(payload: any): void {
+  // Đồng bộ đa tab tức thì qua BroadcastChannel cục bộ (0ms)
+  try {
+    if (localTabChannel) {
+      localTabChannel.postMessage({
+        event: 'imei_scanned_event',
+        payload: { ...payload, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+      });
+    }
+  } catch (e) {}
+
+  if (!supabase || !isSupabaseConfigured) return;
+  try {
+    const ch = getSharedBroadcastChannel();
+    if (!ch) return;
+    ch.send({
+      type: 'broadcast',
+      event: 'imei_scanned_event',
+      payload: { ...payload, senderId: CLIENT_SESSION_ID, timestamp: Date.now() },
+    });
+  } catch (err) {
+    console.warn('[storage] Gửi broadcast quét IMEI thất bại:', err);
   }
 }
 
@@ -1990,6 +2104,7 @@ export interface RealtimeCallbacks {
   onMonthlyMetricsChange?: (payload: any) => void;
   onDailyReportsChange?: (payload: any) => void;
   onLiveFormChange?: (payload: any) => void;
+  onImeiScannedChange?: (payload: any) => void;
   onTableSyncChange?: (table: string, payload: any) => void;
   onSyncSignal?: (payload: any) => void;
 }
@@ -2127,44 +2242,35 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
     });
 
     // 3. Đăng ký phòng Broadcast chung (sunhouse_live_form_room) để đồng bộ tức thì các tab/thiết bị
-    let broadcastRoom = getSharedBroadcastChannel();
-    if (broadcastRoom) {
-      if (callbacks.onLiveFormChange) {
-        broadcastRoom.on(
-          'broadcast',
-          { event: 'form_cell_change' },
-          (payload: any) => {
-            // Lọc bỏ tin nhắn do chính tab này gửi ra để tránh gián đoạn nhập liệu
-            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
-            callbacks.onLiveFormChange?.(payload);
-          }
-        );
-      }
+    const unsubs: (() => void)[] = [];
+    // Đảm bảo kênh broadcast đã được khởi tạo và subscribe
+    getSharedBroadcastChannel();
 
-      if (callbacks.onTableSyncChange) {
-        broadcastRoom.on(
-          'broadcast',
-          { event: 'table_sync_event' },
-          (payload: any) => {
-            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
-            const tbl = payload?.payload?.table;
-            if (tbl) {
-              callbacks.onTableSyncChange?.(tbl, payload.payload);
-            }
-          }
-        );
-      }
+    if (callbacks.onLiveFormChange) {
+      unsubs.push(registerBroadcastListener('form_cell_change', (payload) => {
+        callbacks.onLiveFormChange?.(payload);
+      }));
+    }
 
-      if (callbacks.onSyncSignal) {
-        broadcastRoom.on(
-          'broadcast',
-          { event: 'system_sync_signal' },
-          (payload: any) => {
-            if (payload?.payload?.senderId === CLIENT_SESSION_ID) return;
-            callbacks.onSyncSignal?.(payload);
-          }
-        );
-      }
+    if (callbacks.onImeiScannedChange) {
+      unsubs.push(registerBroadcastListener('imei_scanned_event', (payload) => {
+        callbacks.onImeiScannedChange?.(payload);
+      }));
+    }
+
+    if (callbacks.onTableSyncChange) {
+      unsubs.push(registerBroadcastListener('table_sync_event', (payload) => {
+        const tbl = payload?.payload?.table;
+        if (tbl) {
+          callbacks.onTableSyncChange?.(tbl, payload.payload);
+        }
+      }));
+    }
+
+    if (callbacks.onSyncSignal) {
+      unsubs.push(registerBroadcastListener('system_sync_signal', (payload) => {
+        callbacks.onSyncSignal?.(payload);
+      }));
     }
 
     // Cleanup function để hủy kết nối channel khi unmount

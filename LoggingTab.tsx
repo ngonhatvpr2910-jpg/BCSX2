@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, deduplicateFormModelItems } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo } from 'react';
@@ -94,6 +94,10 @@ export const LoggingTab = ({
   handleCommitWorkerDraft,
   handleDeduplicateLogs
 }: any) => {
+  const activeFormModelItems = useMemo(() => {
+    return deduplicateFormModelItems(formModelItems || [], products || []);
+  }, [formModelItems, products]);
+
   return (
     <motion.div
               key="logging"
@@ -200,15 +204,22 @@ export const LoggingTab = ({
 
                     {/* Máy quét mã vạch (Barcode Scanner) */}
                     <div className="bg-slate-900/50 p-3 rounded-lg border border-slate-800/80 space-y-2">
-                      <label className="text-[11px] text-sky-400 font-mono uppercase flex items-center gap-1">
-                        <ScanBarcode className="w-3 h-3" /> Quét mã IMEI (Tự động cộng 1 vào khung giờ hiện tại)
-                      </label>
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <label className="text-[11px] text-sky-400 font-mono uppercase flex items-center gap-1">
+                          <ScanBarcode className="w-3.5 h-3.5" /> Quét mã IMEI (Tự động cộng 1 vào khung giờ hiện tại)
+                        </label>
+                        <span className="text-[10px] text-emerald-400 font-bold bg-emerald-950/80 border border-emerald-800/80 px-2 py-0.5 rounded flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                          ⚡ Đồng bộ Realtime Supabase siêu tốc (Đa máy tính)
+                        </span>
+                      </div>
                       <div className="flex gap-2 items-center">
                         <div className="bg-slate-950/50 p-2 rounded border border-slate-800 text-sky-400 font-mono text-[10px] px-3 flex items-center gap-1.5 shrink-0 select-none">
                           <div className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse"></div>
                           TỰ ĐỘNG NHẬN DIỆN MODEL
                         </div>
                         <input
+                          id="barcodeScanInputEl"
                           type="text"
                           placeholder="Đặt con trỏ chuột vào đây và quét IMEI..."
                           value={scanInput}
@@ -216,14 +227,25 @@ export const LoggingTab = ({
                           onKeyDown={(e) => {
                              if (e.key === 'Enter') {
                                e.preventDefault();
-                               handleScanSubmit(e.currentTarget.value.toUpperCase());
+                               const val = e.currentTarget.value.toUpperCase();
+                               handleScanSubmit(val);
+                               setTimeout(() => {
+                                 const el = document.getElementById('barcodeScanInputEl');
+                                 if (el) el.focus();
+                               }, 10);
                              }
                           }}
                           className="flex-1 bg-slate-950/40 border border-slate-700/60 rounded p-1.5 text-white font-mono focus:border-sky-500 outline-none placeholder-slate-600 text-xs"
                         />
                         <button
                           type="button"
-                          onClick={() => handleScanSubmit(scanInput)}
+                          onClick={() => {
+                            handleScanSubmit(scanInput);
+                            setTimeout(() => {
+                              const el = document.getElementById('barcodeScanInputEl');
+                              if (el) el.focus();
+                            }, 10);
+                          }}
                           className="bg-sky-600 hover:bg-sky-500 text-white font-bold px-4 py-1.5 rounded flex items-center justify-center shrink-0 text-xs cursor-pointer transition-colors"
                         >
                           Ghi Nhận
@@ -277,7 +299,7 @@ export const LoggingTab = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800 bg-slate-950/30 text-slate-200">
-                          {formModelItems
+                          {activeFormModelItems
                             .filter((item) => {
                               if (filterDivision === "ALL") return true;
                               const p = products.find((x) => x.id === item.productId);
@@ -300,11 +322,21 @@ export const LoggingTab = ({
                                       >
                                         {products
                                           .filter(prod => filterDivision === "ALL" || prod.group === filterDivision)
-                                          .map((prod) => (
-                                          <option key={prod.id} value={prod.id} className="bg-slate-900">
-                                            {getProductModelCode(prod.name)}
-                                          </option>
-                                        ))}
+                                          .map((prod) => {
+                                            const isChosenElsewhere = activeFormModelItems.some(
+                                              (it: any) => it.id !== item.id && isSameProduct(it.productId, prod.id, products)
+                                            );
+                                            return (
+                                              <option
+                                                key={prod.id}
+                                                value={prod.id}
+                                                disabled={isChosenElsewhere}
+                                                className={isChosenElsewhere ? "bg-slate-950 text-slate-500 italic" : "bg-slate-900 text-white"}
+                                              >
+                                                {getProductModelCode(prod.name)} {isChosenElsewhere ? "(Đã có trong bảng)" : ""}
+                                              </option>
+                                            );
+                                          })}
                                       </select>
                                     </div>
                                   </td>
@@ -361,7 +393,7 @@ export const LoggingTab = ({
                                     {Math.max(0, (item.dailyPlan || 0) + (getPrevDayLeftover(item.productId, formDate) || 0) - (modelActual || 0))}
                                   </td>
                                   <td className="py-1 px-2">
-                                    <button type="button" onClick={() => handleRemoveItem(item.id)} className="text-rose-500 hover:text-rose-400 transition" disabled={formModelItems.length === 1}>
+                                    <button type="button" onClick={() => handleRemoveItem(item.id)} className="text-rose-500 hover:text-rose-400 transition" disabled={activeFormModelItems.length === 1}>
                                       <Trash2 className="w-3.5 h-3.5 mx-auto" />
                                     </button>
                                   </td>
@@ -385,7 +417,7 @@ export const LoggingTab = ({
                               Tổng sản lượng (Cái)
                             </td>
                             {formSlots.map(slot => {
-                              const sum = formModelItems
+                              const sum = activeFormModelItems
                                 .filter(item => filterDivision === "ALL" || (products.find(x => x.id === item.productId) || products[0]).group === filterDivision)
                                 .reduce((acc, item) => acc + (item.hourlyActuals[slot] || 0), 0);
                               return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-blue-700 min-w-[80px] w-[80px] text-center">{sum || 0}</td>

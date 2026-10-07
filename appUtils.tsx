@@ -215,7 +215,106 @@ export function getProductModelCode(name: string): string {
 
 export const YAXIS_DOMAIN: [number, "auto"] = [0, "auto"];
 
+export function getModelKeyForItem(productId?: string, prodList: any[] = []): string {
+  if (!productId) return '';
+  const c = String(productId).trim().toUpperCase();
+  const p = prodList.find(x => 
+    (x.id && String(x.id).trim().toUpperCase() === c) || 
+    (x.code && String(x.code).trim().toUpperCase() === c) || 
+    (x.name && getProductModelCode(x.name).trim().toUpperCase() === c)
+  );
+  if (p) {
+    const code = getProductModelCode(p.name);
+    if (code) return code.trim().toUpperCase();
+    if (p.code) return String(p.code).trim().toUpperCase();
+    return String(p.id).trim().toUpperCase();
+  }
+  const extracted = getProductModelCode(c);
+  return extracted ? extracted.trim().toUpperCase() : c;
+}
 
+// So khớp sản phẩm thông minh (theo ID, Code hoặc Model name)
+export function isSameProduct(id1?: string, id2?: string, prodList: any[] = []): boolean {
+  if (!id1 || !id2) return false;
+  const c1 = String(id1).trim().toUpperCase();
+  const c2 = String(id2).trim().toUpperCase();
+  if (c1 === c2) return true;
+
+  const k1 = getModelKeyForItem(id1, prodList);
+  const k2 = getModelKeyForItem(id2, prodList);
+  if (k1 && k2 && k1 === k2) return true;
+
+  const p1 = prodList.find(p => 
+    (p.id && String(p.id).toUpperCase() === c1) || 
+    (p.code && String(p.code).toUpperCase() === c1) || 
+    (p.name && getProductModelCode(p.name).toUpperCase() === c1)
+  );
+  const p2 = prodList.find(p => 
+    (p.id && String(p.id).toUpperCase() === c2) || 
+    (p.code && String(p.code).toUpperCase() === c2) || 
+    (p.name && getProductModelCode(p.name).toUpperCase() === c2)
+  );
+
+  if (p1 && p2) {
+    if (p1.id === p2.id) return true;
+    const m1 = getProductModelCode(p1.name).toUpperCase();
+    const m2 = getProductModelCode(p2.name).toUpperCase();
+    if (m1 && m2 && m1 === m2) return true;
+  }
+  if (p1 && (
+    (p1.id && String(p1.id).toUpperCase() === c2) || 
+    (p1.code && String(p1.code).toUpperCase() === c2) || 
+    (p1.name && getProductModelCode(p1.name).toUpperCase() === c2)
+  )) return true;
+  if (p2 && (
+    (p2.id && String(p2.id).toUpperCase() === c1) || 
+    (p2.code && String(p2.code).toUpperCase() === c1) || 
+    (p2.name && getProductModelCode(p2.name).toUpperCase() === c1)
+  )) return true;
+
+  return false;
+}
+
+// Hàm đảm bảo 1 bảng nhật ký ca KHÔNG BAO GIỜ có 2 model sản xuất trùng nhau
+export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[] = []): FormModelItem[] {
+  if (!items || items.length === 0) return [];
+  const result: FormModelItem[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of items) {
+    if (!item.productId) continue;
+    const modelKey = getModelKeyForItem(item.productId, prodList);
+    const existingIndex = result.findIndex(r => {
+      if (modelKey && getModelKeyForItem(r.productId, prodList) === modelKey) return true;
+      return isSameProduct(r.productId, item.productId, prodList);
+    });
+
+    if (existingIndex === -1 && !seenKeys.has(modelKey)) {
+      if (modelKey) seenKeys.add(modelKey);
+      result.push({
+        ...item,
+        hourlyActuals: { ...(item.hourlyActuals || {}) }
+      });
+    } else {
+      // Gộp sản lượng của model trùng lặp vào dòng đầu tiên
+      const targetIndex = existingIndex !== -1 ? existingIndex : result.findIndex(r => getModelKeyForItem(r.productId, prodList) === modelKey);
+      if (targetIndex !== -1) {
+        const existing = result[targetIndex];
+        const mergedActuals: { [k: string]: number } = { ...existing.hourlyActuals };
+        Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
+          mergedActuals[k] = (mergedActuals[k] || 0) + (Number(v) || 0);
+        });
+        result[targetIndex] = {
+          ...existing,
+          dailyPlan: Math.max(existing.dailyPlan || 0, item.dailyPlan || 0),
+          hourlyActuals: mergedActuals,
+        };
+      }
+    }
+  }
+
+  return result;
+}
 
 export const DigitalClock = () => {
   const [time, setTime] = useState(new Date().toLocaleTimeString("vi-VN", { hour12: false }));
