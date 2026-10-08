@@ -224,6 +224,7 @@ export default function App() {
     getPrevDayLeftover,
     handleRemoveItem,
     handleAddNewItem,
+    handleSyncModelsFromMonthlyPlan,
     displayTotalActualQty,
     displayTotalPlanQty,
     displayTotalRemainingQty,
@@ -793,6 +794,8 @@ export default function App() {
       getPrevDayLeftover={getPrevDayLeftover}
       handleRemoveItem={handleRemoveItem}
       handleAddNewItem={handleAddNewItem}
+      handleSyncModelsFromMonthlyPlan={handleSyncModelsFromMonthlyPlan}
+      monthlyPlan={monthlyPlan}
       displayTotalActualQty={displayTotalActualQty}
       displayTotalPlanQty={displayTotalPlanQty}
       displayTotalRemainingQty={displayTotalRemainingQty}

@@ -1449,13 +1449,58 @@ const [isScrolled, setIsScrolled] = useState(false);
         const cleanSlots = draft.slots.filter(isValidHourlySlot);
         if (cleanSlots.length > 0) setFormSlots(cleanSlots);
       }
+
+      const [year, month, day] = formDate.split("-");
+      const ym = `${year}-${month}`;
+      const dayNum = parseInt(day, 10);
+
       const cleanItems = draft.items.map(it => {
         const cleanHourly: Record<string, number> = {};
         Object.entries(it.hourlyActuals || {}).forEach(([k, v]) => {
           if (isValidHourlySlot(k)) cleanHourly[k] = Number(v) || 0;
         });
-        return { ...it, hourlyActuals: cleanHourly };
+        const currentPlan = (!isNaN(dayNum) && monthlyPlan[ym]?.[it.productId]?.[dayNum]) || 0;
+        return { 
+          ...it, 
+          dailyPlan: (it.dailyPlan !== undefined && it.dailyPlan > 0) ? it.dailyPlan : (currentPlan > 0 ? currentPlan : it.dailyPlan || 0),
+          hourlyActuals: cleanHourly 
+        };
       });
+
+      // BỔ SUNG CÁC MODEL CÓ TRONG KHSX THÁNG NGÀY NÀY MÀ TRONG BẢN NHÁP CHƯA CÓ ĐỦ
+      if (!isNaN(dayNum) && monthlyPlan[ym]) {
+        const plannedProducts = products.filter(p => {
+          const planVal = monthlyPlan[ym]?.[p.id]?.[dayNum] || 0;
+          const leftover = getPrevDayLeftover(p.id, formDate);
+          return planVal > 0 || leftover > 0;
+        });
+
+        const missingItems: FormModelItem[] = [];
+        const shiftSlots = (draft.slots && Array.isArray(draft.slots) && draft.slots.length > 0)
+          ? draft.slots.filter(isValidHourlySlot)
+          : getShiftSlots(formShift).filter(isValidHourlySlot);
+
+        const initialHrs: Record<string, number> = {};
+        shiftSlots.forEach(s => { initialHrs[s] = 0; });
+
+        plannedProducts.forEach(p => {
+          const alreadyExists = cleanItems.some(it => isSameProduct(it.productId, p.id, products));
+          if (!alreadyExists) {
+            const planVal = monthlyPlan[ym]?.[p.id]?.[dayNum] || 0;
+            missingItems.push({
+              id: `item-plan-${p.id}-${formDate}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              productId: p.id,
+              dailyPlan: planVal,
+              hourlyActuals: { ...initialHrs },
+            });
+          }
+        });
+
+        if (missingItems.length > 0) {
+          cleanItems.push(...missingItems);
+        }
+      }
+
       setFormModelItems(deduplicateFormModelItems(cleanItems, products));
       if (draft.officialRO) setFormOfficialWorkersRO(draft.officialRO);
       if (draft.seasonalRO) setFormSeasonalWorkersRO(draft.seasonalRO);
@@ -2761,9 +2806,10 @@ const [isScrolled, setIsScrolled] = useState(false);
             const localTs = localDraft?.updatedAt ? new Date(localDraft.updatedAt).getTime() : 0;
 
             const isDiff = JSON.stringify(cloudDraft.items) !== JSON.stringify(formModelItemsRef.current);
-            const isNotRecentlyTyping = !activeEditingCellRef.current || (Date.now() - activeEditingCellRef.current.timestamp > 2000);
+            const isNotRecentlyTyping = !activeEditingCellRef.current || (Date.now() - activeEditingCellRef.current.timestamp > 3000);
 
-            if ((cloudTs > localTs || isDiff) && isNotRecentlyTyping) {
+            // CHỈ CẬP NHẬT TỪ CLOUD NẾU CLOUD THỰC SỰ MỚI HƠN BẢN CỤC BỘ (> 500ms) VÀ KHÔNG ĐANG THAO TÁC
+            if (cloudTs > localTs + 500 && isNotRecentlyTyping) {
               setFormModelItems(deduplicateFormModelItems(cloudDraft.items, products));
               if (cloudDraft.slots) {
                 const cleanSlots = cloudDraft.slots.filter(isValidHourlySlot);
@@ -2776,6 +2822,9 @@ const [isScrolled, setIsScrolled] = useState(false);
               if (cloudDraft.officialRMA) setFormOfficialWorkersRMA(cloudDraft.officialRMA);
               if (cloudDraft.seasonalRMA) setFormSeasonalWorkersRMA(cloudDraft.seasonalRMA);
               localStorage.setItem(localKey, JSON.stringify(cloudDraft));
+            } else if (localTs > cloudTs + 500 && localDraft && isDiff) {
+              // Nếu bản cục bộ mới hơn Cloud, đồng bộ ngược lên Cloud để không bao giờ bị lệch dữ liệu
+              storage.saveFormDraft(localDraft);
             }
           }
         }
@@ -5372,7 +5421,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     }));
   };
 
-  const handleAddNewItem = () => {
+  const handleAddNewItem = (targetProductId?: string) => {
     const slots = formSlots;
     const initialHrs: { [key: string]: number } = {};
     slots.forEach((s) => {
@@ -5383,33 +5432,50 @@ const [isScrolled, setIsScrolled] = useState(false);
       ? products 
       : products.filter(p => p.group === filterDivision);
 
-    // 1 BẢNG NHẬT KÝ CA KHÔNG ĐƯỢC CÓ 2 MODEL SẢN XUẤT TRÙNG NHAU:
-    const unselectedProd = availableProducts.find(p => 
-      !formModelItems.some(it => isSameProduct(it.productId, p.id, products))
-    );
+    let chosenProdId = targetProductId;
 
-    if (!unselectedProd) {
-      showToastError("Tất cả các model sản xuất thuộc phân xưởng này đã có trong bảng nhật ký ca! 1 bảng nhật ký ca không được có 2 model trùng nhau.");
-      return;
+    if (!chosenProdId) {
+      // 1 BẢNG NHẬT KÝ CA KHÔNG ĐƯỢC CÓ 2 MODEL SẢN XUẤT TRÙNG NHAU:
+      const unselectedProd = availableProducts.find(p => 
+        !formModelItems.some(it => isSameProduct(it.productId, p.id, products))
+      );
+
+      if (!unselectedProd) {
+        showToastError("Tất cả các model sản xuất thuộc phân xưởng này đã có trong bảng nhật ký ca! 1 bảng nhật ký ca không được có 2 model trùng nhau.");
+        return;
+      }
+      chosenProdId = unselectedProd.id;
+    } else {
+      const isAlreadyAdded = formModelItems.some(it => isSameProduct(it.productId, chosenProdId, products));
+      if (isAlreadyAdded) {
+        const prod = products.find(p => p.id === chosenProdId);
+        const name = prod ? (getProductModelCode(prod.name) || prod.code || prod.name) : chosenProdId;
+        showToastError(`Model [${name}] đã có trong bảng! 1 bảng nhật ký ca không được có 2 model trùng nhau.`);
+        return;
+      }
     }
 
-    const defaultProdId = unselectedProd.id;
     const [year, month, day] = formDate.split("-");
     const ym = `${year}-${month}`;
     const dayNum = parseInt(day);
-    const planVal = (monthlyPlan[ym]?.[defaultProdId]?.[dayNum]) || 0;
+    const planVal = (monthlyPlan[ym]?.[chosenProdId]?.[dayNum]) || 0;
 
+    const newItemId = "item-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
     const nextItems = deduplicateFormModelItems([
       ...formModelItems,
       {
-        id: "item-" + Date.now() + "-" + Math.floor(Math.random() * 1000),
-        productId: defaultProdId,
+        id: newItemId,
+        productId: chosenProdId,
         dailyPlan: planVal,
         hourlyActuals: initialHrs,
       },
     ], products);
 
     setFormModelItems(nextItems);
+    formModelItemsRef.current = nextItems;
+
+    // Khóa chống ghi đè cho thao tác thêm model trong 5s
+    activeEditingCellRef.current = { id: newItemId, slotName: '__add_model', timestamp: Date.now() };
 
     const draftData: storage.FormDraftData = {
       date: formDate,
@@ -5429,6 +5495,10 @@ const [isScrolled, setIsScrolled] = useState(false);
     localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
     storage.saveFormDraft(draftData);
     storage.sendLiveFormBroadcast(draftData);
+
+    const addedProd = products.find(p => p.id === chosenProdId);
+    const addedCode = addedProd ? (getProductModelCode(addedProd.name) || addedProd.code || addedProd.name) : chosenProdId;
+    showToastSuccess(`Đã thêm model [${addedCode}] vào bảng nhật ký ca ✓`);
   };
 
   const handleRemoveItem = async (id: string) => {
@@ -5522,25 +5592,53 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     }
 
-    setFormModelItems((prev) =>
-      deduplicateFormModelItems(
-        prev.map((item) => {
-          if (item.id !== id) return item;
-          const newUpdates = { ...updates };
-          
-          // Auto-fill dailyPlan if productId changed
-          if (updates.productId && updates.productId !== item.productId) {
-            const [year, month, day] = formDate.split("-");
-            const ym = `${year}-${month}`;
-            const dayNum = parseInt(day);
-            newUpdates.dailyPlan = (monthlyPlan[ym]?.[updates.productId]?.[dayNum]) || 0;
-          }
-          
-          return { ...item, ...newUpdates };
-        }),
-        products
-      )
-    );
+    const updatedItems = formModelItems.map((item) => {
+      if (item.id !== id) return item;
+      const newUpdates = { ...updates };
+      
+      // Auto-fill dailyPlan if productId changed
+      if (updates.productId && updates.productId !== item.productId) {
+        const [year, month, day] = formDate.split("-");
+        const ym = `${year}-${month}`;
+        const dayNum = parseInt(day);
+        newUpdates.dailyPlan = (monthlyPlan[ym]?.[updates.productId]?.[dayNum]) || 0;
+      }
+      
+      return { ...item, ...newUpdates };
+    });
+
+    const deduplicated = deduplicateFormModelItems(updatedItems, products);
+    setFormModelItems(deduplicated);
+    formModelItemsRef.current = deduplicated;
+
+    // Khóa chống ghi đè khi đổi model trong 5 giây
+    activeEditingCellRef.current = { id, slotName: '__model_select', timestamp: Date.now() };
+
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: deduplicated,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+    storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
+
+    if (updates.productId && updates.productId !== itemToUpdate.productId) {
+      const newProd = products.find(p => p.id === updates.productId);
+      const code = newProd ? (getProductModelCode(newProd.name) || newProd.code || newProd.name) : updates.productId;
+      showToastSuccess(`Đã chuyển sang model [${code}] ✓`);
+    }
   };
 
   const handleUpdateItemHourly = (id: string, slotName: string, qty: number) => {
@@ -7225,29 +7323,159 @@ const [isScrolled, setIsScrolled] = useState(false);
     }
   }, [activeTab]);
 
-  // Synchronize dailyPlan in formModelItems when monthlyPlan updates
+  // Synchronize dailyPlan in formModelItems and auto-merge planned models when monthlyPlan updates
   useEffect(() => {
     if (isSyncingFromExternalRef.current) return;
     const parts = formDate.split("-");
     if (parts.length < 3) return;
     const ym = `${parts[0]}-${parts[1]}`;
     const dayNum = parseInt(parts[2], 10);
-    if (isNaN(dayNum)) return;
+    if (isNaN(dayNum) || !monthlyPlan[ym]) return;
 
     setFormModelItems(prev => {
       if (!prev || prev.length === 0) return prev;
       let changed = false;
       const next = prev.map(item => {
         const planVal = (monthlyPlan[ym]?.[item.productId]?.[dayNum]) || 0;
-        if (item.dailyPlan !== planVal) {
+        if (item.dailyPlan !== planVal && planVal > 0) {
           changed = true;
           return { ...item, dailyPlan: planVal };
         }
         return item;
       });
-      return changed ? next : prev;
+
+      // Tự động tìm và bổ sung các model có trong KHSX Tháng ngày này nhưng chưa có trong bảng
+      const plannedProds = products.filter(p => {
+        const pVal = (monthlyPlan[ym]?.[p.id]?.[dayNum]) || 0;
+        const leftover = getPrevDayLeftover(p.id, formDate);
+        return pVal > 0 || leftover > 0;
+      });
+
+      const missingPlannedItems: FormModelItem[] = [];
+      const slots = formSlotsRef.current.length > 0 ? formSlotsRef.current : formSlots;
+      const initialHrs: Record<string, number> = {};
+      slots.forEach(s => { initialHrs[s] = 0; });
+
+      plannedProds.forEach(p => {
+        const alreadyInTable = next.some(it => isSameProduct(it.productId, p.id, products));
+        if (!alreadyInTable) {
+          changed = true;
+          const pVal = (monthlyPlan[ym]?.[p.id]?.[dayNum]) || 0;
+          missingPlannedItems.push({
+            id: `item-plan-${p.id}-${formDate}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+            productId: p.id,
+            dailyPlan: pVal,
+            hourlyActuals: { ...initialHrs }
+          });
+        }
+      });
+
+      if (changed || missingPlannedItems.length > 0) {
+        const finalMerged = deduplicateFormModelItems([...next, ...missingPlannedItems], products);
+        formModelItemsRef.current = finalMerged;
+
+        // Lưu bản nháp cục bộ
+        const draftData: storage.FormDraftData = {
+          date: formDate,
+          shift: formShift,
+          slots: formSlots,
+          items: finalMerged,
+          officialRO: formOfficialWorkersRO,
+          seasonalRO: formSeasonalWorkersRO,
+          officialBG: formOfficialWorkersBG,
+          seasonalBG: formSeasonalWorkersBG,
+          officialRMA: formOfficialWorkersRMA,
+          seasonalRMA: formSeasonalWorkersRMA,
+          technician: formTechnician,
+          updatedAt: new Date().toISOString(),
+        };
+        localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+        localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+        storage.saveFormDraft(draftData);
+
+        return finalMerged;
+      }
+      return prev;
     });
   }, [formDate, monthlyPlan]);
+
+  const handleSyncModelsFromMonthlyPlan = () => {
+    const parts = formDate.split("-");
+    if (parts.length < 3) return;
+    const ym = `${parts[0]}-${parts[1]}`;
+    const dayNum = parseInt(parts[2], 10);
+    if (isNaN(dayNum)) return;
+
+    const shiftSlots = formSlots.length > 0 ? formSlots : getShiftSlots(formShift).filter(isValidHourlySlot);
+    const initialHrs: Record<string, number> = {};
+    shiftSlots.forEach(s => { initialHrs[s] = 0; });
+
+    // 1. Tìm tất cả sản phẩm có kế hoạch trong KHSX Tháng hoặc tồn dư ngày hôm trước
+    const plannedProducts = products.filter(p => {
+      const planVal = (monthlyPlan[ym]?.[p.id]?.[dayNum]) || 0;
+      const leftover = getPrevDayLeftover(p.id, formDate);
+      return planVal > 0 || leftover > 0;
+    });
+
+    if (plannedProducts.length === 0) {
+      showToastError(`Không tìm thấy model nào có kế hoạch sản xuất trong KHSX Tháng ngày ${dayNum}/${parts[1]}!`);
+      return;
+    }
+
+    let addedCount = 0;
+    const currentItems = [...formModelItems];
+
+    // Cập nhật dailyPlan cho các model đã có
+    const updatedCurrent = currentItems.map(item => {
+      const planVal = (monthlyPlan[ym]?.[item.productId]?.[dayNum]) || 0;
+      return {
+        ...item,
+        dailyPlan: planVal > 0 ? planVal : item.dailyPlan
+      };
+    });
+
+    // Bổ sung các model còn thiếu
+    const newItemsToAdd: FormModelItem[] = [];
+    plannedProducts.forEach(p => {
+      const exists = updatedCurrent.some(it => isSameProduct(it.productId, p.id, products));
+      if (!exists) {
+        const planVal = (monthlyPlan[ym]?.[p.id]?.[dayNum]) || 0;
+        newItemsToAdd.push({
+          id: `item-plan-${p.id}-${formDate}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          productId: p.id,
+          dailyPlan: planVal,
+          hourlyActuals: { ...initialHrs }
+        });
+        addedCount++;
+      }
+    });
+
+    const finalItems = deduplicateFormModelItems([...updatedCurrent, ...newItemsToAdd], products);
+    setFormModelItems(finalItems);
+    formModelItemsRef.current = finalItems;
+
+    const draftData: storage.FormDraftData = {
+      date: formDate,
+      shift: formShift,
+      slots: formSlots,
+      items: finalItems,
+      officialRO: formOfficialWorkersRO,
+      seasonalRO: formSeasonalWorkersRO,
+      officialBG: formOfficialWorkersBG,
+      seasonalBG: formSeasonalWorkersBG,
+      officialRMA: formOfficialWorkersRMA,
+      seasonalRMA: formSeasonalWorkersRMA,
+      technician: formTechnician,
+      updatedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+    storage.saveFormDraft(draftData);
+    storage.sendLiveFormBroadcast(draftData);
+
+    showToastSuccess(`Đã đồng bộ đủ ${finalItems.length} model theo KHSX Tháng ngày ${dayNum}/${parts[1]} (Đã bổ sung ${addedCount} model mới) ✓`);
+  };
 
   const displayTotalActualQty = filterDivision === "MLN" ? formAggregates.totalActualQtyRO : (filterDivision === "BG" ? formAggregates.totalActualQtyBG : formAggregates.totalActualQty);
   const displayTotalEqQty = filterDivision === "MLN" ? formAggregates.totalEqQtyRO : (filterDivision === "BG" ? formAggregates.totalEqQtyBG : formAggregates.totalEqQty);
@@ -7370,6 +7598,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     getPrevDayLeftover,
     handleRemoveItem,
     handleAddNewItem,
+    handleSyncModelsFromMonthlyPlan,
     displayTotalActualQty,
     displayTotalPlanQty,
     displayTotalRemainingQty,

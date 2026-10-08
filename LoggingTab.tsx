@@ -1,7 +1,7 @@
 import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, deduplicateFormModelItems } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, ReferenceLine, LabelList
 } from 'recharts';
@@ -92,11 +92,36 @@ export const LoggingTab = ({
   handleCommitItemHourly,
   handleCommitItemDailyPlan,
   handleCommitWorkerDraft,
-  handleDeduplicateLogs
+  handleDeduplicateLogs,
+  handleSyncModelsFromMonthlyPlan,
+  monthlyPlan
 }: any) => {
+  const [isAddModelModalOpen, setIsAddModelModalOpen] = useState(false);
+  const [modelSearchQuery, setModelSearchQuery] = useState("");
+  const [modelModalDivision, setModelModalDivision] = useState<string>("ALL");
+
   const activeFormModelItems = useMemo(() => {
     return deduplicateFormModelItems(formModelItems || [], products || []);
   }, [formModelItems, products]);
+
+  // Tìm các model có trong KHSX Tháng ngày này nhưng chưa có trong bảng nhật ký ca
+  const missingPlannedModels = useMemo(() => {
+    if (!formDate || !monthlyPlan || !products) return [];
+    const parts = formDate.split("-");
+    if (parts.length < 3) return [];
+    const ym = `${parts[0]}-${parts[1]}`;
+    const dayNum = parseInt(parts[2], 10);
+    if (isNaN(dayNum) || !monthlyPlan[ym]) return [];
+
+    return products.filter((p: any) => {
+      if (filterDivision !== "ALL" && p.group !== filterDivision) return false;
+      const planVal = (monthlyPlan[ym]?.[p.id]?.[dayNum]) || 0;
+      const leftover = (getPrevDayLeftover ? getPrevDayLeftover(p.id, formDate) : 0) || 0;
+      if (planVal <= 0 && leftover <= 0) return false;
+      // Kiểm tra xem đã có trong bảng chưa
+      return !activeFormModelItems.some((it: any) => isSameProduct(it.productId, p.id, products));
+    });
+  }, [formDate, monthlyPlan, products, filterDivision, activeFormModelItems, getPrevDayLeftover]);
 
   return (
     <motion.div
@@ -110,7 +135,7 @@ export const LoggingTab = ({
               
               {/* FORM ZONE */}
               <div className="w-full bg-slate-900/30 p-3 rounded-xl border border-slate-800/60 space-y-3">
-                <div className="border-b border-slate-800 pb-2 flex justify-between items-center">
+                <div className="border-b border-slate-800 pb-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
                     <h3 className="text-base font-bold text-white flex items-center gap-2">
                       <PlusCircle className="text-rose-500 w-5 h-5" />
@@ -118,15 +143,54 @@ export const LoggingTab = ({
                     </h3>
                     <p className="text-[11px] text-slate-400 mt-0.5">Ghi nhiều model chung một ngày, cập nhật chi tiết khung giờ 1h/lần</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={syncAttendanceToForm}
-                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition shadow-lg shadow-emerald-900/20"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    Đồng bộ Nhân sự (QR)
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleSyncModelsFromMonthlyPlan}
+                      className="flex items-center gap-1.5 bg-sky-600 hover:bg-sky-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-lg shadow-sky-900/20 cursor-pointer"
+                      title="Tự động đồng bộ và nạp đủ tất cả model theo KHSX Tháng ngày này"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300" />
+                      Đồng bộ đủ Model từ KHSX Tháng {missingPlannedModels.length > 0 ? `(${missingPlannedModels.length} còn thiếu)` : "✓"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={syncAttendanceToForm}
+                      className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition shadow-lg shadow-emerald-900/20 cursor-pointer"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      Đồng bộ Nhân sự (QR)
+                    </button>
+                  </div>
                 </div>
+
+                {/* Banner thông báo nếu KHSX Tháng ngày này còn model chưa có trong bảng */}
+                {missingPlannedModels.length > 0 && (
+                  <div className="bg-amber-950/50 border border-amber-500/60 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-lg animate-in fade-in">
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold text-amber-200">
+                          Theo KHSX Tháng ngày {formDate.split("-")[2]}/{formDate.split("-")[1]}, có {missingPlannedModels.length} model chưa có trong bảng nhật ký ca:
+                        </p>
+                        <p className="text-amber-300/90 mt-0.5 font-mono text-[11px]">
+                          {missingPlannedModels.map((p: any) => {
+                            const pCode = getProductModelCode(p.name);
+                            const pVal = monthlyPlan?.[`${formDate.split("-")[0]}-${formDate.split("-")[1]}`]?.[p.id]?.[parseInt(formDate.split("-")[2])] || 0;
+                            return `${pCode} (KHSX: ${pVal} cái)`;
+                          }).join(", ")}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSyncModelsFromMonthlyPlan}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg transition shadow-md shrink-0 flex items-center gap-1.5 cursor-pointer text-xs"
+                    >
+                      <PlusCircle className="w-4 h-4" /> Bổ sung đủ {missingPlannedModels.length} model ngay
+                    </button>
+                  </div>
+                )}
 
                 {formMessage && (
                   <div className={`p-3 rounded text-xs ${
@@ -311,7 +375,7 @@ export const LoggingTab = ({
                               if (!prodDef) return null;
                               const modelActual = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
                               return (
-                                <tr key={`model-row-${item.id}-${idx}`} className="hover:bg-slate-900/50 transition">
+                                <tr key={`model-row-${item.id || item.productId}`} className="hover:bg-slate-900/50 transition">
                                   <td className="py-1 px-1 sticky left-0 bg-slate-950/50 z-10 text-left border-r border-slate-800 min-w-[160px] w-[160px]">
                                     <div className="flex gap-1 items-center w-full">
                                       <span className="text-slate-600 font-bold ml-1 shrink-0 select-none whitespace-nowrap">{idx + 1}.</span>
@@ -320,9 +384,16 @@ export const LoggingTab = ({
                                         onChange={(e) => handleUpdateItem(item.id, { productId: e.target.value })}
                                         className="w-full bg-transparent border-0 text-white focus:ring-0 outline-none cursor-pointer whitespace-nowrap text-[13px] py-0.5"
                                       >
-                                        {products
-                                          .filter(prod => filterDivision === "ALL" || prod.group === filterDivision)
-                                          .map((prod) => {
+                                        {(() => {
+                                          const available = products.filter((prod: any) => filterDivision === "ALL" || prod.group === filterDivision);
+                                          if (item.productId && !available.some((p: any) => p.id === item.productId)) {
+                                            const curP = products.find((p: any) => p.id === item.productId);
+                                            if (curP) available.push(curP);
+                                          }
+                                          const sorted = [...available].sort((a: any, b: any) => 
+                                            getProductModelCode(a.name).localeCompare(getProductModelCode(b.name))
+                                          );
+                                          return sorted.map((prod: any) => {
                                             const isChosenElsewhere = activeFormModelItems.some(
                                               (it: any) => it.id !== item.id && isSameProduct(it.productId, prod.id, products)
                                             );
@@ -336,7 +407,8 @@ export const LoggingTab = ({
                                                 {getProductModelCode(prod.name)} {isChosenElsewhere ? "(Đã có trong bảng)" : ""}
                                               </option>
                                             );
-                                          })}
+                                          });
+                                        })()}
                                       </select>
                                     </div>
                                   </td>
@@ -409,10 +481,38 @@ export const LoggingTab = ({
 
                           {/* 2. Add Row Button */}
                           <tr key="add-row-btn">
-                            <td colSpan={formSlots.length + 7} className="py-1 px-1 text-left bg-slate-900/30">
-                              <button type="button" onClick={handleAddNewItem} className="text-[10px] text-emerald-500 font-bold flex items-center gap-1 hover:text-emerald-400">
-                                <PlusCircle className="w-3 h-3" /> Thêm Model
-                              </button>
+                            <td colSpan={formSlots.length + 7} className="py-2 px-2 text-left bg-slate-900/30">
+                              <div className="flex items-center gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setModelModalDivision(filterDivision);
+                                    setModelSearchQuery("");
+                                    setIsAddModelModalOpen(true);
+                                  }}
+                                  className="text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-md font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer"
+                                  title="Tìm kiếm và chọn nhanh model để thêm vào bảng mà không bị nhảy"
+                                >
+                                  <PlusCircle className="w-3.5 h-3.5" /> Thêm Model (Tìm & Chọn)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleAddNewItem()}
+                                  className="text-[11px] text-slate-400 hover:text-emerald-400 flex items-center gap-1 transition cursor-pointer"
+                                  title="Thêm nhanh model tiếp theo vào bảng"
+                                >
+                                  + Thêm nhanh dòng mới
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleSyncModelsFromMonthlyPlan}
+                                  className="text-[11px] bg-sky-800/60 hover:bg-sky-700/80 text-sky-200 border border-sky-500/50 px-2.5 py-1 rounded-md font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer ml-auto"
+                                  title="Tự động đồng bộ và nạp đủ tất cả các model được lập kế hoạch trong KHSX Tháng cho ngày này"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                                  Nạp đủ Model từ KHSX Tháng {missingPlannedModels.length > 0 ? `(+${missingPlannedModels.length})` : "✓"}
+                                </button>
+                              </div>
                             </td>
                           </tr>
 
@@ -1624,6 +1724,171 @@ export const LoggingTab = ({
                   </button>
                 </div>
               )}
+
+              {/* Modal Chọn & Thêm Model Không Bị Nhảy Lung Tung */}
+              <AnimatePresence>
+                {isAddModelModalOpen && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                      animate={{ opacity: 1, scale: 1, y: 0 }}
+                      exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                      className="bg-slate-900 border border-slate-700/80 rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col max-h-[85vh]"
+                    >
+                      {/* Header */}
+                      <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+                        <div className="flex items-center gap-2">
+                          <PlusCircle className="w-5 h-5 text-emerald-400" />
+                          <h3 className="font-bold text-white text-base">Thêm Model Vào Bảng Nhật Ký Ca</h3>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setIsAddModelModalOpen(false)}
+                          className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition cursor-pointer"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      {/* Search & Filter */}
+                      <div className="p-4 border-b border-slate-800/80 space-y-3 bg-slate-900/90">
+                        <div className="relative">
+                          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input
+                            type="text"
+                            autoFocus
+                            value={modelSearchQuery}
+                            onChange={(e) => setModelSearchQuery(e.target.value)}
+                            placeholder="Gõ mã model cần tìm (VD: SHA7, SHA88, SHD, SHB...)..."
+                            className="w-full bg-slate-950 border border-slate-700 rounded-lg pl-9 pr-8 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500"
+                          />
+                          {modelSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setModelSearchQuery("")}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Division filter chips */}
+                        <div className="flex gap-1.5 flex-wrap">
+                          {[
+                            { id: "ALL", label: "Tất cả" },
+                            { id: "RO", label: "R.O" },
+                            { id: "BG", label: "Bếp Gas" },
+                            { id: "RMA", label: "Đồ Gia Dụng" }
+                          ].map(chip => (
+                            <button
+                              key={chip.id}
+                              type="button"
+                              onClick={() => setModelModalDivision(chip.id)}
+                              className={`text-xs px-2.5 py-1 rounded-md font-medium transition cursor-pointer ${
+                                modelModalDivision === chip.id
+                                  ? "bg-emerald-600 text-white font-bold"
+                                  : "bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white"
+                              }`}
+                            >
+                              {chip.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Product List */}
+                      <div className="p-3 overflow-y-auto flex-1 divide-y divide-slate-800/60 max-h-[420px]">
+                        {(() => {
+                          const query = modelSearchQuery.trim().toUpperCase();
+                          const filtered = products
+                            .filter((p: any) => modelModalDivision === "ALL" || p.group === modelModalDivision)
+                            .filter((p: any) => {
+                              if (!query) return true;
+                              const modelCode = getProductModelCode(p.name).toUpperCase();
+                              const code = (p.code || "").toUpperCase();
+                              const name = (p.name || "").toUpperCase();
+                              return modelCode.includes(query) || code.includes(query) || name.includes(query);
+                            })
+                            .sort((a: any, b: any) => getProductModelCode(a.name).localeCompare(getProductModelCode(b.name)));
+
+                          if (filtered.length === 0) {
+                            return (
+                              <div className="py-8 text-center text-slate-400 text-sm">
+                                Không tìm thấy model nào phù hợp với từ khóa "{modelSearchQuery}"
+                              </div>
+                            );
+                          }
+
+                          return filtered.map((prod: any) => {
+                            const modelCode = getProductModelCode(prod.name);
+                            const isAlreadyInTable = activeFormModelItems.some((it: any) =>
+                              isSameProduct(it.productId, prod.id, products)
+                            );
+
+                            return (
+                              <div
+                                key={prod.id}
+                                className={`py-2 px-3 flex items-center justify-between rounded-lg transition ${
+                                  isAlreadyInTable
+                                    ? "opacity-50 bg-slate-950/40"
+                                    : "hover:bg-slate-800/60"
+                                }`}
+                              >
+                                <div className="flex-1 min-w-0 pr-3">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-white text-sm">{modelCode}</span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
+                                      Hệ số: {prod.factor || 1}
+                                    </span>
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800/80 text-cyan-400">
+                                      {prod.group}
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-slate-400 truncate mt-0.5" title={prod.name}>
+                                    {prod.name}
+                                  </p>
+                                </div>
+                                <div>
+                                  {isAlreadyInTable ? (
+                                    <span className="text-xs text-amber-400 font-medium px-2.5 py-1 bg-amber-950/30 rounded border border-amber-800/40 select-none">
+                                      Đã có trong bảng
+                                    </span>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        handleAddNewItem(prod.id);
+                                        setIsAddModelModalOpen(false);
+                                        setModelSearchQuery("");
+                                      }}
+                                      className="text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg transition shadow-sm cursor-pointer flex items-center gap-1"
+                                    >
+                                      <PlusCircle className="w-3.5 h-3.5" /> Thêm vào bảng
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
+                      </div>
+
+                      {/* Footer */}
+                      <div className="p-3 border-t border-slate-800 bg-slate-950/40 flex justify-between items-center text-xs text-slate-400">
+                        <span>💡 Chọn model để thêm vào bảng, vị trí và số liệu được giữ nguyên</span>
+                        <button
+                          type="button"
+                          onClick={() => setIsAddModelModalOpen(false)}
+                          className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-white rounded-md transition cursor-pointer"
+                        >
+                          Đóng
+                        </button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
 
             </motion.div>
   );

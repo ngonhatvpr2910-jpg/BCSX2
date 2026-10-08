@@ -196,11 +196,11 @@ export function formatSlotLabel(slot: string): string {
 
 export function getProductModelCode(name: string): string {
   if (!name || typeof name !== "string") return "";
-  // Extract clean model code (e.g. SHA76222KL, SHA75102LA, SHB2106, MMBB0787B, etc.)
+  // Extract clean model code (e.g. SHA76222KL, SHA75102LA, SHD8657G, SHB2106, MMBB0787B, etc.)
   const words = name.replace(/[()]/g, ' ').split(/\s+/);
   for (const word of words) {
     const cleanWord = word.trim();
-    if (/^(SHA|SHB|MMB|BBD)[A-Z0-9-]+$/i.test(cleanWord)) {
+    if (/^(SHA|SHB|SHD|MMB|MMBB|BBD)[A-Z0-9-]+$/i.test(cleanWord)) {
       return cleanWord.toUpperCase();
     }
   }
@@ -275,7 +275,7 @@ export function isSameProduct(id1?: string, id2?: string, prodList: any[] = []):
   return false;
 }
 
-// Hàm đảm bảo 1 bảng nhật ký ca KHÔNG BAO GIỜ có 2 model sản xuất trùng nhau
+// Hàm đảm bảo 1 bảng nhật ký ca KHÔNG BAO GIỜ có 2 model sản xuất trùng nhau, giữ thứ tự ổn định không nhảy
 export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[] = []): FormModelItem[] {
   if (!items || items.length === 0) return [];
   const result: FormModelItem[] = [];
@@ -289,10 +289,11 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
       return isSameProduct(r.productId, item.productId, prodList);
     });
 
-    if (existingIndex === -1 && !seenKeys.has(modelKey)) {
+    if (existingIndex === -1 && (!modelKey || !seenKeys.has(modelKey))) {
       if (modelKey) seenKeys.add(modelKey);
       result.push({
         ...item,
+        id: item.id || `item-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
         hourlyActuals: { ...(item.hourlyActuals || {}) }
       });
     } else {
