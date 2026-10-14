@@ -73,6 +73,15 @@ function setLocal<T>(key: string, data: T): void {
   }
 }
 
+// Helper timeout chống treo/đợi chờ quá lâu khi mạng chập chờn
+function withTimeout<T>(promiseOrBuilder: any, ms = 4000): Promise<T> {
+  const promise: Promise<T> = Promise.resolve(promiseOrBuilder);
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('Supabase timeout')), ms))
+  ]);
+}
+
 // Định danh duy nhất cho phiên trình duyệt/tab hiện tại để lọc bỏ phản hồi ngược (self-echo)
 export const CLIENT_SESSION_ID = typeof window !== 'undefined'
   ? ((window as any).__SUNHOUSE_CLIENT_ID ||= 'cli_' + Math.random().toString(36).slice(2, 9) + '_' + Date.now())
@@ -215,19 +224,25 @@ export async function getWorkers(): Promise<Worker[]> {
   if (supabase && isSupabaseConfigured) {
     try {
       // Tối ưu Egress: Chỉ select đúng các cột cần hiển thị trên bảng, tuyệt đối KHÔNG dùng '*'
-      let res: any = await supabase
-        .from('workers')
-        .select('id, name, division, type, qr_code, image_url')
-        .order('id', { ascending: true })
-        .limit(5000);
+      let res: any = await withTimeout(
+        supabase
+          .from('workers')
+          .select('id, name, division, type, qr_code, image_url')
+          .order('id', { ascending: true })
+          .limit(5000),
+        4000
+      );
 
       // Hỗ trợ trường hợp bảng dùng tên cột biến thể (worker_code, full_name, department, status)
       if (res.error && res.error.message?.includes('does not exist')) {
-        res = await supabase
-          .from('workers')
-          .select('id, worker_code, full_name, department, status')
-          .order('id', { ascending: true })
-          .limit(5000);
+        res = await withTimeout(
+          supabase
+            .from('workers')
+            .select('id, worker_code, full_name, department, status')
+            .order('id', { ascending: true })
+            .limit(5000),
+          4000
+        );
       }
 
       if (res.error) throw res.error;
@@ -475,10 +490,13 @@ export async function getProducts(): Promise<ProductDefinition[]> {
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const { data, error } = await supabase
-        .from('products')
-        .select('id, name, group, code, factor, description, price')
-        .order('id', { ascending: true });
+      const { data, error } = await withTimeout<any>(
+        supabase
+          .from('products')
+          .select('id, name, group, code, factor, description, price')
+          .order('id', { ascending: true }),
+        4000
+      );
 
       if (error) throw error;
 
@@ -1361,6 +1379,7 @@ export async function getMonthlyMetrics(year: 2025 | 2026): Promise<MonthlyMetri
       if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
       if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
       if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+      if (m.month === 9) return { ...m, laborProductivityPercent: 130.98, actualProducts: 15456, equivalentProducts: 22667, productionMandays: 1916.46 };
       return m;
     });
   };
@@ -1397,6 +1416,7 @@ export async function saveMonthlyMetrics(year: 2025 | 2026, metrics: MonthlyMetr
     if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
     if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
     if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+    if (m.month === 9) return { ...m, laborProductivityPercent: 130.98, actualProducts: 15456, equivalentProducts: 22667, productionMandays: 1916.46 };
     return m;
   }) : metrics;
 
@@ -1449,19 +1469,22 @@ export async function getAllDailyReports(): Promise<AllDailyReportsBundle> {
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const { data, error } = await supabase
-        .from('daily_reports')
-        .select('id, report_type, report_data, updated_at')
-        .in('id', [
-          'gas_daily_reports',
-          'assembly_daily_reports',
-          'monthly_scrap_report',
-          'weekly_scrap_report',
-          'weekly_dclr_error',
-          'monthly_dclr_error',
-          'declared_imeis',
-          'scanned_imeis',
-        ]);
+      const { data, error } = await withTimeout<any>(
+        supabase
+          .from('daily_reports')
+          .select('id, report_type, report_data, updated_at')
+          .in('id', [
+            'gas_daily_reports',
+            'assembly_daily_reports',
+            'monthly_scrap_report',
+            'weekly_scrap_report',
+            'weekly_dclr_error',
+            'monthly_dclr_error',
+            'declared_imeis',
+            'scanned_imeis',
+          ]),
+        4000
+      );
 
       if (!error && data && data.length > 0) {
         data.forEach((row: any) => {

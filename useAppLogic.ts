@@ -14,15 +14,7 @@ export const useAppLogic = () => {
   // Trạng thái đồng bộ Supabase Cloud
   const isLoadedRef = useRef(false);
   // Nếu đã có dữ liệu cache trong localStorage thì vào app ngay lập tức (0ms), không để người dùng chờ đợi hay giật lag
-  const [isInitialLoading, setIsInitialLoading] = useState(() => {
-    try {
-      const hasLogs = !!localStorage.getItem("sunhouse_production_logs_v2");
-      const hasPlan = !!localStorage.getItem("sunhouse_monthly_plan_v2");
-      return !(hasLogs || hasPlan);
-    } catch (e) {
-      return true;
-    }
-  });
+  const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'local' | 'error'>(
     isSupabaseConfigured ? 'syncing' : 'local'
   );
@@ -234,6 +226,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
         if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
         if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+        if (m.month === 9) return { ...m, laborProductivityPercent: 130.98, actualProducts: 15456, equivalentProducts: 22667, productionMandays: 1916.46 };
       }
       return m;
     });
@@ -1911,7 +1904,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const updateYearMetrics = (year: 2025 | 2026, setMetrics: React.Dispatch<React.SetStateAction<MonthlyMetric[]>>) => {
       setMetrics((prevMetrics) => {
         const updated = prevMetrics.map((m) => {
-          if (year === 2026 && m.month <= 8) {
+          if (year === 2026 && m.month <= 9) {
             let res = { ...m };
             if (m.month === 1) { res.laborProductivityPercent = 90.14; res.productionMandays = 1790.86; res.equivalentProducts = 14577; res.actualProducts = 12747; }
             else if (m.month === 2) { res.laborProductivityPercent = 96.69; res.productionMandays = 1277.2; res.equivalentProducts = 11151; res.actualProducts = 7704; }
@@ -1921,6 +1914,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             else if (m.month === 6) { res.laborProductivityPercent = 131.6; res.productionMandays = 1848; res.equivalentProducts = 21962; res.actualProducts = 13000; }
             else if (m.month === 7) { res.laborProductivityPercent = 135.5; res.productionMandays = 1408; res.equivalentProducts = 17233; res.actualProducts = 13025; }
             else if (m.month === 8) { res.laborProductivityPercent = 133.6; res.productionMandays = 1625; res.equivalentProducts = 19601; res.actualProducts = 12615; }
+            else if (m.month === 9) { res.laborProductivityPercent = 130.98; res.productionMandays = 1916.46; res.equivalentProducts = 22667; res.actualProducts = 15456; }
             return res;
           }
           const monthLogs = yearMonthMap[year]?.[m.month];
@@ -1974,8 +1968,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   const refreshFromCloud = useCallback(async (isDeepSync = false) => {
     try {
       if (isSupabaseConfigured) {
-        setSyncStatus('syncing');
-        setSyncMessage(isDeepSync ? 'Đang thực hiện làm mới toàn diện từ Cloud...' : 'Đang tải dữ liệu từ Supabase Cloud...');
+        if (isDeepSync) {
+          setSyncStatus('syncing');
+          setSyncMessage('Đang thực hiện làm mới toàn diện từ Cloud...');
+        }
       } else {
         setSyncStatus('local');
         setSyncMessage('Chế độ Local (Chưa cấu hình Supabase)');
@@ -2056,6 +2052,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             if (m.month === 6) return { ...m, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000 };
             if (m.month === 7) return { ...m, laborProductivityPercent: 135.5, actualProducts: 13025, equivalentProducts: 17233, productionMandays: 1408 };
             if (m.month === 8) return { ...m, laborProductivityPercent: 133.6, actualProducts: 12615, equivalentProducts: 19601, productionMandays: 1625 };
+            if (m.month === 9) return { ...m, laborProductivityPercent: 130.98, actualProducts: 15456, equivalentProducts: 22667, productionMandays: 1916.46 };
           }
           return m;
         });
@@ -2147,7 +2144,10 @@ const [isScrolled, setIsScrolled] = useState(false);
     // Tự động dọn dẹp các bản nháp chưa ghi nhận của ngày hôm trước
     storage.cleanupAndOptimizeStorage();
 
-    refreshFromCloud();
+    // Tải ngầm từ Cloud sau khi đã hiển thị tức thì giao diện từ localStorage cache (0ms delay)
+    setTimeout(() => {
+      refreshFromCloud();
+    }, 150);
 
     // 1. Đăng ký Realtime đa bảng với cơ chế Update State trực tiếp từ Payload (Egress = 0 khi nhận thay đổi)
     const unsubscribe = storage.subscribeToRealtime({
@@ -2943,8 +2943,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     };
 
-    // Chu kỳ 30 giây chạy nền nhẹ nhàng, không gây nghẽn băng thông hay lag giật
-    const intervalId = setInterval(performHeartbeatSync, 30000);
+    // Chu kỳ 2 phút chạy nền nhẹ nhàng, không gây nghẽn băng thông hay lag giật
+    const intervalId = setInterval(performHeartbeatSync, 120000);
 
     const handleFocus = () => {
       performHeartbeatSync();
@@ -3247,8 +3247,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       const isLocked = (m.year === 2026 && m.month <= 9);
       const isAutoReportMonth = isLocked;
 
-      // Các tháng 1-8 năm 2026 được khóa và giữ nguyên dữ liệu chuẩn theo yêu cầu
-      if (m.year === 2026 && m.month <= 8) {
+      // Các tháng 1-9 năm 2026 được khóa và giữ nguyên dữ liệu chuẩn theo yêu cầu
+      if (m.year === 2026 && m.month <= 9) {
         let res = { ...m };
         if (m.month === 1) { res.laborProductivityPercent = 90.14; res.productionMandays = 1790.86; res.equivalentProducts = 14577; res.actualProducts = 12747; }
         else if (m.month === 2) { res.laborProductivityPercent = 96.69; res.productionMandays = 1277.2; res.equivalentProducts = 11151; res.actualProducts = 7704; }
@@ -3258,6 +3258,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         else if (m.month === 6) { res.laborProductivityPercent = 131.6; res.productionMandays = 1848; res.equivalentProducts = 21962; res.actualProducts = 13000; }
         else if (m.month === 7) { res.laborProductivityPercent = 135.5; res.productionMandays = 1408; res.equivalentProducts = 17233; res.actualProducts = 13025; }
         else if (m.month === 8) { res.laborProductivityPercent = 133.6; res.productionMandays = 1625; res.equivalentProducts = 19601; res.actualProducts = 12615; }
+        else if (m.month === 9) { res.laborProductivityPercent = 130.98; res.productionMandays = 1916.46; res.equivalentProducts = 22667; res.actualProducts = 15456; }
         return res;
       }
 

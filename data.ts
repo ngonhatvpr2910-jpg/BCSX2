@@ -222,7 +222,7 @@ export const HISTORICAL_2026: MonthlyMetric[] = [
   { year: 2026, month: 6, laborProductivityPercent: 131.6, productionMandays: 1848, equivalentProducts: 21962, actualProducts: 13000, attendanceRatePercent: null },
   { year: 2026, month: 7, laborProductivityPercent: 135.5, productionMandays: 1408, equivalentProducts: 17233, actualProducts: 13025, attendanceRatePercent: null },
   { year: 2026, month: 8, laborProductivityPercent: 133.6, productionMandays: 1625, equivalentProducts: 19601, actualProducts: 12615, attendanceRatePercent: null },
-  { year: 2026, month: 9, laborProductivityPercent: null, productionMandays: null, equivalentProducts: null, attendanceRatePercent: null },
+  { year: 2026, month: 9, laborProductivityPercent: 130.98, actualProducts: 15456, equivalentProducts: 22667, productionMandays: 1916.46, attendanceRatePercent: null },
   { year: 2026, month: 10, laborProductivityPercent: null, productionMandays: null, equivalentProducts: null, attendanceRatePercent: null },
   { year: 2026, month: 11, laborProductivityPercent: null, productionMandays: null, equivalentProducts: null, attendanceRatePercent: null },
   { year: 2026, month: 12, laborProductivityPercent: null, productionMandays: null, equivalentProducts: null, attendanceRatePercent: null },
