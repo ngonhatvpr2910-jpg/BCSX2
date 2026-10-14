@@ -1,4 +1,4 @@
-import { DigitalClock } from "./appUtils";
+import { DigitalClock, deduplicateProductDefinitions, isSameProduct } from "./appUtils";
 
 import { SystemDataTab } from './SystemDataTab';
 import { AnalyticsTab } from './AnalyticsTab';
@@ -1125,60 +1125,72 @@ export default function App() {
                   Chọn sản phẩm từ danh mục cấu hình để đưa vào bảng lập kế hoạch sản xuất tháng:
                 </p>
 
-                {products.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) === undefined && (filterDivision === "ALL" || p.group === filterDivision)).length === 0 ? (
-                  <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-lg text-center">
-                    <p className="text-xs text-amber-400 font-sans">
-                      🎉 Tất cả sản phẩm trong cấu hình đều đã có mặt trong Kế hoạch tháng!
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block font-bold">Chọn sản phẩm</label>
-                      <select
-                        value={selectedProductToAdd}
-                        onChange={(e) => setSelectedProductToAdd(e.target.value)}
-                        className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-emerald-500 font-sans cursor-pointer"
-                        id="select-product-to-add"
-                      >
-                        <option value="">-- Chọn một mã hàng --</option>
-                        {products
-                          .filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) === undefined && (filterDivision === "ALL" || p.group === filterDivision))
-                          .map(p => (
+                {(() => {
+                  const dedupedProducts = deduplicateProductDefinitions(products);
+                  const planKeys = Object.keys(monthlyPlan[currentYearMonth] || {});
+                  const unplanned = dedupedProducts.filter(p => {
+                    if (filterDivision !== "ALL" && p.group !== filterDivision) return false;
+                    if (monthlyPlan[currentYearMonth]?.[p.id] !== undefined) return false;
+                    const alreadyPresent = planKeys.some(k => isSameProduct(k, p.id, products));
+                    return !alreadyPresent;
+                  });
+
+                  if (unplanned.length === 0) {
+                    return (
+                      <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-lg text-center">
+                        <p className="text-xs text-amber-400 font-sans">
+                          🎉 Tất cả sản phẩm trong cấu hình đều đã có mặt trong Kế hoạch tháng!
+                        </p>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-4">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase font-mono tracking-wider text-slate-400 block font-bold">Chọn sản phẩm</label>
+                        <select
+                          value={selectedProductToAdd}
+                          onChange={(e) => setSelectedProductToAdd(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-emerald-500 font-sans cursor-pointer"
+                          id="select-product-to-add"
+                        >
+                          <option value="">-- Chọn một mã hàng --</option>
+                          {unplanned.map(p => (
                             <option key={p.id} value={p.id}>
                               {p.code} - {p.name} ({p.group})
                             </option>
                           ))}
-                      </select>
-                    </div>
+                        </select>
+                      </div>
 
-                    <div className="flex items-center gap-2 pt-2">
-                      <button
-                        onClick={() => {
-                          const unplanned = products.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) === undefined && (filterDivision === "ALL" || p.group === filterDivision));
-                          if (unplanned.length === 0) return;
-                          if (window.confirm(`Thêm nhanh toàn bộ ${unplanned.length} mã hàng chưa lập kế hoạch vào bảng KHSX tháng?`)) {
-                            setMonthlyPlan(prev => {
-                              const next = { ...prev };
-                              if (!next[currentYearMonth]) next[currentYearMonth] = {};
-                              unplanned.forEach(p => {
-                                next[currentYearMonth][p.id] = {};
+                      <div className="flex items-center gap-2 pt-2">
+                        <button
+                          onClick={() => {
+                            if (unplanned.length === 0) return;
+                            if (window.confirm(`Thêm nhanh toàn bộ ${unplanned.length} mã hàng chưa lập kế hoạch vào bảng KHSX tháng?`)) {
+                              setMonthlyPlan(prev => {
+                                const next = { ...prev };
+                                if (!next[currentYearMonth]) next[currentYearMonth] = {};
+                                unplanned.forEach(p => {
+                                  next[currentYearMonth][p.id] = {};
+                                });
+                                return next;
                               });
-                              return next;
-                            });
-                            setFormMessage(`✅ Đã thêm tất cả mã hàng vào Kế hoạch tháng!`);
-                            setTimeout(() => setFormMessage(""), 2000);
-                            setIsAddPlanModalOpen(false);
-                          }
-                        }}
-                        className="w-full py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700 hover:border-slate-600 rounded text-xs font-semibold transition cursor-pointer text-center font-sans"
-                        id="btn-add-all-unplanned"
-                      >
-                        Thêm nhanh tất cả ({products.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) === undefined).length})
-                      </button>
+                              setFormMessage(`✅ Đã thêm tất cả mã hàng vào Kế hoạch tháng!`);
+                              setTimeout(() => setFormMessage(""), 2000);
+                              setIsAddPlanModalOpen(false);
+                            }
+                          }}
+                          className="w-full py-2 bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700 hover:border-slate-600 rounded text-xs font-semibold transition cursor-pointer text-center font-sans"
+                          id="btn-add-all-unplanned"
+                        >
+                          Thêm nhanh tất cả ({unplanned.length})
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
 
               <div className="p-4 bg-slate-950/40 border-t border-slate-800/60 flex justify-end gap-2">
@@ -1189,29 +1201,32 @@ export default function App() {
                 >
                   Đóng
                 </button>
-                {products.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) === undefined).length > 0 && (
-                  <button
-                    onClick={() => {
-                      if (!selectedProductToAdd) return;
-                      setMonthlyPlan(prev => {
-                        const next = { ...prev };
-                        if (!next[currentYearMonth]) next[currentYearMonth] = {};
-                        next[currentYearMonth][selectedProductToAdd] = {};
-                        return next;
-                      });
-                      const p = products.find(item => item.id === selectedProductToAdd);
-                      setFormMessage(`✅ Đã thêm mã hàng ${p?.code || ""} vào Kế hoạch tháng!`);
-                      setTimeout(() => setFormMessage(""), 2000);
-                      setIsAddPlanModalOpen(false);
-                      setSelectedProductToAdd("");
-                    }}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs transition cursor-pointer font-sans"
-                    disabled={!selectedProductToAdd}
-                    id="btn-confirm-add-plan"
-                  >
-                    Thêm vào Kế Hoạch
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    if (!selectedProductToAdd) return;
+                    setMonthlyPlan(prev => {
+                      const next = { ...prev };
+                      if (!next[currentYearMonth]) next[currentYearMonth] = {};
+                      // Check if already exists under canonical match
+                      const existingMatchKey = Object.keys(next[currentYearMonth]).find(k => isSameProduct(k, selectedProductToAdd, products));
+                      const targetKey = existingMatchKey || selectedProductToAdd;
+                      if (!next[currentYearMonth][targetKey]) {
+                        next[currentYearMonth][targetKey] = {};
+                      }
+                      return next;
+                    });
+                    const p = products.find(item => item.id === selectedProductToAdd);
+                    setFormMessage(`✅ Đã thêm mã hàng ${p?.code || ""} vào Kế hoạch tháng!`);
+                    setTimeout(() => setFormMessage(""), 2000);
+                    setIsAddPlanModalOpen(false);
+                    setSelectedProductToAdd("");
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded text-xs transition cursor-pointer font-sans"
+                  disabled={!selectedProductToAdd}
+                  id="btn-confirm-add-plan"
+                >
+                  Thêm vào Kế Hoạch
+                </button>
               </div>
             </motion.div>
           </div>

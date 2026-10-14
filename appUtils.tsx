@@ -194,85 +194,144 @@ export function formatSlotLabel(slot: string): string {
   return slot.trim();
 }
 
-export function getProductModelCode(name: string): string {
-  if (!name || typeof name !== "string") return "";
-  // Extract clean model code (e.g. SHA76222KL, SHA75102LA, SHD8657G, SHB2106, MMBB0787B, etc.)
-  const words = name.replace(/[()]/g, ' ').split(/\s+/);
+export function cleanModelCode(str: string): string {
+  if (!str || typeof str !== "string") return "";
+  let s = str.trim().toUpperCase();
+  // Loại bỏ các tiền tố quản lý nội bộ nhà máy (BBDK2, BBDK, BBD, RMV, RRO1, MMKRO, MMLN)
+  s = s.replace(/^(BBDK2|BBDK|BBD|RMV|RRO1|MMKRO|MMLN)/i, "");
+  return s;
+}
+
+export function getProductModelCode(name: string, fallbackCode?: string): string {
+  if (!name && !fallbackCode) return "";
+  const text = ((name || "") + " " + (fallbackCode || "")).normalize("NFC");
+  const words = text.replace(/[\(\)\[\],\-_\/]/g, " ").split(/\s+/);
+  
+  // Ưu tiên các họ model chuẩn của Sunhouse: SHA, SHB, SHD, MMB, MMBB, APB, MH
   for (const word of words) {
-    const cleanWord = word.trim();
-    if (/^(SHA|SHB|SHD|MMB|MMBB|BBD)[A-Z0-9-]+$/i.test(cleanWord)) {
+    const cleanWord = cleanModelCode(word);
+    if (/^(SHA|SHB|SHD|MMB|MMBB|APB|MH)[A-Z0-9-]+$/i.test(cleanWord)) {
       return cleanWord.toUpperCase();
     }
   }
+  
+  // Nhận diện mã có cả chữ cái và số độ dài >= 4
   for (const word of words) {
-    const cleanWord = word.trim();
+    const cleanWord = cleanModelCode(word);
     if (/[A-Z]/.test(cleanWord) && /[0-9]/.test(cleanWord) && cleanWord.length >= 4) {
-      return cleanWord;
+      return cleanWord.toUpperCase();
     }
   }
-  return name;
+  
+  if (fallbackCode) return cleanModelCode(fallbackCode);
+  return cleanModelCode(name);
 }
 
 export const YAXIS_DOMAIN: [number, "auto"] = [0, "auto"];
 
-export function getModelKeyForItem(productId?: string, prodList: any[] = []): string {
-  if (!productId) return '';
-  const c = String(productId).trim().toUpperCase();
-  const p = prodList.find(x => 
+// Lấy Canonical Key đại diện duy nhất cho một Model
+export function getCanonicalProductKey(prodOrId: any, prodList: any[] = []): string {
+  if (!prodOrId) return "";
+  if (typeof prodOrId === "object") {
+    const extracted = getProductModelCode(prodOrId.name, prodOrId.code);
+    if (extracted) return extracted.toUpperCase();
+    if (prodOrId.code) return cleanModelCode(prodOrId.code);
+    return String(prodOrId.id || "").trim().toUpperCase();
+  }
+
+  const c = String(prodOrId).trim().toUpperCase();
+  const found = prodList.find(x => 
     (x.id && String(x.id).trim().toUpperCase() === c) || 
     (x.code && String(x.code).trim().toUpperCase() === c) || 
-    (x.name && getProductModelCode(x.name).trim().toUpperCase() === c)
+    (x.code && cleanModelCode(x.code) === cleanModelCode(c)) ||
+    (x.name && getProductModelCode(x.name, x.code) === c)
   );
-  if (p) {
-    const code = getProductModelCode(p.name);
-    if (code) return code.trim().toUpperCase();
-    if (p.code) return String(p.code).trim().toUpperCase();
-    return String(p.id).trim().toUpperCase();
+
+  if (found) {
+    const code = getProductModelCode(found.name, found.code);
+    if (code) return code.toUpperCase();
+    if (found.code) return cleanModelCode(found.code);
+    return String(found.id).trim().toUpperCase();
   }
-  const extracted = getProductModelCode(c);
-  return extracted ? extracted.trim().toUpperCase() : c;
+
+  const directExtracted = getProductModelCode(c);
+  return directExtracted ? directExtracted.toUpperCase() : cleanModelCode(c);
 }
 
-// So khớp sản phẩm thông minh (theo ID, Code hoặc Model name)
+export function getModelKeyForItem(productId?: string, prodList: any[] = []): string {
+  return getCanonicalProductKey(productId, prodList);
+}
+
+// So khớp sản phẩm thông minh chuẩn hóa 100% (theo ID, Code hoặc Canonical Model key)
 export function isSameProduct(id1?: string, id2?: string, prodList: any[] = []): boolean {
   if (!id1 || !id2) return false;
   const c1 = String(id1).trim().toUpperCase();
   const c2 = String(id2).trim().toUpperCase();
   if (c1 === c2) return true;
 
-  const k1 = getModelKeyForItem(id1, prodList);
-  const k2 = getModelKeyForItem(id2, prodList);
+  const k1 = getCanonicalProductKey(id1, prodList);
+  const k2 = getCanonicalProductKey(id2, prodList);
   if (k1 && k2 && k1 === k2) return true;
 
   const p1 = prodList.find(p => 
     (p.id && String(p.id).toUpperCase() === c1) || 
-    (p.code && String(p.code).toUpperCase() === c1) || 
-    (p.name && getProductModelCode(p.name).toUpperCase() === c1)
+    (p.code && String(p.code).toUpperCase() === c1) ||
+    (p.code && cleanModelCode(p.code) === cleanModelCode(c1)) ||
+    (p.name && getProductModelCode(p.name, p.code).toUpperCase() === c1)
   );
   const p2 = prodList.find(p => 
     (p.id && String(p.id).toUpperCase() === c2) || 
     (p.code && String(p.code).toUpperCase() === c2) || 
-    (p.name && getProductModelCode(p.name).toUpperCase() === c2)
+    (p.code && cleanModelCode(p.code) === cleanModelCode(c2)) ||
+    (p.name && getProductModelCode(p.name, p.code).toUpperCase() === c2)
   );
 
   if (p1 && p2) {
     if (p1.id === p2.id) return true;
-    const m1 = getProductModelCode(p1.name).toUpperCase();
-    const m2 = getProductModelCode(p2.name).toUpperCase();
+    const m1 = getProductModelCode(p1.name, p1.code).toUpperCase();
+    const m2 = getProductModelCode(p2.name, p2.code).toUpperCase();
     if (m1 && m2 && m1 === m2) return true;
   }
   if (p1 && (
     (p1.id && String(p1.id).toUpperCase() === c2) || 
     (p1.code && String(p1.code).toUpperCase() === c2) || 
-    (p1.name && getProductModelCode(p1.name).toUpperCase() === c2)
+    (p1.name && getProductModelCode(p1.name, p1.code).toUpperCase() === c2)
   )) return true;
   if (p2 && (
     (p2.id && String(p2.id).toUpperCase() === c1) || 
     (p2.code && String(p2.code).toUpperCase() === c1) || 
-    (p2.name && getProductModelCode(p2.name).toUpperCase() === c1)
+    (p2.name && getProductModelCode(p2.name, p2.code).toUpperCase() === c1)
   )) return true;
 
   return false;
+}
+
+// Khử trùng lặp danh mục sản phẩm hoàn toàn (chỉ giữ 1 bản ghi duy nhất cho mỗi model)
+export function deduplicateProductDefinitions<T extends { id?: string; name?: string; code?: string; group?: string; factor?: number; price?: number; description?: string }>(prods: T[]): T[] {
+  if (!prods || prods.length === 0) return [];
+  const groups = new Map<string, T[]>();
+
+  for (const p of prods) {
+    const key = getProductModelCode(p.name || "", p.code || "").toUpperCase() || cleanModelCode(p.code || "").toUpperCase() || (p.id || "");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(p);
+  }
+
+  const result: T[] = [];
+  for (const [, items] of groups.entries()) {
+    // Ưu tiên chọn ID chuẩn tiêu chuẩn (mln-, bg-, rma-) hoặc ID ngắn gọn
+    items.sort((a, b) => {
+      const aStd = /^(mln|bg|rma)-/i.test(a.id || "");
+      const bStd = /^(mln|bg|rma)-/i.test(b.id || "");
+      if (aStd && !bStd) return -1;
+      if (!aStd && bStd) return 1;
+      return (a.id || "").localeCompare(b.id || "");
+    });
+    const canonical = items[0];
+    result.push(canonical);
+  }
+
+  return result;
 }
 
 // Hàm đảm bảo 1 bảng nhật ký ca KHÔNG BAO GIỜ có 2 model sản xuất trùng nhau, giữ thứ tự ổn định không nhảy
@@ -283,9 +342,9 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
 
   for (const item of items) {
     if (!item.productId) continue;
-    const modelKey = getModelKeyForItem(item.productId, prodList);
+    const modelKey = getCanonicalProductKey(item.productId, prodList);
     const existingIndex = result.findIndex(r => {
-      if (modelKey && getModelKeyForItem(r.productId, prodList) === modelKey) return true;
+      if (modelKey && getCanonicalProductKey(r.productId, prodList) === modelKey) return true;
       return isSameProduct(r.productId, item.productId, prodList);
     });
 
@@ -298,7 +357,7 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
       });
     } else {
       // Gộp sản lượng của model trùng lặp vào dòng đầu tiên
-      const targetIndex = existingIndex !== -1 ? existingIndex : result.findIndex(r => getModelKeyForItem(r.productId, prodList) === modelKey);
+      const targetIndex = existingIndex !== -1 ? existingIndex : result.findIndex(r => getCanonicalProductKey(r.productId, prodList) === modelKey);
       if (targetIndex !== -1) {
         const existing = result[targetIndex];
         const mergedActuals: { [k: string]: number } = { ...existing.hourlyActuals };

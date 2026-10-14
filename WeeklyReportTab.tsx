@@ -161,7 +161,7 @@ export const WeeklyReportTab = ({
                         ))}
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs border-l-2 border-l-slate-300 !text-rose-600">{weeklyReportData.grandTotal.plan?.toLocaleString()}</td>
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs !text-blue-700">{weeklyReportData.grandTotal.actual?.toLocaleString()}</td>
-                        <td className="px-2 py-3 text-center font-mono text-xs">{(() => { const diff = weeklyReportData.grandTotal.allTimeActual - weeklyReportData.grandTotal.allTimePlan; return <span className={diff < 0 ? "!text-rose-600" : "text-black"}>{diff < 0 ? `(${Math.abs(diff).toLocaleString()})` : diff === 0 ? "-" : diff.toLocaleString()}</span>; })()}</td>
+                        <td className="px-2 py-3 text-center font-mono text-xs">{(() => { const diff = (weeklyReportData.grandTotal.actual || 0) - (weeklyReportData.grandTotal.plan || 0); return <span className={diff < 0 ? "!text-rose-600" : "text-black"}>{diff < 0 ? `(${Math.abs(diff).toLocaleString()})` : diff === 0 ? "-" : diff.toLocaleString()}</span>; })()}</td>
                       </tr>
 
                       {/* Converted Total */}
@@ -177,7 +177,7 @@ export const WeeklyReportTab = ({
                         ))}
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs border-l-2 border-l-slate-300 !text-rose-600">{Number((weeklyReportData.grandTotal.planEq || 0).toFixed(2)).toLocaleString()}</td>
                         <td className="px-2 py-3 border-r border-slate-300 text-center font-mono text-xs !text-blue-700">{Number((weeklyReportData.grandTotal.actualEq || 0).toFixed(2)).toLocaleString()}</td>
-                        <td className="px-2 py-3 text-center font-mono text-xs">{(() => { const diff = Number((weeklyReportData.grandTotal.allTimeActualEq - weeklyReportData.grandTotal.allTimePlanEq).toFixed(2)); return <span className={diff < 0 ? "!text-rose-600" : "text-black"}>{diff < 0 ? `(${Math.abs(diff).toLocaleString()})` : diff === 0 ? "-" : diff.toLocaleString()}</span>; })()}</td>
+                        <td className="px-2 py-3 text-center font-mono text-xs">{(() => { const diff = Number(((weeklyReportData.grandTotal.actualEq || 0) - (weeklyReportData.grandTotal.planEq || 0)).toFixed(2)); return <span className={diff < 0 ? "!text-rose-600" : "text-black"}>{diff < 0 ? `(${Math.abs(diff).toLocaleString()})` : diff === 0 ? "-" : diff.toLocaleString()}</span>; })()}</td>
                       </tr>
 
                       {/* Workers Total */}

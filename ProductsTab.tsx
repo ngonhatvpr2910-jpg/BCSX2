@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, deduplicateProductDefinitions } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo } from 'react';
@@ -42,6 +42,8 @@ export const ProductsTab = ({
   prodFormDescription,
   handleCancelProductEdit
 }: any) => {
+  const displayProducts = useMemo(() => deduplicateProductDefinitions(products), [products]);
+
   return (
     <motion.div
               key="products"
@@ -201,7 +203,7 @@ export const ProductsTab = ({
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-200 text-slate-700 bg-white">
-                          {products.map((prod) => (
+                          {displayProducts.map((prod) => (
                             <tr
                               key={prod.id}
                               className={`hover:bg-slate-50/50 transition ${

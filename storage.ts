@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { isValidHourlySlot } from './appUtils';
+import { isValidHourlySlot, deduplicateProductDefinitions, getProductModelCode, cleanModelCode, isSameProduct } from './appUtils';
 import {
   Worker,
   WorkerDivision,
@@ -492,33 +492,41 @@ export async function getProducts(): Promise<ProductDefinition[]> {
           description: row.description || '',
           price: row.price !== null ? Number(row.price) : undefined,
         }));
-        setLocal(STORAGE_KEYS.PRODUCTS, mapped);
-        return mapped;
+        const deduped = deduplicateProductDefinitions(mapped);
+        setLocal(STORAGE_KEYS.PRODUCTS, deduped);
+        return deduped;
       }
     } catch (err) {
       console.warn('[storage] Không thể tải products từ Supabase, dùng local fallback:', err);
     }
   }
-  return getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, defaultProducts);
+  const fallback = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, defaultProducts);
+  return deduplicateProductDefinitions(fallback);
 }
 
 export async function saveProduct(product: ProductDefinition): Promise<void> {
   const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
-  const updated = localList.some((p) => p.id === product.id)
-    ? localList.map((p) => (p.id === product.id ? product : p))
-    : [...localList, product];
-  setLocal(STORAGE_KEYS.PRODUCTS, updated);
+  // Tìm xem sản phẩm này đã tồn tại theo ID hoặc theo mã model chưa
+  const existing = localList.find((p) => p.id === product.id || isSameProduct(p.id, product.id, localList) || (p.code && cleanModelCode(p.code) === cleanModelCode(product.code)));
+  const canonicalId = existing ? existing.id : product.id;
+  const canonicalProduct = { ...product, id: canonicalId };
+
+  const updated = localList.some((p) => p.id === canonicalId)
+    ? localList.map((p) => (p.id === canonicalId ? canonicalProduct : p))
+    : [...localList, canonicalProduct];
+  const deduped = deduplicateProductDefinitions(updated);
+  setLocal(STORAGE_KEYS.PRODUCTS, deduped);
 
   if (supabase && isSupabaseConfigured) {
     try {
       const { error } = await supabase.from('products').upsert({
-        id: product.id,
-        name: product.name,
-        group: product.group,
-        code: product.code,
-        factor: product.factor,
-        description: product.description || '',
-        price: product.price ?? null,
+        id: canonicalProduct.id,
+        name: canonicalProduct.name,
+        group: canonicalProduct.group,
+        code: canonicalProduct.code,
+        factor: canonicalProduct.factor,
+        description: canonicalProduct.description || '',
+        price: canonicalProduct.price ?? null,
       });
       if (error) console.warn('[storage] Lưu product lên Supabase:', error.message || error);
       broadcastTableUpdate('products');
@@ -546,13 +554,25 @@ export async function deleteProduct(id: string): Promise<void> {
 export async function upsertProducts(products: ProductDefinition[]): Promise<void> {
   if (!products || products.length === 0) return;
   const localList = getLocal<ProductDefinition[]>(STORAGE_KEYS.PRODUCTS, []);
+  const dedupedInputs = deduplicateProductDefinitions(products);
+
+  // Ánh xạ sang các sản phẩm đã có nếu trùng mã model
+  const normalizedInputs = dedupedInputs.map(p => {
+    const existing = localList.find(x => x.id === p.id || isSameProduct(x.id, p.id, localList) || (x.code && cleanModelCode(x.code) === cleanModelCode(p.code)));
+    if (existing) {
+      return { ...p, id: existing.id };
+    }
+    return p;
+  });
+
   const prodMap = new Map<string, ProductDefinition>(localList.map((p) => [p.id, p]));
-  products.forEach((p) => prodMap.set(p.id, p));
-  setLocal(STORAGE_KEYS.PRODUCTS, Array.from(prodMap.values()));
+  normalizedInputs.forEach((p) => prodMap.set(p.id, p));
+  const finalProducts = deduplicateProductDefinitions(Array.from(prodMap.values()));
+  setLocal(STORAGE_KEYS.PRODUCTS, finalProducts);
 
   if (supabase && isSupabaseConfigured) {
     try {
-      const rows = products.map((p) => ({
+      const rows = normalizedInputs.map((p) => ({
         id: p.id,
         name: p.name,
         group: p.group,
@@ -571,11 +591,12 @@ export async function upsertProducts(products: ProductDefinition[]): Promise<voi
 }
 
 export async function saveAllProducts(products: ProductDefinition[]): Promise<void> {
-  setLocal(STORAGE_KEYS.PRODUCTS, products);
+  const deduped = deduplicateProductDefinitions(products);
+  setLocal(STORAGE_KEYS.PRODUCTS, deduped);
 
-  if (supabase && isSupabaseConfigured && products.length > 0) {
+  if (supabase && isSupabaseConfigured && deduped.length > 0) {
     try {
-      const rows = products.map((p) => ({
+      const rows = deduped.map((p) => ({
         id: p.id,
         name: p.name,
         group: p.group,

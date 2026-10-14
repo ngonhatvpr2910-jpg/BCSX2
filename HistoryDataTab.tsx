@@ -1,7 +1,7 @@
 import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ComposedChart, ReferenceLine, LabelList
 } from 'recharts';
@@ -30,6 +30,31 @@ export const HistoryDataTab = ({
   productionLogs = [],
   syncHistoryFromLogs
 }: any) => {
+  // Quản lý trạng thái mở khóa mục tiêu các tháng (mặc định Tháng 9/2026 đã khóa theo yêu cầu)
+  const [unlockedMonths, setUnlockedMonths] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem("sunhouse_unlocked_history_months");
+      const parsed = saved ? JSON.parse(saved) : {};
+      // Khóa mục tiêu Tháng 9 năm 2026 theo yêu cầu
+      parsed["2026-9"] = false;
+      return parsed;
+    } catch {
+      return { "2026-9": false };
+    }
+  });
+
+  const toggleMonthLock = (year: number, month: number) => {
+    const key = `${year}-${month}`;
+    setUnlockedMonths(prev => {
+      const currentUnlocked = prev[key] ?? (year === 2026 && month > 9);
+      const nextState = { ...prev, [key]: !currentUnlocked };
+      try {
+        localStorage.setItem("sunhouse_unlocked_history_months", JSON.stringify(nextState));
+      } catch {}
+      return nextState;
+    });
+  };
+
   const currentYearLogsCount = useMemo(() => {
     return (productionLogs || []).filter((l: any) => l.date && l.date.startsWith(`${historyYear}-`)).length;
   }, [productionLogs, historyYear]);
@@ -94,6 +119,36 @@ export const HistoryDataTab = ({
                   </div>
                 </div>
 
+                {/* Banner thông báo trạng thái Tháng 9/2026 */}
+                {historyYear === 2026 && (
+                  <div className="bg-slate-900/60 border border-slate-800 px-4 py-3 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-inner">
+                    <div className="flex items-center gap-2.5 text-slate-300">
+                      <div className="w-7 h-7 rounded-full bg-slate-800 flex items-center justify-center shrink-0 border border-slate-700">
+                        <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-white flex items-center gap-2">
+                          Mục tiêu & Dữ liệu Tháng 9 năm 2026 đã được lưu khóa 🔒
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/80 text-amber-300 font-semibold border border-amber-800">Đã khóa chuẩn</span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">
+                          Số liệu và mục tiêu Tháng 9 năm 2026 đã được khóa bảo vệ an toàn. Bạn có thể bấm nút mở khóa tại dòng Tháng 9 nếu cần chỉnh sửa lại.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => toggleMonthLock(2026, 9)}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-amber-300 hover:text-amber-200 rounded-md font-bold text-xs transition cursor-pointer shadow-sm flex items-center gap-1.5"
+                      >
+                        <Unlock className="w-3.5 h-3.5" />
+                        Mở khóa Tháng 9
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse min-w-[800px]">
                     <thead>
@@ -107,15 +162,19 @@ export const HistoryDataTab = ({
                     </thead>
                       <tbody className="divide-y divide-slate-800/50">
                         {(historyYear === 2025 ? metrics2025 : processedMetrics2026).map((m) => {
-                          const now = new Date();
-                          const currentYear = now.getFullYear();
-                          const currentMonth = now.getMonth() + 1;
+                          const monthKey = `${historyYear}-${m.month}`;
+                          // Tháng 9 năm 2026 đã được khóa lại theo yêu cầu
+                          const isExplicitlyUnlocked = unlockedMonths[monthKey] ?? (historyYear === 2026 && m.month > 9);
 
-                          const isPast = historyYear < currentYear || (historyYear === currentYear && m.month < currentMonth);
-                          const isCurrent = historyYear === currentYear && m.month === currentMonth;
-                          const isLocked = isPast || isCurrent || (historyYear === 2026 && m.month <= 8);
-                          
-                          // Auto report for past and current months
+                          // Mặc định khóa các tháng 1-9 năm 2026
+                          const isBaseLocked = (historyYear === 2026 && m.month <= 9);
+                          const isLocked = !isExplicitlyUnlocked && isBaseLocked;
+
+                          const monthLogsCount = (productionLogs || []).filter(
+                            (l: any) => l.date && l.date.startsWith(`${historyYear}-${String(m.month).padStart(2, '0')}`)
+                          ).length;
+
+                          // Chỉ tự động báo cáo nếu ô bị khóa
                           const isAutoReportMonth = isLocked;
                           
                           const isLpLocked = isLocked;
@@ -123,16 +182,39 @@ export const HistoryDataTab = ({
                           const isEpLocked = isLocked;
                           const isPmLocked = isLocked;
 
-                          const monthLogsCount = (productionLogs || []).filter(
-                            (l: any) => l.date && l.date.startsWith(`${historyYear}-${String(m.month).padStart(2, '0')}`)
-                          ).length;
-
                           return (
                             <tr key={`history-row-${m.month}-${historyYear}`} className={`hover:bg-slate-900/50 transition-colors ${isLocked ? "bg-slate-950/20" : ""}`}>
                             <td className="py-2 px-2 text-sm font-medium text-slate-300">
                               <div className="flex items-center gap-1.5 flex-wrap">
-                                <span>Tháng {m.month}</span>
-                                {isLocked && <Lock className="w-2.5 h-2.5 text-slate-500" />}
+                                <span className={m.month === 9 && historyYear === 2026 ? "font-bold text-amber-300" : ""}>Tháng {m.month}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleMonthLock(historyYear, m.month)}
+                                  className={`p-1 rounded transition-colors text-xs inline-flex items-center gap-1 cursor-pointer ${
+                                    isLocked 
+                                      ? "text-slate-500 hover:text-amber-400 hover:bg-slate-800" 
+                                      : "text-emerald-400 hover:text-emerald-300 bg-emerald-950/80 border border-emerald-800/80 px-1.5 py-0.5"
+                                  }`}
+                                  title={isLocked ? `Bấm để mở khóa Tháng ${m.month}` : `Bấm để khóa lại Tháng ${m.month}`}
+                                >
+                                  {isLocked ? (
+                                    <Lock className="w-3 h-3 text-slate-500" />
+                                  ) : (
+                                    <>
+                                      <Unlock className="w-3 h-3 text-emerald-400" />
+                                      <span className="text-[10px] font-bold">Mở khóa</span>
+                                    </>
+                                  )}
+                                </button>
+                                {m.month === 9 && historyYear === 2026 && (
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border font-mono ${
+                                    isLocked 
+                                      ? "bg-slate-900 border-slate-700 text-slate-400" 
+                                      : "bg-amber-950/90 border-amber-700/80 text-amber-300"
+                                  }`}>
+                                    {isLocked ? "🔒 T9 Đã khóa" : "🔓 T9 Mở khóa"}
+                                  </span>
+                                )}
                                 {monthLogsCount > 0 && (
                                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-800 text-emerald-400 font-semibold" title={`Đã đồng bộ ${monthLogsCount} bản ghi nhật ký ca`}>
                                     {monthLogsCount} ca
@@ -345,7 +427,11 @@ export const HistoryDataTab = ({
                                       Mục tiêu: <span className="text-rose-400 font-semibold">{Number.isFinite(data.targetNSLD) ? `${data.targetNSLD}%` : "0%"}</span>
                                     </p>
                                     <div className="border-t border-slate-800/80 pt-1.5 mt-1 text-[10px] text-slate-500 space-y-0.5 font-mono">
-                                      {data.hasActualData && <p className="text-amber-500/85">🔒 Ô dữ liệu tháng này đã được lưu khóa</p>}
+                                      {unlockedMonths[`${historyYear}-${data.monthNum}`] || (historyYear === 2026 && data.monthNum > 9) ? (
+                                        <p className="text-emerald-400 font-semibold">🔓 Ô dữ liệu tháng này đang mở khóa tự do</p>
+                                      ) : (
+                                        <p className="text-amber-500/85">🔒 Ô dữ liệu tháng này đã được lưu khóa</p>
+                                      )}
                                     </div>
                                   </div>
                                 );
@@ -566,8 +652,37 @@ export const HistoryDataTab = ({
                         />
                       </div>
 
-                      <div className="pt-3 border-t border-slate-800 space-y-1.5">
-                        <p className="text-[10px] text-slate-500">Thiết lập nhanh cho cả năm {historyYear}:</p>
+                      <div className="pt-3 border-t border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[10px] text-slate-500">Phím tắt nhanh Tháng 9 & Cả năm:</p>
+                          <span className="text-[10px] font-mono text-amber-400 font-semibold">T9/2026: 🔒 Đã khóa</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTargetMonth(9);
+                            }}
+                            className={`py-1.5 px-2 rounded text-[10px] font-bold transition flex items-center justify-center gap-1 cursor-pointer border ${
+                              selectedTargetMonth === 9
+                                ? "bg-amber-950/80 text-amber-300 border-amber-600 shadow"
+                                : "bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-800"
+                            }`}
+                          >
+                            <Lock className="w-3 h-3 text-amber-400" />
+                            Mục tiêu T9 ({monthlyTargets[`${historyYear}-9`] || 110}%)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTargetMonth(9);
+                              updateMonthlyTarget(historyYear, 9, 110);
+                            }}
+                            className="bg-slate-900 hover:bg-slate-800 text-[10px] text-slate-300 py-1.5 px-2 rounded border border-slate-800 text-center font-bold transition cursor-pointer"
+                          >
+                            🎯 Đặt chuẩn T9 (110%)
+                          </button>
+                        </div>
                         <div className="grid grid-cols-2 gap-1.5">
                           <button
                             type="button"

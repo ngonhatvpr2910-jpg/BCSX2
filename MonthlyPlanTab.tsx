@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, deduplicateProductDefinitions } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo } from 'react';
@@ -32,6 +32,8 @@ export const MonthlyPlanTab = ({
   setExecutionFilterWeek,
   monthlyPlanExecution
 }: any) => {
+  const uniquePlanProducts = useMemo(() => deduplicateProductDefinitions(products), [products]);
+
   return (
     <motion.div
               key="monthly-plan"
@@ -91,14 +93,14 @@ export const MonthlyPlanTab = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/50">
-                      {products.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) !== undefined && (filterDivision === "ALL" || p.group === filterDivision)).length === 0 ? (
+                      {uniquePlanProducts.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) !== undefined && (filterDivision === "ALL" || p.group === filterDivision)).length === 0 ? (
                         <tr key="empty-monthly-plan">
                           <td colSpan={33} className="py-12 text-center text-slate-400 text-xs font-sans bg-slate-950">
                             Chưa có mã hàng nào trong Kế hoạch tháng. Hãy bấm <strong className="text-emerald-400">"Thêm Kế Hoạch"</strong> hoặc <strong className="text-emerald-400">"Import Excel"</strong> để bắt đầu.
                           </td>
                         </tr>
                       ) : (
-                        products.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) !== undefined && (filterDivision === "ALL" || p.group === filterDivision)).map(p => (
+                        uniquePlanProducts.filter(p => (monthlyPlan[currentYearMonth]?.[p.id]) !== undefined && (filterDivision === "ALL" || p.group === filterDivision)).map(p => (
                           <tr key={p.id} className="hover:bg-slate-800/30 transition">
                             <td className="py-1.5 px-3 font-mono text-[11px] text-slate-300 border-r border-slate-800 sticky left-0 z-10 bg-slate-950 font-bold truncate min-w-[120px] w-[120px] max-w-[120px]" title={p.code}>
                               {p.code}

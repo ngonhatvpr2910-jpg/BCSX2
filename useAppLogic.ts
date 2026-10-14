@@ -6,20 +6,41 @@ import {
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
-import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems } from './appUtils';
+import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey } from './appUtils';
 import * as storage from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 export const useAppLogic = () => {
   // Trạng thái đồng bộ Supabase Cloud
   const isLoadedRef = useRef(false);
-  const [isInitialLoading, setIsInitialLoading] = useState(true);
+  // Nếu đã có dữ liệu cache trong localStorage thì vào app ngay lập tức (0ms), không để người dùng chờ đợi hay giật lag
+  const [isInitialLoading, setIsInitialLoading] = useState(() => {
+    try {
+      const hasLogs = !!localStorage.getItem("sunhouse_production_logs_v2");
+      const hasPlan = !!localStorage.getItem("sunhouse_monthly_plan_v2");
+      return !(hasLogs || hasPlan);
+    } catch (e) {
+      return true;
+    }
+  });
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'local' | 'error'>(
     isSupabaseConfigured ? 'syncing' : 'local'
   );
   const [syncMessage, setSyncMessage] = useState<string>(
-    isSupabaseConfigured ? 'Đang kết nối Supabase Cloud...' : 'Chế độ Local (Chưa cấu hình Supabase)'
+    isSupabaseConfigured ? 'Đang đồng bộ trực tuyến ngầm...' : 'Chế độ Local (Chưa cấu hình Supabase)'
   );
+
+  // Khóa chống Echo Loop và chống ghi đè dữ liệu vô hạn lên Supabase
+  const lastSavedMetrics2025Ref = useRef<string>('');
+  const lastSavedMetrics2026Ref = useRef<string>('');
+  const lastSavedTargetsRef = useRef<string>('');
+  const lastSavedPlanRef = useRef<string>('');
+  const lastSavedGasRef = useRef<string>('');
+  const lastSavedAssemblyRef = useRef<string>('');
+  const lastSavedMonthlyScrapRef = useRef<string>('');
+  const lastSavedWeeklyScrapRef = useRef<string>('');
+  const lastSavedWeeklyDclrRef = useRef<string>('');
+  const lastSavedMonthlyDclrRef = useRef<string>('');
 
   // Quản lý dung lượng lưu trữ & tối ưu hóa bộ nhớ tránh nặng app
   const [storageInfo, setStorageInfo] = useState<storage.StorageUsageInfo>(() => storage.getStorageUsage());
@@ -1680,7 +1701,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
         }
 
-        return Array.from(itemMap.values());
+        return deduplicateFormModelItems(Array.from(itemMap.values()), products);
       });
 
       if (newSlotsToSet) {
@@ -1741,7 +1762,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_metrics_2025", JSON.stringify(metrics2025));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveMonthlyMetrics(2025, metrics2025), 1200);
+      const currentJson = JSON.stringify(metrics2025);
+      if (currentJson === lastSavedMetrics2025Ref.current) return;
+      lastSavedMetrics2025Ref.current = currentJson;
+      const timer = setTimeout(() => storage.saveMonthlyMetrics(2025, metrics2025), 1500);
       return () => clearTimeout(timer);
     }
   }, [metrics2025]);
@@ -1749,7 +1773,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_metrics_2026", JSON.stringify(metrics2026));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveMonthlyMetrics(2026, metrics2026), 1200);
+      const currentJson = JSON.stringify(metrics2026);
+      if (currentJson === lastSavedMetrics2026Ref.current) return;
+      lastSavedMetrics2026Ref.current = currentJson;
+      const timer = setTimeout(() => storage.saveMonthlyMetrics(2026, metrics2026), 1500);
       return () => clearTimeout(timer);
     }
   }, [metrics2026]);
@@ -1757,7 +1784,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_monthly_targets", JSON.stringify(monthlyTargets));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveMonthlyTargets(monthlyTargets), 1200);
+      const currentJson = JSON.stringify(monthlyTargets);
+      if (currentJson === lastSavedTargetsRef.current) return;
+      lastSavedTargetsRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveMonthlyTargets(monthlyTargets), 1500);
       return () => clearTimeout(timer);
     }
   }, [monthlyTargets]);
@@ -1765,7 +1795,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_monthly_plan_v2", JSON.stringify(monthlyPlan));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveMonthlyPlan(monthlyPlan), 1200);
+      const currentJson = JSON.stringify(monthlyPlan);
+      if (currentJson === lastSavedPlanRef.current) return;
+      lastSavedPlanRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveMonthlyPlan(monthlyPlan), 1500);
       return () => clearTimeout(timer);
     }
   }, [monthlyPlan]);
@@ -1773,7 +1806,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_gas_daily_reports_v2", JSON.stringify(gasDailyReports));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveGasDailyReports(gasDailyReports), 1200);
+      const currentJson = JSON.stringify(gasDailyReports);
+      if (currentJson === lastSavedGasRef.current) return;
+      lastSavedGasRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveGasDailyReports(gasDailyReports), 1500);
       return () => clearTimeout(timer);
     }
   }, [gasDailyReports]);
@@ -1781,7 +1817,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_assembly_daily_reports_v2", JSON.stringify(assemblyDailyReports));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveAssemblyDailyReports(assemblyDailyReports), 1200);
+      const currentJson = JSON.stringify(assemblyDailyReports);
+      if (currentJson === lastSavedAssemblyRef.current) return;
+      lastSavedAssemblyRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveAssemblyDailyReports(assemblyDailyReports), 1500);
       return () => clearTimeout(timer);
     }
   }, [assemblyDailyReports]);
@@ -1797,7 +1836,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_monthly_scrap_v2", JSON.stringify(monthlyScrap));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveMonthlyScrapReport(monthlyScrap), 1200);
+      const currentJson = JSON.stringify(monthlyScrap);
+      if (currentJson === lastSavedMonthlyScrapRef.current) return;
+      lastSavedMonthlyScrapRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveMonthlyScrapReport(monthlyScrap), 1500);
       return () => clearTimeout(timer);
     }
   }, [monthlyScrap]);
@@ -1805,7 +1847,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_weekly_scrap_v2", JSON.stringify(weeklyScrap));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveWeeklyScrapReport(weeklyScrap), 1200);
+      const currentJson = JSON.stringify(weeklyScrap);
+      if (currentJson === lastSavedWeeklyScrapRef.current) return;
+      lastSavedWeeklyScrapRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveWeeklyScrapReport(weeklyScrap), 1500);
       return () => clearTimeout(timer);
     }
   }, [weeklyScrap]);
@@ -1813,7 +1858,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_weekly_dclr_error_v2", JSON.stringify(weeklyDclrError));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveWeeklyDclrErrorRate(weeklyDclrError), 1200);
+      const currentJson = JSON.stringify(weeklyDclrError);
+      if (currentJson === lastSavedWeeklyDclrRef.current) return;
+      lastSavedWeeklyDclrRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveWeeklyDclrErrorRate(weeklyDclrError), 1500);
       return () => clearTimeout(timer);
     }
   }, [weeklyDclrError]);
@@ -1821,7 +1869,10 @@ const [isScrolled, setIsScrolled] = useState(false);
   useEffect(() => {
     localStorage.setItem("sunhouse_monthly_dclr_error_v2", JSON.stringify(monthlyDclrError));
     if (isLoadedRef.current) {
-      const timer = setTimeout(() => storage.saveMonthlyDclrErrorRate(monthlyDclrError), 1200);
+      const currentJson = JSON.stringify(monthlyDclrError);
+      if (currentJson === lastSavedMonthlyDclrRef.current) return;
+      lastSavedMonthlyDclrRef.current = currentJson;
+      const timer = setTimeout(() => storage.saveMonthlyDclrErrorRate(monthlyDclrError), 1500);
       return () => clearTimeout(timer);
     }
   }, [monthlyDclrError]);
@@ -1899,7 +1950,6 @@ const [isScrolled, setIsScrolled] = useState(false);
             laborProductivityPercent: calculatedProductivity,
           };
         });
-        storage.saveMonthlyMetrics(year, updated);
         return updated;
       });
     };
@@ -1981,10 +2031,19 @@ const [isScrolled, setIsScrolled] = useState(false);
         syncHistoricalMetricsWithLogs(loadedLogs);
       }
       
-      if (loadedPlan) setMonthlyPlan(loadedPlan);
-      if (loadedTargets) setMonthlyTargets(loadedTargets);
+      if (loadedPlan) {
+        lastSavedPlanRef.current = JSON.stringify(loadedPlan);
+        setMonthlyPlan(loadedPlan);
+      }
+      if (loadedTargets) {
+        lastSavedTargetsRef.current = JSON.stringify(loadedTargets);
+        setMonthlyTargets(loadedTargets);
+      }
       
-      if (loaded2025) setMetrics2025(loaded2025);
+      if (loaded2025) {
+        lastSavedMetrics2025Ref.current = JSON.stringify(loaded2025);
+        setMetrics2025(loaded2025);
+      }
       
       if (loaded2026) {
         const guarded2026 = loaded2026.map(m => {
@@ -2000,11 +2059,18 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
           return m;
         });
+        lastSavedMetrics2026Ref.current = JSON.stringify(guarded2026);
         setMetrics2026(guarded2026);
       }
 
-      if (allDaily.gas) setGasDailyReports(allDaily.gas);
-      if (allDaily.assembly) setAssemblyDailyReports(allDaily.assembly);
+      if (allDaily.gas) {
+        lastSavedGasRef.current = JSON.stringify(allDaily.gas);
+        setGasDailyReports(allDaily.gas);
+      }
+      if (allDaily.assembly) {
+        lastSavedAssemblyRef.current = JSON.stringify(allDaily.assembly);
+        setAssemblyDailyReports(allDaily.assembly);
+      }
       
       if (allDaily.declaredImeis !== undefined && Array.isArray(allDaily.declaredImeis)) {
         const cloudTs = allDaily.declaredImeisUpdatedAt ? new Date(allDaily.declaredImeisUpdatedAt).getTime() : 0;
@@ -2022,10 +2088,22 @@ const [isScrolled, setIsScrolled] = useState(false);
         localStorage.setItem('sunhouse_scanned_imeis_ts', String(lastScannedImeisActionTimeRef.current));
       }
 
-      if (allDaily.monthlyScrap) setMonthlyScrap(allDaily.monthlyScrap);
-      if (allDaily.weeklyScrap) setWeeklyScrap(allDaily.weeklyScrap);
-      if (allDaily.weeklyDclr) setWeeklyDclrError(allDaily.weeklyDclr);
-      if (allDaily.monthlyDclr) setMonthlyDclrError(allDaily.monthlyDclr);
+      if (allDaily.monthlyScrap) {
+        lastSavedMonthlyScrapRef.current = JSON.stringify(allDaily.monthlyScrap);
+        setMonthlyScrap(allDaily.monthlyScrap);
+      }
+      if (allDaily.weeklyScrap) {
+        lastSavedWeeklyScrapRef.current = JSON.stringify(allDaily.weeklyScrap);
+        setWeeklyScrap(allDaily.weeklyScrap);
+      }
+      if (allDaily.weeklyDclr) {
+        lastSavedWeeklyDclrRef.current = JSON.stringify(allDaily.weeklyDclr);
+        setWeeklyDclrError(allDaily.weeklyDclr);
+      }
+      if (allDaily.monthlyDclr) {
+        lastSavedMonthlyDclrRef.current = JSON.stringify(allDaily.monthlyDclr);
+        setMonthlyDclrError(allDaily.monthlyDclr);
+      }
 
       if (isDeepSync) {
         setFormMessage("✅ Làm mới toàn diện thành công! Mọi computers hiện đã đồng bộ 100% dữ liệu mới nhất.");
@@ -2400,16 +2478,24 @@ const [isScrolled, setIsScrolled] = useState(false);
       // (5) Bảng monthly_plan: Cập nhật state trực tiếp
       onMonthlyPlanChange: (payload) => {
         if (payload.new && payload.new.plan_data) {
-          setMonthlyPlan(payload.new.plan_data);
-          localStorage.setItem('sunhouse_monthly_plan_v2', JSON.stringify(payload.new.plan_data));
+          const json = JSON.stringify(payload.new.plan_data);
+          if (json !== lastSavedPlanRef.current) {
+            lastSavedPlanRef.current = json;
+            setMonthlyPlan(payload.new.plan_data);
+            localStorage.setItem('sunhouse_monthly_plan_v2', json);
+          }
         }
       },
 
       // (6) Bảng monthly_targets: Cập nhật state trực tiếp
       onMonthlyTargetsChange: (payload) => {
         if (payload.new && payload.new.targets_data) {
-          setMonthlyTargets(payload.new.targets_data);
-          localStorage.setItem('sunhouse_monthly_targets_v2', JSON.stringify(payload.new.targets_data));
+          const json = JSON.stringify(payload.new.targets_data);
+          if (json !== lastSavedTargetsRef.current) {
+            lastSavedTargetsRef.current = json;
+            setMonthlyTargets(payload.new.targets_data);
+            localStorage.setItem('sunhouse_monthly_targets_v2', json);
+          }
         }
       },
 
@@ -2417,12 +2503,19 @@ const [isScrolled, setIsScrolled] = useState(false);
       onMonthlyMetricsChange: (payload) => {
         if (payload.new && payload.new.metrics_data) {
           const yr = Number(payload.new.year);
+          const json = JSON.stringify(payload.new.metrics_data);
           if (yr === 2025) {
-            setMetrics2025(payload.new.metrics_data);
-            localStorage.setItem('sunhouse_metrics_2025_v2', JSON.stringify(payload.new.metrics_data));
+            if (json !== lastSavedMetrics2025Ref.current) {
+              lastSavedMetrics2025Ref.current = json;
+              setMetrics2025(payload.new.metrics_data);
+              localStorage.setItem('sunhouse_metrics_2025_v2', json);
+            }
           } else if (yr === 2026) {
-            setMetrics2026(payload.new.metrics_data);
-            localStorage.setItem('sunhouse_metrics_2026_v2', JSON.stringify(payload.new.metrics_data));
+            if (json !== lastSavedMetrics2026Ref.current) {
+              lastSavedMetrics2026Ref.current = json;
+              setMetrics2026(payload.new.metrics_data);
+              localStorage.setItem('sunhouse_metrics_2026_v2', json);
+            }
           }
         }
       },
@@ -2432,24 +2525,43 @@ const [isScrolled, setIsScrolled] = useState(false);
         if (payload.new && payload.new.report_data) {
           const id = payload.new.id;
           const repType = payload.new.report_type;
+          const json = JSON.stringify(payload.new.report_data);
           if (id === 'gas_daily_reports' || repType === 'gas') {
-            setGasDailyReports(payload.new.report_data);
-            localStorage.setItem('sunhouse_gas_daily_reports_v2', JSON.stringify(payload.new.report_data));
+            if (json !== lastSavedGasRef.current) {
+              lastSavedGasRef.current = json;
+              setGasDailyReports(payload.new.report_data);
+              localStorage.setItem('sunhouse_gas_daily_reports_v2', json);
+            }
           } else if (id === 'assembly_daily_reports' || repType === 'assembly') {
-            setAssemblyDailyReports(payload.new.report_data);
-            localStorage.setItem('sunhouse_assembly_daily_reports_v2', JSON.stringify(payload.new.report_data));
+            if (json !== lastSavedAssemblyRef.current) {
+              lastSavedAssemblyRef.current = json;
+              setAssemblyDailyReports(payload.new.report_data);
+              localStorage.setItem('sunhouse_assembly_daily_reports_v2', json);
+            }
           } else if (id === 'monthly_scrap_report' || repType === 'scrap') {
-            setMonthlyScrap(payload.new.report_data);
-            localStorage.setItem('sunhouse_monthly_scrap_v2', JSON.stringify(payload.new.report_data));
+            if (json !== lastSavedMonthlyScrapRef.current) {
+              lastSavedMonthlyScrapRef.current = json;
+              setMonthlyScrap(payload.new.report_data);
+              localStorage.setItem('sunhouse_monthly_scrap_v2', json);
+            }
           } else if (id === 'weekly_scrap_report') {
-            setWeeklyScrap(payload.new.report_data);
-            localStorage.setItem('sunhouse_weekly_scrap_v2', JSON.stringify(payload.new.report_data));
+            if (json !== lastSavedWeeklyScrapRef.current) {
+              lastSavedWeeklyScrapRef.current = json;
+              setWeeklyScrap(payload.new.report_data);
+              localStorage.setItem('sunhouse_weekly_scrap_v2', json);
+            }
           } else if (id === 'weekly_dclr_error' || repType === 'dclr_error') {
-            setWeeklyDclrError(payload.new.report_data);
-            localStorage.setItem('sunhouse_weekly_dclr_error_v2', JSON.stringify(payload.new.report_data));
+            if (json !== lastSavedWeeklyDclrRef.current) {
+              lastSavedWeeklyDclrRef.current = json;
+              setWeeklyDclrError(payload.new.report_data);
+              localStorage.setItem('sunhouse_weekly_dclr_error_v2', json);
+            }
           } else if (id === 'monthly_dclr_error') {
-            setMonthlyDclrError(payload.new.report_data);
-            localStorage.setItem('sunhouse_monthly_dclr_error_v2', JSON.stringify(payload.new.report_data));
+            if (json !== lastSavedMonthlyDclrRef.current) {
+              lastSavedMonthlyDclrRef.current = json;
+              setMonthlyDclrError(payload.new.report_data);
+              localStorage.setItem('sunhouse_monthly_dclr_error_v2', json);
+            }
           } else if (id === 'declared_imeis' || repType === 'declared_imei') {
             const rowTs = payload.new.updated_at ? new Date(payload.new.updated_at).getTime() : Date.now();
             if (rowTs >= lastDeclaredImeisActionTimeRef.current) {
@@ -2787,15 +2899,16 @@ const [isScrolled, setIsScrolled] = useState(false);
     };
   }, [refreshFromCloud]);
 
-  // Cơ chế đồng bộ nhịp tim (Heartbeat pulse) kiểm tra dữ liệu Supabase định kỳ (mỗi 1.2 giây) & khi chuyển tab
-  // Đảm bảo mọi máy tính đều đồng bộ 100% tức thì ngay cả khi mạng lag hoặc WebSocket gián đoạn
+  // Cơ chế đồng bộ nhịp tim (Heartbeat pulse) định kỳ (mỗi 30 giây) & khi người dùng quay lại tab (focus)
+  // Đảm bảo không nghẽn mạng, không giật lag trình duyệt nhưng vẫn đảm bảo dữ liệu mới nhất
   useEffect(() => {
     let isCancelled = false;
 
     const performHeartbeatSync = async () => {
       if (typeof document !== 'undefined' && document.hidden) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
       try {
-        // 1. Kiểm tra bản nháp ca hiện tại trên Supabase
+        // Kiểm tra bản nháp ca hiện tại trên Supabase khi đang mở form ghi ca
         if (formDateRef.current && formShiftRef.current && !isSyncingFromExternalRef.current) {
           const cloudDraft = await storage.getFormDraft(formDateRef.current, formShiftRef.current);
           if (cloudDraft && !isCancelled && cloudDraft.items && Array.isArray(cloudDraft.items)) {
@@ -2808,8 +2921,8 @@ const [isScrolled, setIsScrolled] = useState(false);
             const isDiff = JSON.stringify(cloudDraft.items) !== JSON.stringify(formModelItemsRef.current);
             const isNotRecentlyTyping = !activeEditingCellRef.current || (Date.now() - activeEditingCellRef.current.timestamp > 3000);
 
-            // CHỈ CẬP NHẬT TỪ CLOUD NẾU CLOUD THỰC SỰ MỚI HƠN BẢN CỤC BỘ (> 500ms) VÀ KHÔNG ĐANG THAO TÁC
-            if (cloudTs > localTs + 500 && isNotRecentlyTyping) {
+            // Chỉ cập nhật từ Cloud nếu Cloud mới hơn bản cục bộ (> 1000ms) và không đang gõ phím
+            if (cloudTs > localTs + 1000 && isNotRecentlyTyping && isDiff) {
               setFormModelItems(deduplicateFormModelItems(cloudDraft.items, products));
               if (cloudDraft.slots) {
                 const cleanSlots = cloudDraft.slots.filter(isValidHourlySlot);
@@ -2822,30 +2935,16 @@ const [isScrolled, setIsScrolled] = useState(false);
               if (cloudDraft.officialRMA) setFormOfficialWorkersRMA(cloudDraft.officialRMA);
               if (cloudDraft.seasonalRMA) setFormSeasonalWorkersRMA(cloudDraft.seasonalRMA);
               localStorage.setItem(localKey, JSON.stringify(cloudDraft));
-            } else if (localTs > cloudTs + 500 && localDraft && isDiff) {
-              // Nếu bản cục bộ mới hơn Cloud, đồng bộ ngược lên Cloud để không bao giờ bị lệch dữ liệu
-              storage.saveFormDraft(localDraft);
             }
           }
-        }
-
-        // 2. Kiểm tra danh sách IMEI đã quét trên Cloud
-        const cloudImeis = await storage.getScannedImeis();
-        if (Array.isArray(cloudImeis) && !isCancelled) {
-          setScannedImeis((prev) => {
-            if (cloudImeis.length !== prev.length || (cloudImeis[0]?.id !== prev[0]?.id)) {
-              localStorage.setItem('sunhouse_scanned_imeis', JSON.stringify(cloudImeis));
-              return cloudImeis;
-            }
-            return prev;
-          });
         }
       } catch (err) {
         // Bỏ qua lỗi ngầm
       }
     };
 
-    const intervalId = setInterval(performHeartbeatSync, 1200);
+    // Chu kỳ 30 giây chạy nền nhẹ nhàng, không gây nghẽn băng thông hay lag giật
+    const intervalId = setInterval(performHeartbeatSync, 30000);
 
     const handleFocus = () => {
       performHeartbeatSync();
@@ -2860,7 +2959,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       window.removeEventListener('focus', handleFocus);
       window.removeEventListener('visibilitychange', handleFocus);
     };
-  }, []);
+  }, [products]);
 
   // === DỮ LIỆU TÍNH TỔNG CHUNG 2 DÂY CHUYỀN ===
   const combinedDailyReports = useMemo<CombinedDailyReportRow[]>(() => {
@@ -3144,7 +3243,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       const currentMonth = now.getMonth() + 1;
       const isPast = m.year < currentYear || (m.year === currentYear && m.month < currentMonth);
       const isCurrent = m.year === currentYear && m.month === currentMonth;
-      const isLocked = isPast || isCurrent || (m.year === 2026 && m.month <= 8);
+      // Tháng 9 năm 2026 (các tháng 1-9) được khóa theo yêu cầu
+      const isLocked = (m.year === 2026 && m.month <= 9);
       const isAutoReportMonth = isLocked;
 
       // Các tháng 1-8 năm 2026 được khóa và giữ nguyên dữ liệu chuẩn theo yêu cầu
@@ -3457,80 +3557,146 @@ const [isScrolled, setIsScrolled] = useState(false);
     const weekObj = weeks.find(w => w.id === selectedReportWeek);
     if (!weekObj) return { rows: [], dayTotals: [], grandTotal: {} };
 
-    const filteredProducts = products.filter(p => filterDivision === "ALL" || p.group === filterDivision);
+    // Xác định tháng chính của tuần hiện tại (dựa vào số ngày nhiều nhất của tuần nằm trong tháng nào)
+    const monthCounts: Record<number, number> = {};
+    weekObj.days.forEach(d => {
+      monthCounts[d.monthNum] = (monthCounts[d.monthNum] || 0) + 1;
+    });
+    let targetMonth = weekObj.days[0].monthNum;
+    let maxDaysInMonth = 0;
+    for (const [mStr, count] of Object.entries(monthCounts)) {
+      if (count > maxDaysInMonth) {
+        maxDaysInMonth = count;
+        targetMonth = Number(mStr);
+      }
+    }
+
+    // Lấy danh sách tất cả các tuần thuộc về targetMonth trong năm (cộng dồn theo tháng chứ không cộng dồn năm)
+    const monthWeeks = weeks.filter(w => {
+      const counts: Record<number, number> = {};
+      w.days.forEach(d => { counts[d.monthNum] = (counts[d.monthNum] || 0) + 1; });
+      let wMonth = w.days[0].monthNum;
+      let mCount = 0;
+      for (const [mStr, c] of Object.entries(counts)) {
+        if (c > mCount) { mCount = c; wMonth = Number(mStr); }
+      }
+      return wMonth === targetMonth;
+    });
+
+    const currentWeekIdx = monthWeeks.findIndex(w => w.id === selectedReportWeek);
+
+    const dedupedProducts = deduplicateProductDefinitions(products);
+    const filteredProducts = dedupedProducts.filter(p => filterDivision === "ALL" || p.group === filterDivision);
     
     const rows = filteredProducts.map(product => {
       const dayData = weekObj.days.map(day => {
         const yearMonth = `${day.dateStr.split('-')[0]}-${day.dateStr.split('-')[1]}`;
-        const plan = monthlyPlan[yearMonth]?.[product.id]?.[day.dayNum] || 0;
+        let plan = monthlyPlan[yearMonth]?.[product.id]?.[day.dayNum] || 0;
+        if (!plan && monthlyPlan[yearMonth]) {
+          for (const [pId, pDays] of Object.entries(monthlyPlan[yearMonth])) {
+            if (isSameProduct(pId, product.id, products)) {
+              plan = (pDays as any)?.[day.dayNum] || 0;
+              if (plan) break;
+            }
+          }
+        }
         
-        const logs = productionLogs.filter(log => log.date === day.dateStr && log.productId === product.id);
-        const actual = logs.reduce((sum, log) => sum + log.actualUnits, 0);
+        const logs = productionLogs.filter(log => log.date === day.dateStr && (log.productId === product.id || isSameProduct(log.productId, product.id, products)));
+        let actual = logs.reduce((sum, log) => sum + (log.actualUnits || 0), 0);
+
+        const hasSavedFormDate = productionLogs.some(log => log.date === formDate);
+        if (!hasSavedFormDate && day.dateStr === formDate) {
+          const formItem = formModelItems.find(item => item.productId === product.id || isSameProduct(item.productId, product.id, products));
+          if (formItem) {
+            const formActual = (Object.values(formItem.hourlyActuals) as any[]).reduce((s, v) => s + (Number(v) || 0), 0);
+            actual += formActual;
+          }
+        }
         
         return { plan, actual };
       });
 
-      const totalPlan = dayData.reduce((sum, d) => sum + d.plan, 0);
+      const basePlan = dayData.reduce((sum, d) => sum + d.plan, 0);
       const totalActual = dayData.reduce((sum, d) => sum + d.actual, 0);
 
-      // --- CUMULATIVE CALCULATION FOR +/- COLUMN ---
-      const endOfWeekDateStr = weekObj.days[weekObj.days.length - 1].dateStr;
-      
-      // All-time actual for this product up to the end of the current selected week
-      const allTimeActual = productionLogs
-        .filter(l => l.productId === product.id && l.date <= endOfWeekDateStr)
-        .reduce((sum, l) => sum + l.actualUnits, 0);
-      
-      const allTimeActualEq = allTimeActual * (product.factor || 1);
-        
-      // Total plan for this product up to the end of the current selected week
-      let allTimePlan = 0;
-      Object.entries(monthlyPlan).forEach(([yearMonth, productPlans]) => {
-        const [pYear, pMonth] = yearMonth.split('-').map(Number);
-        const [eYear, eMonth, eDay] = endOfWeekDateStr.split('-').map(Number);
-        
-        if (pYear < eYear || (pYear === eYear && pMonth < eMonth)) {
-          // Full previous months
-          const pPlan = productPlans[product.id] || {};
-          Object.values(pPlan).forEach(val => allTimePlan += (val as number));
-        } else if (pYear === eYear && pMonth === eMonth) {
-          // Current selected month up to end of selected week
-          const pPlan = productPlans[product.id] || {};
-          Object.entries(pPlan).forEach(([day, val]) => {
-            if (Number(day) <= eDay) allTimePlan += (val as number);
-          });
-        }
-      });
-      
-      const allTimePlanEq = allTimePlan * (product.factor || 1);
+      // CỘNG DỒN THEO THÁNG:
+      // "KHSX sẽ theo tháng nếu số lượng KHSX chưa hoàn thành của tuần trong tháng thì sẽ được cộng dồn tuần tiếp theo"
+      let carryOverPlan = 0;
+      if (currentWeekIdx > 0) {
+        let rollingUncompleted = 0;
+        for (let i = 0; i < currentWeekIdx; i++) {
+          const prevWeek = monthWeeks[i];
+          let prevWeekBasePlan = 0;
+          let prevWeekActual = 0;
 
-      const diff = allTimeActual - allTimePlan;
-      const diffEq = allTimeActualEq - allTimePlanEq;
+          prevWeek.days.forEach(pDay => {
+            const ym = `${pDay.dateStr.split('-')[0]}-${pDay.dateStr.split('-')[1]}`;
+            let pPlan = monthlyPlan[ym]?.[product.id]?.[pDay.dayNum] || 0;
+            if (!pPlan && monthlyPlan[ym]) {
+              for (const [pId, pDays] of Object.entries(monthlyPlan[ym])) {
+                if (isSameProduct(pId, product.id, products)) {
+                  pPlan = (pDays as any)?.[pDay.dayNum] || 0;
+                  if (pPlan) break;
+                }
+              }
+            }
+            prevWeekBasePlan += pPlan;
+
+            const pLogs = productionLogs.filter(l => l.date === pDay.dateStr && (l.productId === product.id || isSameProduct(l.productId, product.id, products)));
+            let pAct = pLogs.reduce((s, l) => s + (l.actualUnits || 0), 0);
+            const hasSaved = productionLogs.some(l => l.date === formDate);
+            if (!hasSaved && pDay.dateStr === formDate) {
+              const formItem = formModelItems.find(item => item.productId === product.id || isSameProduct(item.productId, product.id, products));
+              if (formItem) {
+                pAct += (Object.values(formItem.hourlyActuals) as any[]).reduce((s, v) => s + (Number(v) || 0), 0);
+              }
+            }
+            prevWeekActual += pAct;
+          });
+
+          const prevWeekKHSX = prevWeekBasePlan + rollingUncompleted;
+          rollingUncompleted = Math.max(0, prevWeekKHSX - prevWeekActual);
+        }
+        carryOverPlan = rollingUncompleted;
+      }
+
+      // KHSX tuần = Kế hoạch cơ sở của tuần + KHSX chưa hoàn thành dồn từ tuần trước trong tháng
+      const totalPlan = basePlan + carryOverPlan;
+
+      const factor = Number(product.factor ?? 1);
+      const basePlanEq = basePlan * factor;
+      const carryOverPlanEq = carryOverPlan * factor;
+      const totalPlanEq = totalPlan * factor;
+      const totalActualEq = totalActual * factor;
+
+      // CHÊNH LỆCH KẾT QUẢ SX TUẦN: Tổng thực tế tuần - KHSX tuần (sau cộng dồn)
+      const diff = totalActual - totalPlan;
+      const diffEq = Number((totalActualEq - totalPlanEq).toFixed(2));
 
       return {
         product,
         dayData,
+        basePlan,
+        carryOverPlan,
         totalPlan,
         totalActual,
-        allTimeActual,
-        allTimePlan,
-        allTimeActualEq,
-        allTimePlanEq,
+        basePlanEq,
+        carryOverPlanEq,
+        totalPlanEq,
+        totalActualEq,
         diff,
         diffEq
       };
-    }).filter(row => row.totalPlan > 0 || row.totalActual > 0);
+    }).filter(row => row.totalPlan > 0 || row.totalActual > 0 || row.carryOverPlan > 0);
 
     const dayTotals = weekObj.days.map((_, i) => {
       const plan = rows.reduce((sum, r) => sum + r.dayData[i].plan, 0);
       const actual = rows.reduce((sum, r) => sum + r.dayData[i].actual, 0);
-      const planEq = rows.reduce((sum, r) => sum + r.dayData[i].plan * (r.product.factor || 1), 0);
-      const actualEq = rows.reduce((sum, r) => sum + r.dayData[i].actual * (r.product.factor || 1), 0);
+      const planEq = rows.reduce((sum, r) => sum + r.dayData[i].plan * Number(r.product.factor ?? 1), 0);
+      const actualEq = rows.reduce((sum, r) => sum + r.dayData[i].actual * Number(r.product.factor ?? 1), 0);
       
       const dayLogs = productionLogs.filter(log => log.date === weekObj.days[i].dateStr);
       
-      // Calculate total workers for the day by summing workers from unique (shift + lineId)
-      // and filtering by division if active
       let filteredDayLogsForWorkers = dayLogs;
       if (filterDivision !== "ALL") {
         filteredDayLogsForWorkers = dayLogs.filter(l => l.productGroup === filterDivision);
@@ -3547,16 +3713,15 @@ const [isScrolled, setIsScrolled] = useState(false);
     });
 
     const grandTotal = {
-      plan: dayTotals.reduce((sum: number, d) => sum + d.plan, 0),
-      actual: dayTotals.reduce((sum: number, d) => sum + d.actual, 0),
-      planEq: dayTotals.reduce((sum: number, d) => sum + d.planEq, 0),
-      actualEq: dayTotals.reduce((sum: number, d) => sum + d.actualEq, 0),
-      // Change to SUM of man-days for the week
+      basePlan: rows.reduce((sum: number, r) => sum + r.basePlan, 0),
+      carryOverPlan: rows.reduce((sum: number, r) => sum + r.carryOverPlan, 0),
+      plan: rows.reduce((sum: number, r) => sum + r.totalPlan, 0),
+      actual: rows.reduce((sum: number, r) => sum + r.totalActual, 0),
+      planEq: rows.reduce((sum: number, r) => sum + r.totalPlanEq, 0),
+      actualEq: rows.reduce((sum: number, r) => sum + r.totalActualEq, 0),
       workers: dayTotals.reduce((sum: number, d) => sum + (d.workers as number), 0),
-      allTimeActual: rows.reduce((sum, r) => sum + (r as any).allTimeActual, 0),
-      allTimePlan: rows.reduce((sum, r) => sum + (r as any).allTimePlan, 0),
-      allTimeActualEq: rows.reduce((sum, r) => sum + (r as any).allTimeActualEq, 0),
-      allTimePlanEq: rows.reduce((sum, r) => sum + (r as any).allTimePlanEq, 0)
+      diff: rows.reduce((sum, r) => sum + r.diff, 0),
+      diffEq: Number(rows.reduce((sum, r) => sum + r.diffEq, 0).toFixed(2)),
     };
 
     // Calculate cumulative values up to the last day with production
@@ -3567,7 +3732,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const cumulativeActualEq = lastIndex >= 0 ? dayTotals.slice(0, lastIndex + 1).reduce((sum, d) => sum + d.actualEq, 0) : 0;
 
     return { weekObj, rows, dayTotals, grandTotal, cumulativePlanEq, cumulativeActualEq };
-  }, [selectedYear, selectedReportWeek, products, monthlyPlan, productionLogs, filterDivision]);
+  }, [selectedYear, selectedReportWeek, products, monthlyPlan, productionLogs, filterDivision, formDate, formModelItems]);
 
   const handleExportWeeklyExcel = () => {
     const { weekObj, rows } = weeklyReportData;
@@ -3590,7 +3755,9 @@ const [isScrolled, setIsScrolled] = useState(false);
         row[`${dayName} ${day.dayNum}/${day.monthNum} TT`] = r.dayData[i].actual;
       });
       
-      row["Tổng KHSX"] = r.totalPlan;
+      row["KHSX gốc tuần"] = r.basePlan;
+      row["KHSX dồn tuần trước"] = r.carryOverPlan;
+      row["Tổng KHSX tuần"] = r.totalPlan;
       row["Tổng thực tế"] = r.totalActual;
       row["Chênh lệch"] = r.diff;
       
@@ -5436,7 +5603,8 @@ const [isScrolled, setIsScrolled] = useState(false);
 
     if (!chosenProdId) {
       // 1 BẢNG NHẬT KÝ CA KHÔNG ĐƯỢC CÓ 2 MODEL SẢN XUẤT TRÙNG NHAU:
-      const unselectedProd = availableProducts.find(p => 
+      const dedupedAvailable = deduplicateProductDefinitions(availableProducts);
+      const unselectedProd = dedupedAvailable.find(p => 
         !formModelItems.some(it => isSameProduct(it.productId, p.id, products))
       );
 
@@ -5446,10 +5614,14 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
       chosenProdId = unselectedProd.id;
     } else {
-      const isAlreadyAdded = formModelItems.some(it => isSameProduct(it.productId, chosenProdId, products));
+      const targetModelKey = getCanonicalProductKey(chosenProdId, products);
+      const isAlreadyAdded = formModelItems.some(it => 
+        isSameProduct(it.productId, chosenProdId, products) || 
+        (targetModelKey && getCanonicalProductKey(it.productId, products) === targetModelKey)
+      );
       if (isAlreadyAdded) {
-        const prod = products.find(p => p.id === chosenProdId);
-        const name = prod ? (getProductModelCode(prod.name) || prod.code || prod.name) : chosenProdId;
+        const prod = products.find(p => p.id === chosenProdId || isSameProduct(p.id, chosenProdId, products));
+        const name = prod ? (getProductModelCode(prod.name, prod.code) || prod.code || prod.name) : chosenProdId;
         showToastError(`Model [${name}] đã có trong bảng! 1 bảng nhật ký ca không được có 2 model trùng nhau.`);
         return;
       }
@@ -5458,7 +5630,15 @@ const [isScrolled, setIsScrolled] = useState(false);
     const [year, month, day] = formDate.split("-");
     const ym = `${year}-${month}`;
     const dayNum = parseInt(day);
-    const planVal = (monthlyPlan[ym]?.[chosenProdId]?.[dayNum]) || 0;
+    let planVal = (monthlyPlan[ym]?.[chosenProdId]?.[dayNum]) || 0;
+    if (!planVal && monthlyPlan[ym]) {
+      for (const [pId, pDays] of Object.entries(monthlyPlan[ym])) {
+        if (isSameProduct(pId, chosenProdId, products)) {
+          planVal = (pDays as any)?.[dayNum] || 0;
+          if (planVal) break;
+        }
+      }
+    }
 
     const newItemId = "item-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
     const nextItems = deduplicateFormModelItems([
@@ -6154,10 +6334,14 @@ const [isScrolled, setIsScrolled] = useState(false);
 
       setProdFormMessage("✅ Đã cập nhật sản phẩm & tự động liên kết đồng bộ toàn bộ Nhật ký ca!");
     } else {
-      // Add new
-      const newId = `prod-new-${Date.now()}`;
+      // Add new - kiểm tra xem đã tồn tại sản phẩm này chưa
+      const existingProd = products.find(p => 
+        (p.code && cleanModelCode(p.code) === cleanModelCode(prodFormCode)) ||
+        (p.name && getProductModelCode(p.name, p.code) === getProductModelCode(prodFormName, prodFormCode))
+      );
+      const chosenId = existingProd ? existingProd.id : `prod-new-${Date.now()}`;
       const newProduct: ProductDefinition = {
-        id: newId,
+        id: chosenId,
         name: prodFormName,
         code: prodFormCode,
         group: prodFormGroup,
@@ -6166,8 +6350,11 @@ const [isScrolled, setIsScrolled] = useState(false);
         description: prodFormDescription
       };
       storage.saveProduct(newProduct);
-      setProducts(prev => [...prev, newProduct]);
-      setProdFormMessage("✅ Đã thêm sản phẩm mới thành công!");
+      setProducts(prev => {
+        const filtered = prev.filter(p => p.id !== chosenId && !isSameProduct(p.id, chosenId, prev));
+        return deduplicateProductDefinitions([...filtered, newProduct]);
+      });
+      setProdFormMessage(existingProd ? "✅ Đã cập nhật thông tin model hiện có!" : "✅ Đã thêm sản phẩm mới thành công!");
     }
 
     setTimeout(() => {
@@ -6306,13 +6493,26 @@ const [isScrolled, setIsScrolled] = useState(false);
   const handleConfirmExcelImport = () => {
     if (parsedExcelProducts.length === 0) return;
 
-    storage.upsertProducts(parsedExcelProducts);
+    // Chuẩn hóa ID để không tạo mới nếu đã có model tương ứng
+    const normalizedToImport = parsedExcelProducts.map(newP => {
+      const match = products.find(p => 
+        (p.code && cleanModelCode(p.code) === cleanModelCode(newP.code)) ||
+        (p.name && getProductModelCode(p.name, p.code) === getProductModelCode(newP.name, newP.code)) ||
+        isSameProduct(p.id, newP.id, products)
+      );
+      if (match) {
+        return { ...newP, id: match.id };
+      }
+      return newP;
+    });
+
+    storage.upsertProducts(normalizedToImport);
 
     setProducts((prev) => {
-      const existingMap = new Map<string, ProductDefinition>(prev.map((p) => [p.code.toLowerCase(), p]));
+      const existingMap = new Map<string, ProductDefinition>(prev.map((p) => [cleanModelCode(p.code || p.id).toLowerCase(), p]));
 
-      parsedExcelProducts.forEach((newP) => {
-        const key = newP.code.toLowerCase();
+      normalizedToImport.forEach((newP) => {
+        const key = cleanModelCode(newP.code || newP.id).toLowerCase();
         if (existingMap.has(key)) {
           const current = existingMap.get(key)!;
           existingMap.set(key, {
@@ -6329,7 +6529,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         }
       });
 
-      const updatedProductsList = Array.from(existingMap.values());
+      const updatedProductsList = deduplicateProductDefinitions(Array.from(existingMap.values()));
       const prodMap = new Map<string, ProductDefinition>(updatedProductsList.map((p) => [p.id, p]));
       const prodCodeMap = new Map<string, ProductDefinition>(updatedProductsList.map((p) => [p.code.toLowerCase(), p]));
 

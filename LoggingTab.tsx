@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, deduplicateFormModelItems } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo, useState } from 'react';
@@ -1801,16 +1801,17 @@ export const LoggingTab = ({
                       <div className="p-3 overflow-y-auto flex-1 divide-y divide-slate-800/60 max-h-[420px]">
                         {(() => {
                           const query = modelSearchQuery.trim().toUpperCase();
-                          const filtered = products
+                          const uniqueProducts = deduplicateProductDefinitions(products);
+                          const filtered = uniqueProducts
                             .filter((p: any) => modelModalDivision === "ALL" || p.group === modelModalDivision)
                             .filter((p: any) => {
                               if (!query) return true;
-                              const modelCode = getProductModelCode(p.name).toUpperCase();
+                              const modelCode = getProductModelCode(p.name, p.code).toUpperCase();
                               const code = (p.code || "").toUpperCase();
                               const name = (p.name || "").toUpperCase();
                               return modelCode.includes(query) || code.includes(query) || name.includes(query);
                             })
-                            .sort((a: any, b: any) => getProductModelCode(a.name).localeCompare(getProductModelCode(b.name)));
+                            .sort((a: any, b: any) => getProductModelCode(a.name, a.code).localeCompare(getProductModelCode(b.name, b.code)));
 
                           if (filtered.length === 0) {
                             return (
@@ -1821,7 +1822,7 @@ export const LoggingTab = ({
                           }
 
                           return filtered.map((prod: any) => {
-                            const modelCode = getProductModelCode(prod.name);
+                            const modelCode = getProductModelCode(prod.name, prod.code);
                             const isAlreadyInTable = activeFormModelItems.some((it: any) =>
                               isSameProduct(it.productId, prod.id, products)
                             );
