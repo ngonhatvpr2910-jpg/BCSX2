@@ -446,14 +446,7 @@ export default function App() {
             <span>Đang đồng bộ dữ liệu từ Supabase Database...</span>
           </div>
         )}
-        {syncStatus === 'error' && (
-          <div className="bg-amber-900/90 text-amber-100 text-xs py-1 px-4 text-center flex items-center justify-center gap-2 border-t border-amber-700">
-            <span>Chưa kết nối được Supabase, hệ thống đang tự động dùng bộ nhớ máy cục bộ (Offline Mode).</span>
-            <button onClick={() => refreshFromCloud()} className="underline font-bold hover:text-white ml-2">
-              Thử lại
-            </button>
-          </div>
-        )}
+
 
         {/* SUB-NAVIGATOR (TAB PANEL) */}
         <div className="bg-slate-950/20 border-t border-slate-800/40">

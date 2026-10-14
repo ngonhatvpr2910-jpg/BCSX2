@@ -1819,11 +1819,23 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [assemblyDailyReports]);
 
   useEffect(() => {
-    localStorage.setItem("sunhouse_production_logs_v2", JSON.stringify(productionLogs));
+    if (!isLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem("sunhouse_production_logs_v2", JSON.stringify(productionLogs));
+      } catch (e) {}
+    }, 600);
+    return () => clearTimeout(timer);
   }, [productionLogs]);
 
   useEffect(() => {
-    localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
+    if (!isLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem("sunhouse_products_v2", JSON.stringify(products));
+      } catch (e) {}
+    }, 600);
+    return () => clearTimeout(timer);
   }, [products]);
 
   useEffect(() => {
@@ -1871,13 +1883,23 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [monthlyDclrError]);
 
   useEffect(() => {
-    if (isRemoteSyncRef.current) return;
-    localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
+    if (isRemoteSyncRef.current || !isLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem("sunhouse_declared_imeis", JSON.stringify(declaredImeis));
+      } catch (e) {}
+    }, 600);
+    return () => clearTimeout(timer);
   }, [declaredImeis]);
 
   useEffect(() => {
-    if (isRemoteSyncRef.current) return;
-    localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
+    if (isRemoteSyncRef.current || !isLoadedRef.current) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem("sunhouse_scanned_imeis", JSON.stringify(scannedImeis));
+      } catch (e) {}
+    }, 600);
+    return () => clearTimeout(timer);
   }, [scannedImeis]);
 
   // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
@@ -2118,8 +2140,8 @@ const [isScrolled, setIsScrolled] = useState(false);
       console.warn('[Supabase] Lỗi khi nạp dữ liệu từ Cloud:', err?.message || err);
       setTimeout(() => { isLoadedRef.current = true; }, 400);
       setIsInitialLoading(false);
-      setSyncStatus('error');
-      setSyncMessage('Lỗi kết nối Supabase, đang dùng dữ liệu lưu tạm');
+      setSyncStatus('local');
+      setSyncMessage('Đang dùng bộ nhớ máy cục bộ');
     }
   }, [isSupabaseConfigured]);
 
@@ -6779,16 +6801,16 @@ const [isScrolled, setIsScrolled] = useState(false);
         setSyncMessage('Đã đồng bộ toàn bộ 100% dữ liệu lên Supabase');
         setFormMessage('🎉 Đã đẩy toàn bộ 100% dữ liệu (16 hạng mục) lên Supabase Cloud thành công! Tất cả máy truy cập link Vercel sẽ tự động nhận dữ liệu mới nhất.');
       } else {
-        setSyncStatus('error');
+        setSyncStatus('local');
         setSyncMessage(`Đã đồng bộ (${16 - failedCount}/16 mục thành công)`);
         setFormMessage(`⚠️ Đã đồng bộ ${16 - failedCount}/16 hạng mục dữ liệu lên Supabase.`);
       }
       setTimeout(() => setFormMessage(''), 5000);
     } catch (err) {
       console.error('Lỗi khi đẩy toàn bộ dữ liệu lên Supabase:', err);
-      setSyncStatus('error');
-      setSyncMessage('Lỗi kết nối Supabase');
-      setFormMessage('❌ Lỗi khi đồng bộ dữ liệu lên Supabase. Vui lòng kiểm tra kết nối mạng!');
+      setSyncStatus('local');
+      setSyncMessage('Dùng bộ nhớ máy cục bộ');
+      setFormMessage('❌ Lỗi khi đồng bộ dữ liệu lên Supabase. Đang chạy chế độ cục bộ.');
       setTimeout(() => setFormMessage(''), 4500);
     }
   };
@@ -6815,9 +6837,9 @@ const [isScrolled, setIsScrolled] = useState(false);
       setTimeout(() => setFormMessage(''), 4500);
     } catch (error) {
       console.error('Lỗi khi đồng bộ toàn hệ thống:', error);
-      setSyncStatus('error');
-      setSyncMessage('Lỗi khi đồng bộ dữ liệu');
-      setFormMessage('❌ Lỗi kết nối khi đồng bộ dữ liệu. Vui lòng thử lại.');
+      setSyncStatus('local');
+      setSyncMessage('Dùng bộ nhớ máy cục bộ');
+      setFormMessage('❌ Lỗi kết nối khi đồng bộ dữ liệu. Đang dùng bộ nhớ cục bộ.');
       setTimeout(() => setFormMessage(''), 4500);
     }
   };
@@ -7461,8 +7483,8 @@ const [isScrolled, setIsScrolled] = useState(false);
 
       } catch (err) {
         console.error("Lỗi khôi phục backup:", err);
-        setSyncStatus('error');
-        setSyncMessage('Lỗi khôi phục dữ liệu');
+        setSyncStatus('local');
+        setSyncMessage('Dùng bộ nhớ máy cục bộ');
         setFormMessage("❌ Lỗi khôi phục dữ liệu từ file sao lưu! Vui lòng kiểm tra định dạng file (.xlsx, .xls, .json).");
         setTimeout(() => setFormMessage(""), 4500);
       }
