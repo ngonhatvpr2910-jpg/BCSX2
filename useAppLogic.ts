@@ -16,10 +16,10 @@ export const useAppLogic = () => {
   // Nếu đã có dữ liệu cache trong localStorage thì vào app ngay lập tức (0ms), không để người dùng chờ đợi hay giật lag
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'local' | 'error'>(
-    isSupabaseConfigured ? 'syncing' : 'local'
+    isSupabaseConfigured ? 'synced' : 'local'
   );
   const [syncMessage, setSyncMessage] = useState<string>(
-    isSupabaseConfigured ? 'Đang đồng bộ trực tuyến ngầm...' : 'Chế độ Local (Chưa cấu hình Supabase)'
+    isSupabaseConfigured ? 'Đã đồng bộ trực tuyến với Supabase' : 'Chế độ Local (Chưa cấu hình Supabase)'
   );
 
   // Khóa chống Echo Loop và chống ghi đè dữ liệu vô hạn lên Supabase
@@ -1447,6 +1447,8 @@ const [isScrolled, setIsScrolled] = useState(false);
   // Đảm bảo dữ liệu luôn được đồng bộ và "cố định" theo Database, không bị mất nhân công khi bổ sung/chỉnh sửa.
   useEffect(() => {
     if (!formDate || !formShift || isSyncingFromExternalRef.current) return;
+    const isLocalTyping = activeEditingCellRef.current && (Date.now() - activeEditingCellRef.current.timestamp < 15000);
+    if (isLocalTyping) return;
 
     const dateShiftKey = `${formDate}_${formShift}`;
     const isDateShiftChanged = lastLoadedDateShiftRef.current !== dateShiftKey;
@@ -1476,6 +1478,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         const currentPlan = (!isNaN(dayNum) && monthlyPlan[ym]?.[it.productId]?.[dayNum]) || 0;
         return { 
           ...it, 
+          id: it.id || `item_${it.productId}`,
           dailyPlan: (it.dailyPlan !== undefined && it.dailyPlan > 0) ? it.dailyPlan : (currentPlan > 0 ? currentPlan : it.dailyPlan || 0),
           hourlyActuals: cleanHourly 
         };
@@ -1502,7 +1505,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           if (!alreadyExists) {
             const planVal = monthlyPlan[ym]?.[p.id]?.[dayNum] || 0;
             missingItems.push({
-              id: `item-plan-${p.id}-${formDate}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              id: `item_${p.id}`,
               productId: p.id,
               dailyPlan: planVal,
               hourlyActuals: { ...initialHrs },
@@ -1561,7 +1564,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           const initialHrs: Record<string, number> = {};
           shiftSlots.forEach(s => { initialHrs[s] = 0; });
           return {
-            id: `item-${p.id}-${formDate}-${formShift}-${Math.random().toString(36).substr(2, 5)}`,
+            id: `item_${p.id}`,
             productId: p.id,
             dailyPlan: monthlyPlan[ym]?.[p.id]?.[dayNum] || 0,
             hourlyActuals: initialHrs,
@@ -1573,9 +1576,9 @@ const [isScrolled, setIsScrolled] = useState(false);
         shiftSlots.forEach(s => { initialHrs[s] = 0; });
         setFormModelItems(deduplicateFormModelItems([
           {
-            id: `item-init-${formDate}-${formShift}-${Math.random().toString(36).substr(2, 5)}`,
-            productId: products[0].id,
-            dailyPlan: monthlyPlan[ym]?.[products[0].id]?.[dayNum] || 0,
+            id: `item_${products[0]?.id || 'default'}`,
+            productId: products[0]?.id || 'default',
+            dailyPlan: monthlyPlan[ym]?.[products[0]?.id]?.[dayNum] || 0,
             hourlyActuals: initialHrs,
           }
         ], products));
@@ -1640,7 +1643,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             const dayNum = parseInt(day, 10);
             const planVal = (monthlyPlanRef.current[ym]?.[prodId]?.[dayNum]) || 0;
             item = {
-              id: `item-${prodId}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              id: `item_${prodId}`,
               productId: prodId,
               dailyPlan: planVal,
               hourlyActuals: {},
@@ -2017,27 +2020,27 @@ const [isScrolled, setIsScrolled] = useState(false);
         console.info('[Sync] Đã xóa cache cục bộ để bắt đầu làm mới toàn diện.');
       }
 
-      const [
-        loadedWorkers,
-        loadedAttendance,
-        loadedProducts,
-        loadedLogs,
-        loadedPlan,
-        loadedTargets,
-        loaded2025,
-        loaded2026,
-        allDaily,
-      ] = await Promise.all([
+      const results = await Promise.allSettled([
         storage.getWorkers(),
-        storage.getAttendanceLogs(2000), // Tăng giới hạn nạp
+        storage.getAttendanceLogs(1000),
         storage.getProducts(),
-        storage.getProductionLogs(2000), // Tăng giới hạn nạp
+        storage.getProductionLogs(1000),
         storage.getMonthlyPlan(),
         storage.getMonthlyTargets(),
         storage.getMonthlyMetrics(2025),
         storage.getMonthlyMetrics(2026),
         storage.getAllDailyReports(),
       ]);
+
+      const loadedWorkers = results[0].status === 'fulfilled' ? results[0].value : null;
+      const loadedAttendance = results[1].status === 'fulfilled' ? results[1].value : null;
+      const loadedProducts = results[2].status === 'fulfilled' ? results[2].value : null;
+      const loadedLogs = results[3].status === 'fulfilled' ? results[3].value : null;
+      const loadedPlan = results[4].status === 'fulfilled' ? results[4].value : null;
+      const loadedTargets = results[5].status === 'fulfilled' ? results[5].value : null;
+      const loaded2025 = results[6].status === 'fulfilled' ? results[6].value : null;
+      const loaded2026 = results[7].status === 'fulfilled' ? results[7].value : null;
+      const allDaily = results[8].status === 'fulfilled' ? results[8].value : null;
 
       // Cập nhật State & Local Cache đồng nhất
       if (loadedWorkers) setWorkers(loadedWorkers);
@@ -2362,7 +2365,7 @@ const [isScrolled, setIsScrolled] = useState(false);
                       (active.id === it.id || active.id === it.productId) &&
                       active.slotName &&
                       String(active.slotName).replace(/\s+/g, '').toUpperCase() === cleanShift &&
-                      Date.now() - active.timestamp < 3000
+                      Date.now() - active.timestamp < 15000
                     ) {
                       return it;
                     }
@@ -2385,7 +2388,7 @@ const [isScrolled, setIsScrolled] = useState(false);
                   return [
                     ...prevItems,
                     {
-                      id: `item-${targetProdId}-${Date.now()}`,
+                      id: `item_${targetProdId}`,
                       productId: targetProdId,
                       dailyPlan: 0,
                       hourlyActuals: {
@@ -2415,7 +2418,7 @@ const [isScrolled, setIsScrolled] = useState(false);
                         (active.id === it.id || active.id === it.productId) &&
                         active.slotName &&
                         String(active.slotName).replace(/\s+/g, '').toUpperCase() === cleanK &&
-                        Date.now() - active.timestamp < 3000
+                        Date.now() - active.timestamp < 15000
                       ) {
                         return;
                       }
@@ -2609,6 +2612,11 @@ const [isScrolled, setIsScrolled] = useState(false);
           } else if (id?.startsWith('draft_') || repType === 'form_draft') {
             // ĐỒNG BỘ REALTIME TỨC THÌ KHI MÁY KHÁC QUÉT IMEI HOẶC LƯU DRAFT LÊN SUPABASE
             const incomingDraft = payload.new.report_data as storage.FormDraftData;
+            // Bỏ qua phản hồi ngược (self-echo) từ chính client này hoặc nếu đang gõ phím
+            if (incomingDraft?.senderId === storage.CLIENT_SESSION_ID) return;
+            const isLocalTyping = activeEditingCellRef.current && (Date.now() - activeEditingCellRef.current.timestamp < 15000);
+            if (isLocalTyping) return;
+
             if (incomingDraft && incomingDraft.date && incomingDraft.shift) {
               const localKey = `sunhouse_draft_${incomingDraft.date}_${incomingDraft.shift}`;
               localStorage.setItem(localKey, JSON.stringify(incomingDraft));
@@ -2741,7 +2749,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             // Đồng bộ thông minh không ghi đè: Hợp nhất toàn diện các model mới/hiện có và giữ nguyên ô người dùng đang gõ nếu có thao tác gần đây (< 3s)
             setFormModelItems((prev) => {
               const active = activeEditingCellRef.current;
-              const isRecentLocalEdit = active && Date.now() - active.timestamp < 3000;
+              const isRecentLocalEdit = active && Date.now() - active.timestamp < 15000;
 
               // Hợp nhất dữ liệu các model từ máy phát broadcast
               const mergedList = cleanItems.map((incoming) => {
@@ -2859,6 +2867,10 @@ const [isScrolled, setIsScrolled] = useState(false);
           } else if (table === 'daily_reports') {
             if (extraPayload?.subType === 'form_draft') {
               const incomingDraft = extraPayload.data as storage.FormDraftData;
+              if (incomingDraft?.senderId === storage.CLIENT_SESSION_ID || extraPayload?.senderId === storage.CLIENT_SESSION_ID) return;
+              const isLocalTyping = activeEditingCellRef.current && (Date.now() - activeEditingCellRef.current.timestamp < 15000);
+              if (isLocalTyping) return;
+
               if (incomingDraft && incomingDraft.date === formDateRef.current && incomingDraft.shift === formShiftRef.current) {
                 if (Array.isArray(incomingDraft.items)) {
                   setFormModelItems(deduplicateFormModelItems(incomingDraft.items, products));
@@ -2941,7 +2953,7 @@ const [isScrolled, setIsScrolled] = useState(false);
             const localTs = localDraft?.updatedAt ? new Date(localDraft.updatedAt).getTime() : 0;
 
             const isDiff = JSON.stringify(cloudDraft.items) !== JSON.stringify(formModelItemsRef.current);
-            const isNotRecentlyTyping = !activeEditingCellRef.current || (Date.now() - activeEditingCellRef.current.timestamp > 3000);
+            const isNotRecentlyTyping = !activeEditingCellRef.current || (Date.now() - activeEditingCellRef.current.timestamp > 15000);
 
             // Chỉ cập nhật từ Cloud nếu Cloud mới hơn bản cục bộ (> 1000ms) và không đang gõ phím
             if (cloudTs > localTs + 1000 && isNotRecentlyTyping && isDiff) {
@@ -4337,7 +4349,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
 
       if (!hasSavedFormDate && formDate.startsWith(ym) && includeForm) {
-        const formItem = formModelItems.find(item => item.productId === prodId);
+        const formItem = formModelItemsRef.current.find(item => item.productId === prodId);
         if (formItem) {
           const formActual: number = (Object.values(formItem.hourlyActuals) as any[]).reduce((sum: number, val: any): number => sum + (Number(val) || 0), 0);
           const formEq: number = Math.round(formActual * prodFactor);
@@ -4366,7 +4378,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
     // Sort by group, then by product code
     return filteredItems.sort((a, b) => a.product.group.localeCompare(b.product.group) || a.product.code.localeCompare(b.product.code));
-  }, [monthlyPlan, productionLogs, products, formDate, formModelItems, filterDivision, executionFilterType, executionFilterDay, executionFilterWeek, selectedYear, selectedMonth]);
+  }, [monthlyPlan, productionLogs, products, formDate, filterDivision, executionFilterType, executionFilterDay, executionFilterWeek, selectedYear, selectedMonth]);
 
   // Thống kê tóm tắt đầu não
   const kpis = useMemo(() => {
@@ -5155,15 +5167,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newDate = e.target.value;
     if (!newDate) return;
-    
-    const today = new Date();
-    const todayStr = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, '0') + "-" + String(today.getDate()).padStart(2, '0');
-    
-    if (newDate < todayStr) {
-      setPendingPastDate(newDate);
-    } else {
-      setFormDate(newDate);
-    }
+    setFormDate(newDate);
   };
 
   const handleAddLog = async (e: React.FormEvent) => {
@@ -5393,7 +5397,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     const newFormModelItems: FormModelItem[] = logsForDate.map(log => {
       const planVal = (!isNaN(dayNum) && monthlyPlan[ym]?.[log.productId]?.[dayNum]) || 0;
       return {
-        id: `item-${log.productId}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id: `item_${log.productId}`,
         productId: log.productId,
         dailyPlan: planVal,
         hourlyActuals: log.hourlyActuals || {}
@@ -5663,7 +5667,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     }
 
-    const newItemId = "item-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+    const newItemId = "item_" + chosenProdId;
     const nextItems = deduplicateFormModelItems([
       ...formModelItems,
       {
@@ -5775,67 +5779,50 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
     }
 
-    const currentProductId = updates.productId || itemToUpdate.productId;
+    // Đánh dấu ô đang được chỉnh sửa
+    activeEditingCellRef.current = { id, slotName: updates.productId ? '__model_select' : '__daily_plan', timestamp: Date.now() };
 
-    // Nếu người dùng thay đổi dailyPlan, ta cập nhật ngược lại vào monthlyPlan cho ngày hiện tại làm base plan đúng
-    if (updates.dailyPlan !== undefined) {
-      const [year, month, day] = formDate.split("-");
-      const ym = `${year}-${month}`;
-      const dayNum = parseInt(day);
-      if (!isNaN(dayNum)) {
-        setMonthlyPlan((prev) => {
-          const next = { ...prev };
-          if (!next[ym]) next[ym] = {};
-          if (!next[ym][currentProductId]) {
-            next[ym][currentProductId] = {};
-          }
-          next[ym][currentProductId][dayNum] = updates.dailyPlan!;
-          return next;
-        });
-      }
-    }
+    setFormModelItems((prev) => {
+      const nextItems = prev.map((item) => {
+        if (item.id !== id) return item;
+        const newUpdates = { ...updates };
+        if (updates.productId && updates.productId !== item.productId) {
+          const [year, month, day] = formDateRef.current.split("-");
+          const ym = `${year}-${month}`;
+          const dayNum = parseInt(day, 10);
+          newUpdates.dailyPlan = (monthlyPlanRef.current[ym]?.[updates.productId]?.[dayNum]) || 0;
+        }
+        return { ...item, ...newUpdates };
+      });
 
-    const updatedItems = formModelItems.map((item) => {
-      if (item.id !== id) return item;
-      const newUpdates = { ...updates };
-      
-      // Auto-fill dailyPlan if productId changed
-      if (updates.productId && updates.productId !== item.productId) {
-        const [year, month, day] = formDate.split("-");
-        const ym = `${year}-${month}`;
-        const dayNum = parseInt(day);
-        newUpdates.dailyPlan = (monthlyPlan[ym]?.[updates.productId]?.[dayNum]) || 0;
+      const deduplicated = deduplicateFormModelItems(nextItems, products);
+      formModelItemsRef.current = deduplicated;
+
+      // Chỉ lưu lên cloud khi đổi Model; khi nhập số dailyPlan thì lưu khi blur (handleCommitItemDailyPlan) để không lag
+      if (updates.productId && updates.productId !== itemToUpdate.productId) {
+        const draftData: storage.FormDraftData = {
+          date: formDateRef.current,
+          shift: formShiftRef.current,
+          slots: formSlotsRef.current,
+          items: deduplicated,
+          officialRO: formOfficialWorkersRO,
+          seasonalRO: formSeasonalWorkersRO,
+          officialBG: formOfficialWorkersBG,
+          seasonalBG: formSeasonalWorkersBG,
+          officialRMA: formOfficialWorkersRMA,
+          seasonalRMA: formSeasonalWorkersRMA,
+          technician: formTechnician,
+          senderId: storage.CLIENT_SESSION_ID,
+          updatedAt: new Date().toISOString(),
+        };
+        localStorage.setItem(`sunhouse_draft_${formDateRef.current}_${formShiftRef.current}`, JSON.stringify(draftData));
+        localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+        storage.saveFormDraft(draftData);
+        storage.sendLiveFormBroadcast(draftData);
       }
-      
-      return { ...item, ...newUpdates };
+
+      return deduplicated;
     });
-
-    const deduplicated = deduplicateFormModelItems(updatedItems, products);
-    setFormModelItems(deduplicated);
-    formModelItemsRef.current = deduplicated;
-
-    // Khóa chống ghi đè khi đổi model trong 5 giây
-    activeEditingCellRef.current = { id, slotName: '__model_select', timestamp: Date.now() };
-
-    const draftData: storage.FormDraftData = {
-      date: formDate,
-      shift: formShift,
-      slots: formSlots,
-      items: deduplicated,
-      officialRO: formOfficialWorkersRO,
-      seasonalRO: formSeasonalWorkersRO,
-      officialBG: formOfficialWorkersBG,
-      seasonalBG: formSeasonalWorkersBG,
-      officialRMA: formOfficialWorkersRMA,
-      seasonalRMA: formSeasonalWorkersRMA,
-      technician: formTechnician,
-      updatedAt: new Date().toISOString(),
-    };
-
-    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
-    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
-    storage.saveFormDraft(draftData);
-    storage.sendLiveFormBroadcast(draftData);
 
     if (updates.productId && updates.productId !== itemToUpdate.productId) {
       const newProd = products.find(p => p.id === updates.productId);
@@ -5849,8 +5836,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     activeEditingCellRef.current = { id, slotName, timestamp: Date.now() };
 
     // Cập nhật state cục bộ ngay lập tức (0ms delay), không gửi request Supabase khi đang gõ phím
-    setFormModelItems((prev) =>
-      prev.map((item) => {
+    setFormModelItems((prev) => {
+      const updated = prev.map((item) => {
         if (item.id !== id) return item;
         return {
           ...item,
@@ -5859,109 +5846,123 @@ const [isScrolled, setIsScrolled] = useState(false);
             [slotName]: qty,
           },
         };
-      })
-    );
+      });
+      formModelItemsRef.current = updated;
+      return updated;
+    });
   };
 
-  // Khi nhập số lượng theo giờ, chỉ ghi nhận vào bản nháp cục bộ (draft) và broadcast实时.
-  // Dữ liệu chỉ được lưu chính thức vào cơ sở dữ liệu khi bấm "Lưu Nhật Ký Ca".
+  // Khi hoàn tất nhập (blur hoặc enter), lưu vào bản nháp và broadcast
   const handleCommitItemHourly = async (id: string, slotName: string, customQty?: number) => {
-    // Giải phóng đánh dấu ô chỉnh sửa sau một khoảng ngắn
+    // Kéo dài đánh dấu ô chỉnh sửa để chống race condition khi chuyển ô
+    activeEditingCellRef.current = { id, slotName, timestamp: Date.now() };
     setTimeout(() => {
       if (activeEditingCellRef.current?.id === id && activeEditingCellRef.current?.slotName === slotName) {
         activeEditingCellRef.current = null;
       }
-    }, 1200);
+    }, 2500);
 
-    const item = formModelItems.find((it) => it.id === id);
-    if (!item) return;
+    setFormModelItems((prev) => {
+      const item = prev.find((it) => it.id === id);
+      if (!item) return prev;
 
-    const qty = customQty !== undefined ? customQty : (item.hourlyActuals[slotName] || 0);
+      const qty = customQty !== undefined ? customQty : (item.hourlyActuals[slotName] || 0);
+      const updatedHourly = {
+        ...item.hourlyActuals,
+        [slotName]: qty,
+      };
 
-    const updatedHourly = {
-      ...item.hourlyActuals,
-      [slotName]: qty,
-    };
+      const nextItems = prev.map((it) =>
+        it.id === id ? { ...it, hourlyActuals: updatedHourly } : it
+      );
+      formModelItemsRef.current = nextItems;
 
-    const updatedItems = formModelItems.map((it) =>
-      it.id === id ? { ...it, hourlyActuals: updatedHourly } : it
-    );
+      const draftData: storage.FormDraftData = {
+        date: formDateRef.current,
+        shift: formShiftRef.current,
+        slots: formSlotsRef.current,
+        items: nextItems,
+        officialRO: formOfficialWorkersRO,
+        seasonalRO: formSeasonalWorkersRO,
+        officialBG: formOfficialWorkersBG,
+        seasonalBG: formSeasonalWorkersBG,
+        officialRMA: formOfficialWorkersRMA,
+        seasonalRMA: formSeasonalWorkersRMA,
+        technician: formTechnician,
+        senderId: storage.CLIENT_SESSION_ID,
+        updatedAt: new Date().toISOString(),
+      };
 
-    // Cập nhật state nếu cần đồng bộ
-    setFormModelItems(updatedItems);
+      // Lưu vào draft cục bộ và đồng bộ ngầm
+      localStorage.setItem(`sunhouse_draft_${formDateRef.current}_${formShiftRef.current}`, JSON.stringify(draftData));
+      localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+      storage.saveFormDraft(draftData);
+      storage.sendLiveFormBroadcast(draftData);
 
-    const draftData: storage.FormDraftData = {
-      date: formDate,
-      shift: formShift,
-      slots: formSlots,
-      items: updatedItems,
-      officialRO: formOfficialWorkersRO,
-      seasonalRO: formSeasonalWorkersRO,
-      officialBG: formOfficialWorkersBG,
-      seasonalBG: formSeasonalWorkersBG,
-      officialRMA: formOfficialWorkersRMA,
-      seasonalRMA: formSeasonalWorkersRMA,
-      technician: formTechnician,
-      updatedAt: new Date().toISOString(),
-    };
-
-    // Lưu vào draft cục bộ ngay lập tức
-    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
-    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
-
-    // Lưu bản nháp lên Supabase Cloud
-    storage.saveFormDraft(draftData);
-
-    // Phát realtime broadcast tới các máy / tab khác
-    storage.sendLiveFormBroadcast(draftData);
+      return nextItems;
+    });
   };
 
   const handleCommitItemDailyPlan = async (id: string, planVal: number) => {
-    const item = formModelItems.find(it => it.id === id);
-    if (!item) return;
-
-    const p = products.find(x => x.id === item.productId);
-    const targetProdId = p?.id || item.productId;
-    const targetModelCode = p ? (getProductModelCode(p.name) || p.code || p.id) : item.productId;
-
-    if (formDate) {
-      const [year, month, day] = formDate.split("-");
-      const ym = `${year}-${month}`;
-      const dayNum = parseInt(day, 10);
-      if (!isNaN(dayNum)) {
-        setMonthlyPlan(prev => {
-          const next = { ...prev };
-          if (!next[ym]) next[ym] = {};
-          if (!next[ym][targetProdId]) next[ym][targetProdId] = {};
-          next[ym][targetProdId] = {
-            ...next[ym][targetProdId],
-            [dayNum]: planVal
-          };
-          storage.saveMonthlyPlan(next);
-          return next;
-        });
+    activeEditingCellRef.current = { id, slotName: '__daily_plan', timestamp: Date.now() };
+    setTimeout(() => {
+      if (activeEditingCellRef.current?.id === id && activeEditingCellRef.current?.slotName === '__daily_plan') {
+        activeEditingCellRef.current = null;
       }
-    }
+    }, 2500);
 
-    const updatedItems = formModelItems.map(it => it.id === id ? { ...it, dailyPlan: planVal } : it);
-    const draftData: storage.FormDraftData = {
-      date: formDate,
-      shift: formShift,
-      slots: formSlots,
-      items: updatedItems,
-      officialRO: formOfficialWorkersRO,
-      seasonalRO: formSeasonalWorkersRO,
-      officialBG: formOfficialWorkersBG,
-      seasonalBG: formSeasonalWorkersBG,
-      officialRMA: formOfficialWorkersRMA,
-      seasonalRMA: formSeasonalWorkersRMA,
-      technician: formTechnician,
-      updatedAt: new Date().toISOString(),
-    };
+    setFormModelItems((prev) => {
+      const item = prev.find(it => it.id === id);
+      if (!item) return prev;
 
-    await storage.saveFormDraft(draftData);
-    storage.sendLiveFormBroadcast(draftData);
-    showToastSuccess(`Đã lưu KHSX [${targetModelCode}: ${planVal}] lên Supabase ✓`);
+      const p = products.find(x => x.id === item.productId);
+      const targetProdId = p?.id || item.productId;
+
+      if (formDateRef.current) {
+        const [year, month, day] = formDateRef.current.split("-");
+        const ym = `${year}-${month}`;
+        const dayNum = parseInt(day, 10);
+        if (!isNaN(dayNum)) {
+          setMonthlyPlan(mPrev => {
+            const next = { ...mPrev };
+            if (!next[ym]) next[ym] = {};
+            if (!next[ym][targetProdId]) next[ym][targetProdId] = {};
+            next[ym][targetProdId] = {
+              ...next[ym][targetProdId],
+              [dayNum]: planVal
+            };
+            storage.saveMonthlyPlan(next);
+            return next;
+          });
+        }
+      }
+
+      const nextItems = prev.map(it => it.id === id ? { ...it, dailyPlan: planVal } : it);
+      formModelItemsRef.current = nextItems;
+
+      const draftData: storage.FormDraftData = {
+        date: formDateRef.current,
+        shift: formShiftRef.current,
+        slots: formSlotsRef.current,
+        items: nextItems,
+        officialRO: formOfficialWorkersRO,
+        seasonalRO: formSeasonalWorkersRO,
+        officialBG: formOfficialWorkersBG,
+        seasonalBG: formSeasonalWorkersBG,
+        officialRMA: formOfficialWorkersRMA,
+        seasonalRMA: formSeasonalWorkersRMA,
+        technician: formTechnician,
+        senderId: storage.CLIENT_SESSION_ID,
+        updatedAt: new Date().toISOString(),
+      };
+
+      localStorage.setItem(`sunhouse_draft_${formDateRef.current}_${formShiftRef.current}`, JSON.stringify(draftData));
+      localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+      storage.saveFormDraft(draftData);
+      storage.sendLiveFormBroadcast(draftData);
+
+      return nextItems;
+    });
   };
 
   const handleCommitWorkerDraft = async () => {
@@ -7549,6 +7550,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   // Synchronize dailyPlan in formModelItems and auto-merge planned models when monthlyPlan updates
   useEffect(() => {
     if (isSyncingFromExternalRef.current) return;
+    if (activeEditingCellRef.current && Date.now() - activeEditingCellRef.current.timestamp < 15000) return;
     const parts = formDate.split("-");
     if (parts.length < 3) return;
     const ym = `${parts[0]}-${parts[1]}`;

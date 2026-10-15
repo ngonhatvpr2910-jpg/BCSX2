@@ -352,7 +352,7 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
       if (modelKey) seenKeys.add(modelKey);
       result.push({
         ...item,
-        id: item.id || `item-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: item.id || `item_${item.productId}`,
         hourlyActuals: { ...(item.hourlyActuals || {}) }
       });
     } else {

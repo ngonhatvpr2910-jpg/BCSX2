@@ -74,7 +74,7 @@ function setLocal<T>(key: string, data: T): void {
 }
 
 // Helper timeout chống treo/đợi chờ quá lâu khi mạng chập chờn
-function withTimeout<T>(promiseOrBuilder: any, ms = 4000): Promise<T> {
+function withTimeout<T>(promiseOrBuilder: any, ms = 2500): Promise<T> {
   const promise: Promise<T> = Promise.resolve(promiseOrBuilder);
   return Promise.race([
     promise,
@@ -386,11 +386,14 @@ export async function saveAllWorkers(workers: Worker[]): Promise<void> {
 export async function getAttendanceLogs(limitCount: number = 1000): Promise<AttendanceRecord[]> {
   if (supabase && isSupabaseConfigured) {
     try {
-      const { data, error } = await supabase
-        .from('attendance_records')
-        .select('id, worker_id, date, slot, check_in_time, check_out_time, scanned_division')
-        .order('date', { ascending: false })
-        .limit(limitCount);
+      const { data, error } = await withTimeout<any>(
+        supabase
+          .from('attendance_records')
+          .select('id, worker_id, date, slot, check_in_time, check_out_time, scanned_division')
+          .order('date', { ascending: false })
+          .limit(limitCount),
+        2500
+      );
 
       if (error) throw error;
 
@@ -638,16 +641,19 @@ export async function saveAllProducts(products: ProductDefinition[]): Promise<vo
 export async function getProductionLogs(limitCount: number = 1000): Promise<ProductionLog[]> {
   if (supabase && isSupabaseConfigured) {
     try {
-      const { data, error } = await supabase
-        .from('production_logs')
-        .select(
-          'id, date, line_id, line_name, product_id, product_name, product_group, ' +
-          'actual_units, workers_count, official_workers, seasonal_workers, equivalent_factor, ' +
-          'equivalent_products, labor_productivity_percent, shift, technician_name, ' +
-          'hourly_actuals, hourly_workers, hourly_official_workers, hourly_seasonal_workers'
-        )
-        .order('date', { ascending: false })
-        .limit(limitCount);
+      const { data, error } = await withTimeout<any>(
+        supabase
+          .from('production_logs')
+          .select(
+            'id, date, line_id, line_name, product_id, product_name, product_group, ' +
+            'actual_units, workers_count, official_workers, seasonal_workers, equivalent_factor, ' +
+            'equivalent_products, labor_productivity_percent, shift, technician_name, ' +
+            'hourly_actuals, hourly_workers, hourly_official_workers, hourly_seasonal_workers'
+          )
+          .order('date', { ascending: false })
+          .limit(limitCount),
+        2500
+      );
 
       if (error) throw error;
 
@@ -981,7 +987,7 @@ export async function fetchShiftProductionLogs(
     if (hasGranularSchema === true) {
       let res: any = null;
       try {
-        res = await supabase.from('production_logs').select('*').eq('work_date', selectedDate);
+        res = await withTimeout<any>(supabase.from('production_logs').select('*').eq('work_date', selectedDate), 2500);
       } catch (e: any) {
         res = { error: e };
       }
@@ -990,41 +996,33 @@ export async function fetchShiftProductionLogs(
       if (res?.error && (res.error.code === 'PGRST204' || res.error.code === '42703' || res.error.message?.includes('work_date') || res.error.message?.includes('schema cache'))) {
         hasGranularSchema = false;
         try {
-          res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+          res = await withTimeout<any>(supabase.from('production_logs').select('*').eq('date', selectedDate), 2500);
         } catch (e: any) {
           res = { error: e };
         }
       }
 
       if (res?.error) {
-        if (isTransientNetworkError(res.error)) {
-          console.warn('[storage] Mạng gián đoạn khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
-          const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
-          rows = localLogs.filter((l) => l.date === selectedDate);
-          return { data: rows, error: null };
-        }
-        console.warn('[storage] Lỗi query production_logs theo ngày:', res.error);
-        return { data: null, error: res.error };
+        console.warn('[storage] Mạng gián đoạn hoặc timeout khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
+        const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+        rows = localLogs.filter((l) => l.date === selectedDate);
+        return { data: rows, error: null };
       }
       rows = res?.data || [];
     } else {
       // Schema tiêu chuẩn (cột date)
       let res: any = null;
       try {
-        res = await supabase.from('production_logs').select('*').eq('date', selectedDate);
+        res = await withTimeout<any>(supabase.from('production_logs').select('*').eq('date', selectedDate), 2500);
       } catch (e: any) {
         res = { error: e };
       }
 
       if (res?.error) {
-        if (isTransientNetworkError(res.error)) {
-          console.warn('[storage] Mạng gián đoạn khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
-          const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
-          rows = localLogs.filter((l) => l.date === selectedDate);
-          return { data: rows, error: null };
-        }
-        console.warn('[storage] Lỗi query production_logs theo date:', res.error);
-        return { data: null, error: res.error };
+        console.warn('[storage] Mạng gián đoạn hoặc timeout khi tải nhật ký ca, dùng bộ nhớ cục bộ:', res.error?.message || res.error);
+        const localLogs = getLocal<ProductionLog[]>(STORAGE_KEYS.PRODUCTION_LOGS, INITIAL_PRODUCTION_LOGS);
+        rows = localLogs.filter((l) => l.date === selectedDate);
+        return { data: rows, error: null };
       }
       rows = res?.data || [];
     }
@@ -1985,6 +1983,7 @@ export interface FormDraftData {
   officialRMA: Record<string, number>;
   seasonalRMA: Record<string, number>;
   technician: string;
+  senderId?: string;
   updatedAt: string;
 }
 
@@ -2048,6 +2047,7 @@ export async function getFormDraft(date: string, shift: string): Promise<FormDra
 }
 
 export async function saveFormDraft(draft: FormDraftData): Promise<void> {
+  draft.senderId = draft.senderId || CLIENT_SESSION_ID;
   const localKey = `sunhouse_draft_${draft.date}_${draft.shift}`;
   setLocal(localKey, draft);
   setLocal('sunhouse_last_active_form_draft', draft);
@@ -2055,14 +2055,17 @@ export async function saveFormDraft(draft: FormDraftData): Promise<void> {
   if (supabase && isSupabaseConfigured) {
     try {
       const draftId = `draft_${draft.date || ''}_${(draft.shift || '').replace(/[^a-zA-Z0-9]/g, '_')}`;
-      const { error } = await supabase.from('daily_reports').upsert({
-        id: draftId,
-        report_type: 'form_draft',
-        report_data: draft,
-        updated_at: new Date().toISOString(),
-      });
+      const { error } = await withTimeout<any>(
+        supabase.from('daily_reports').upsert({
+          id: draftId,
+          report_type: 'form_draft',
+          report_data: draft,
+          updated_at: new Date().toISOString(),
+        }),
+        2500
+      );
       if (error) console.warn('[storage] Lưu form draft lên Supabase:', error.message || error);
-      broadcastTableUpdate('daily_reports', { subType: 'form_draft', draftId, data: draft, timestamp: Date.now() });
+      broadcastTableUpdate('daily_reports', { subType: 'form_draft', draftId, data: draft, senderId: CLIENT_SESSION_ID, timestamp: Date.now() });
     } catch (err: any) {
       console.warn('[storage] Trạng thái kết nối khi lưu form draft:', err?.message || err);
     }

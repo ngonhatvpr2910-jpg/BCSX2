@@ -104,6 +104,17 @@ export const LoggingTab = ({
     return deduplicateFormModelItems(formModelItems || [], products || []);
   }, [formModelItems, products]);
 
+  const availableProductsList = useMemo(() => {
+    const available = (products || []).filter((prod: any) => filterDivision === "ALL" || prod.group === filterDivision);
+    return [...available].sort((a: any, b: any) => 
+      getProductModelCode(a.name).localeCompare(getProductModelCode(b.name))
+    );
+  }, [products, filterDivision]);
+
+  const chosenProductIds = useMemo(() => {
+    return new Set((activeFormModelItems || []).map((it: any) => it.productId));
+  }, [activeFormModelItems]);
+
   // Tìm các model có trong KHSX Tháng ngày này nhưng chưa có trong bảng nhật ký ca
   const missingPlannedModels = useMemo(() => {
     if (!formDate || !monthlyPlan || !products) return [];
@@ -384,31 +395,19 @@ export const LoggingTab = ({
                                         onChange={(e) => handleUpdateItem(item.id, { productId: e.target.value })}
                                         className="w-full bg-transparent border-0 text-white focus:ring-0 outline-none cursor-pointer whitespace-nowrap text-[13px] py-0.5"
                                       >
-                                        {(() => {
-                                          const available = products.filter((prod: any) => filterDivision === "ALL" || prod.group === filterDivision);
-                                          if (item.productId && !available.some((p: any) => p.id === item.productId)) {
-                                            const curP = products.find((p: any) => p.id === item.productId);
-                                            if (curP) available.push(curP);
-                                          }
-                                          const sorted = [...available].sort((a: any, b: any) => 
-                                            getProductModelCode(a.name).localeCompare(getProductModelCode(b.name))
+                                        {availableProductsList.map((prod: any) => {
+                                          const isChosenElsewhere = item.productId !== prod.id && chosenProductIds.has(prod.id);
+                                          return (
+                                            <option
+                                              key={prod.id}
+                                              value={prod.id}
+                                              disabled={isChosenElsewhere}
+                                              className={isChosenElsewhere ? "bg-slate-950 text-slate-500 italic" : "bg-slate-900 text-white"}
+                                            >
+                                              {getProductModelCode(prod.name)} {isChosenElsewhere ? "(Đã có trong bảng)" : ""}
+                                            </option>
                                           );
-                                          return sorted.map((prod: any) => {
-                                            const isChosenElsewhere = activeFormModelItems.some(
-                                              (it: any) => it.id !== item.id && isSameProduct(it.productId, prod.id, products)
-                                            );
-                                            return (
-                                              <option
-                                                key={prod.id}
-                                                value={prod.id}
-                                                disabled={isChosenElsewhere}
-                                                className={isChosenElsewhere ? "bg-slate-950 text-slate-500 italic" : "bg-slate-900 text-white"}
-                                              >
-                                                {getProductModelCode(prod.name)} {isChosenElsewhere ? "(Đã có trong bảng)" : ""}
-                                              </option>
-                                            );
-                                          });
-                                        })()}
+                                        })}
                                       </select>
                                     </div>
                                   </td>
@@ -417,16 +416,21 @@ export const LoggingTab = ({
                                     <input
                                       type="number"
                                       min={0}
-                                      value={item.dailyPlan !== undefined && !Number.isNaN(item.dailyPlan) ? item.dailyPlan : ""}
-                                      onChange={(e) => handleUpdateItem(item.id, { dailyPlan: parseInt(e.target.value) || 0 })}
+                                      value={item.dailyPlan !== undefined && item.dailyPlan !== null && !Number.isNaN(item.dailyPlan) && item.dailyPlan !== 0 ? item.dailyPlan : ""}
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateItem(item.id, { dailyPlan: raw === "" ? 0 : parseInt(raw, 10) || 0 });
+                                      }}
                                       onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
                                           (e.target as HTMLInputElement).blur();
-                                          handleCommitItemDailyPlan?.(item.id, parseInt((e.target as HTMLInputElement).value) || 0);
+                                          const raw = (e.target as HTMLInputElement).value;
+                                          handleCommitItemDailyPlan?.(item.id, raw === "" ? 0 : parseInt(raw, 10) || 0);
                                         }
                                       }}
                                       onBlur={(e) => {
-                                        handleCommitItemDailyPlan?.(item.id, parseInt(e.target.value) || 0);
+                                        const raw = e.target.value;
+                                        handleCommitItemDailyPlan?.(item.id, raw === "" ? 0 : parseInt(raw, 10) || 0);
                                       }}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-amber-400 placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                       placeholder="0"
@@ -438,16 +442,21 @@ export const LoggingTab = ({
                                       <input
                                         type="number"
                                         min={0}
-                                        value={item.hourlyActuals[slot] !== undefined && !Number.isNaN(item.hourlyActuals[slot]) ? item.hourlyActuals[slot] : ""}
-                                        onChange={(e) => handleUpdateItemHourly(item.id, slot, parseInt(e.target.value) || 0)}
+                                        value={item.hourlyActuals[slot] !== undefined && item.hourlyActuals[slot] !== null && !Number.isNaN(item.hourlyActuals[slot]) && item.hourlyActuals[slot] !== 0 ? item.hourlyActuals[slot] : ""}
+                                        onChange={(e) => {
+                                          const raw = e.target.value;
+                                          handleUpdateItemHourly(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
+                                        }}
                                         onKeyDown={(e) => {
                                           if (e.key === 'Enter') {
                                             (e.target as HTMLInputElement).blur();
-                                            handleCommitItemHourly?.(item.id, slot, parseInt((e.target as HTMLInputElement).value) || 0);
+                                            const raw = (e.target as HTMLInputElement).value;
+                                            handleCommitItemHourly?.(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
                                           }
                                         }}
                                         onBlur={(e) => {
-                                          handleCommitItemHourly?.(item.id, slot, parseInt(e.target.value) || 0);
+                                          const raw = e.target.value;
+                                          handleCommitItemHourly?.(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
                                         }}
                                         className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-white placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                         placeholder="-"
@@ -833,8 +842,12 @@ export const LoggingTab = ({
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      value={formOfficialWorkersRO[slot] !== undefined && !Number.isNaN(formOfficialWorkersRO[slot]) ? formOfficialWorkersRO[slot] : ""}
-                                      onChange={(e) => handleUpdateOfficialWorkerRO(slot, parseFloat(e.target.value) || 0)}
+                                      value={formOfficialWorkersRO[slot] !== undefined && !Number.isNaN(formOfficialWorkersRO[slot]) && formOfficialWorkersRO[slot] !== 0 ? formOfficialWorkersRO[slot] : ""}
+                                      placeholder="0"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateOfficialWorkerRO(slot, raw === "" ? 0 : parseFloat(raw) || 0);
+                                      }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -857,8 +870,12 @@ export const LoggingTab = ({
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      value={formSeasonalWorkersRO[slot] !== undefined && !Number.isNaN(formSeasonalWorkersRO[slot]) ? formSeasonalWorkersRO[slot] : ""}
-                                      onChange={(e) => handleUpdateSeasonalWorkerRO(slot, parseFloat(e.target.value) || 0)}
+                                      value={formSeasonalWorkersRO[slot] !== undefined && !Number.isNaN(formSeasonalWorkersRO[slot]) && formSeasonalWorkersRO[slot] !== 0 ? formSeasonalWorkersRO[slot] : ""}
+                                      placeholder="0"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateSeasonalWorkerRO(slot, raw === "" ? 0 : parseFloat(raw) || 0);
+                                      }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -926,8 +943,12 @@ export const LoggingTab = ({
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      value={formOfficialWorkersRMA[slot] !== undefined && !Number.isNaN(formOfficialWorkersRMA[slot]) ? formOfficialWorkersRMA[slot] : ""}
-                                      onChange={(e) => handleUpdateOfficialWorkerRMA(slot, parseFloat(e.target.value) || 0)}
+                                      value={formOfficialWorkersRMA[slot] !== undefined && !Number.isNaN(formOfficialWorkersRMA[slot]) && formOfficialWorkersRMA[slot] !== 0 ? formOfficialWorkersRMA[slot] : ""}
+                                      placeholder="0"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateOfficialWorkerRMA(slot, raw === "" ? 0 : parseFloat(raw) || 0);
+                                      }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -950,8 +971,12 @@ export const LoggingTab = ({
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      value={formSeasonalWorkersRMA[slot] !== undefined && !Number.isNaN(formSeasonalWorkersRMA[slot]) ? formSeasonalWorkersRMA[slot] : ""}
-                                      onChange={(e) => handleUpdateSeasonalWorkerRMA(slot, parseFloat(e.target.value) || 0)}
+                                      value={formSeasonalWorkersRMA[slot] !== undefined && !Number.isNaN(formSeasonalWorkersRMA[slot]) && formSeasonalWorkersRMA[slot] !== 0 ? formSeasonalWorkersRMA[slot] : ""}
+                                      placeholder="0"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateSeasonalWorkerRMA(slot, raw === "" ? 0 : parseFloat(raw) || 0);
+                                      }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -1018,8 +1043,12 @@ export const LoggingTab = ({
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      value={formOfficialWorkersBG[slot] !== undefined && !Number.isNaN(formOfficialWorkersBG[slot]) ? formOfficialWorkersBG[slot] : ""}
-                                      onChange={(e) => handleUpdateOfficialWorkerBG(slot, parseFloat(e.target.value) || 0)}
+                                      value={formOfficialWorkersBG[slot] !== undefined && !Number.isNaN(formOfficialWorkersBG[slot]) && formOfficialWorkersBG[slot] !== 0 ? formOfficialWorkersBG[slot] : ""}
+                                      placeholder="0"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateOfficialWorkerBG(slot, raw === "" ? 0 : parseFloat(raw) || 0);
+                                      }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
@@ -1042,8 +1071,12 @@ export const LoggingTab = ({
                                       type="number"
                                       min={0}
                                       step="0.01"
-                                      value={formSeasonalWorkersBG[slot] !== undefined && !Number.isNaN(formSeasonalWorkersBG[slot]) ? formSeasonalWorkersBG[slot] : ""}
-                                      onChange={(e) => handleUpdateSeasonalWorkerBG(slot, parseFloat(e.target.value) || 0)}
+                                      value={formSeasonalWorkersBG[slot] !== undefined && !Number.isNaN(formSeasonalWorkersBG[slot]) && formSeasonalWorkersBG[slot] !== 0 ? formSeasonalWorkersBG[slot] : ""}
+                                      placeholder="0"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        handleUpdateSeasonalWorkerBG(slot, raw === "" ? 0 : parseFloat(raw) || 0);
+                                      }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
                                       className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"

@@ -667,7 +667,6 @@ export default function App() {
       <main className="w-full max-w-[1800px] mx-auto px-4 py-6">
 
         {/* ACTIVE TAB: DASHBOARD */}
-        <AnimatePresence mode="wait">
           {activeTab === "dashboard" && (
     <DashboardTab
       setDashboardSubTab={setDashboardSubTab}
@@ -981,7 +980,6 @@ export default function App() {
               handleOptimizeStorage={handleOptimizeStorage}
             />
           )}
-        </AnimatePresence>
 
       </main>
 
@@ -1226,54 +1224,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>
-        {pendingPastDate && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-pointer"
-              onClick={() => setPendingPastDate(null)}
-            ></motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 10 }}
-              className="relative w-full max-w-sm bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col"
-            >
-              <div className="p-4 border-b border-slate-800 bg-slate-900/50 flex items-center gap-2">
-                <span className="text-amber-400">⚠️</span>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider">Xác nhận ngày</h3>
-              </div>
-
-              <div className="p-5 text-slate-300 text-sm">
-                Bạn đang chọn một ngày trong quá khứ (<strong className="text-amber-400">{pendingPastDate.split('-').reverse().join('/')}</strong>).<br /><br />
-                Bạn có muốn bổ sung nhật ký ghi ca cho ngày này không?
-              </div>
-
-              <div className="p-4 border-t border-slate-800 bg-slate-950 flex justify-end gap-3">
-                <button
-                  onClick={() => setPendingPastDate(null)}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded text-xs transition cursor-pointer"
-                >
-                  Hủy bỏ
-                </button>
-                <button
-                  onClick={() => {
-                    setFormDate(pendingPastDate);
-                    setPendingPastDate(null);
-                  }}
-                  className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded text-xs transition cursor-pointer"
-                >
-                  Xác nhận bổ sung
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
 
       {/* FOOTER */}
       <footer className="border-t border-slate-800 bg-slate-950 py-8 text-xs text-slate-500 mt-12">
