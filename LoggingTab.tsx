@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, getCanonicalProductKey, deduplicateFormModelItems, deduplicateProductDefinitions } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo, useState } from 'react';
@@ -111,6 +111,15 @@ export const LoggingTab = ({
     );
   }, [products, filterDivision]);
 
+  const chosenProductCanonicalKeys = useMemo(() => {
+    const s = new Set<string>();
+    (activeFormModelItems || []).forEach((it: any) => {
+      const k = getCanonicalProductKey(it.productId, products);
+      if (k) s.add(k);
+    });
+    return s;
+  }, [activeFormModelItems, products]);
+
   const chosenProductIds = useMemo(() => {
     return new Set((activeFormModelItems || []).map((it: any) => it.productId));
   }, [activeFormModelItems]);
@@ -129,10 +138,11 @@ export const LoggingTab = ({
       const planVal = (monthlyPlan[ym]?.[p.id]?.[dayNum]) || 0;
       const leftover = (getPrevDayLeftover ? getPrevDayLeftover(p.id, formDate) : 0) || 0;
       if (planVal <= 0 && leftover <= 0) return false;
-      // Kiểm tra xem đã có trong bảng chưa
-      return !activeFormModelItems.some((it: any) => isSameProduct(it.productId, p.id, products));
+      // Kiểm tra xem đã có trong bảng chưa qua Set O(1)
+      const pKey = getCanonicalProductKey(p.id, products);
+      return !chosenProductCanonicalKeys.has(pKey);
     });
-  }, [formDate, monthlyPlan, products, filterDivision, activeFormModelItems, getPrevDayLeftover]);
+  }, [formDate, monthlyPlan, products, filterDivision, chosenProductCanonicalKeys, getPrevDayLeftover]);
 
   return (
     <motion.div
@@ -1158,8 +1168,8 @@ export const LoggingTab = ({
                           <Activity className="w-3.5 h-3.5 text-rose-500" />
                           Biểu đồ NSLĐ từng khung giờ
                         </h4>
-                        <div className="h-[360px] w-full mt-2">
-                          <ResponsiveContainer width="99%" height="100%">
+                        <div className="h-[360px] w-full min-w-0 mt-2">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <ComposedChart data={formHourlyChartData} margin={{ top: 75, right: 10, left: -20, bottom: 5 }}>
                               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                               <XAxis dataKey="slot" stroke="#64748b" fontSize={12} tickMargin={5} />
@@ -1471,8 +1481,8 @@ export const LoggingTab = ({
                           <Clock className="w-4 h-4 text-rose-500" />
                           Phân bổ sản lượng lắp ráp theo khung giờ 1h / ca làm việc {recordsFilterDate !== "ALL" ? `- Ngày ${recordsFilterDate}` : "(Sát thực các ngày)"}
                         </h4>
-                        <div className="flex-1 min-h-0">
-                          <ResponsiveContainer width="99%" height="100%">
+                        <div className="flex-1 min-h-0 min-w-0 w-full">
+                          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                             <ComposedChart data={hourlyChartData} margin={{ top: 40, right: 30, left: -25, bottom: 5 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                             <XAxis

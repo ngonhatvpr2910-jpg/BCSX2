@@ -566,7 +566,7 @@ export const DashboardTab = ({
               {/* BIỂU ĐỒ TRỰC QUAN HÓA CHO DỮ LIỆU ĐÍNH KÈM */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* Recharts: Chi phí Hàng Hỏng (Scrap) - Tháng */}
-                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60">
+                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60 min-w-0">
                   <div className="flex justify-between items-center mb-3">
                     <div>
                       <h4 className="text-sm font-semibold text-white">Theo Dõi Thiệt hại Giá Trị Hàng Hỏng Theo Tháng (Scrap Value)</h4>
@@ -576,8 +576,8 @@ export const DashboardTab = ({
                       Monthly Scrap Metric
                     </span>
                   </div>
-                  <div className="h-[380px]">
-                    <ResponsiveContainer width="99%" height="100%">
+                  <div className="h-[380px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                       <BarChart data={chartMonthlyScrap} margin={{ top: 40, right: 10, left: -10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                         <XAxis dataKey="month" tickFormatter={(v) => `Tháng ${v}`} fontSize={11} stroke="#64748b" interval={0} />
@@ -595,7 +595,7 @@ export const DashboardTab = ({
                 </div>
               
                 {/* Recharts: Chi phí Hàng Hỏng (Scrap) - Tuần */}
-                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60">
+                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60 min-w-0">
                   <div className="flex justify-between items-center mb-3">
                     <div>
                       <h4 className="text-sm font-semibold text-white">Theo Dõi Hàng Hỏng Theo Tuần</h4>
@@ -605,8 +605,8 @@ export const DashboardTab = ({
                       Weekly Metric
                     </span>
                   </div>
-                  <div className="h-[380px]">
-                    <ResponsiveContainer width="99%" height="100%">
+                  <div className="h-[380px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                       <BarChart data={chartWeeklyScrap} margin={{ top: 40, right: 10, left: -10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                         <XAxis dataKey="week" fontSize={11} stroke="#64748b" interval={0} />
@@ -625,10 +625,10 @@ export const DashboardTab = ({
               </div>
               {/* LỖI THAO TÁC BIỂU ĐỒ */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60">
+                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60 min-w-0">
                   <h4 className="text-sm font-semibold text-white mb-2">Tỉ Lệ Lỗi Thao Tác DCLR Theo Tháng (%)</h4>
-                  <div className="h-[320px]">
-                    <ResponsiveContainer width="99%" height="100%">
+                  <div className="h-[320px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                       <LineChart data={displayMonthlyDclrError} margin={{ top: 40, right: 15, left: -10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                         <XAxis dataKey="month" tickFormatter={(v) => `Tháng ${v}`} fontSize={11} stroke="#64748b" interval={0} />
@@ -642,10 +642,10 @@ export const DashboardTab = ({
                   </div>
                 </div>
 
-                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60">
+                <div className="bg-slate-900/30 p-5 rounded-xl border border-slate-800/60 min-w-0">
                   <h4 className="text-sm font-semibold text-white mb-2">Tỉ Lệ Lỗi Thao Tác DCLR Theo Tuần (%)</h4>
-                  <div className="h-[320px]">
-                    <ResponsiveContainer width="99%" height="100%">
+                  <div className="h-[320px] w-full min-w-0">
+                    <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                       <LineChart data={chartWeeklyDclrError} margin={{ top: 40, right: 15, left: -10, bottom: 5 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                         <XAxis dataKey="week" fontSize={11} stroke="#64748b" interval={0} />

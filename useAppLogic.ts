@@ -70,22 +70,18 @@ const [isScrolled, setIsScrolled] = useState(false);
   const lastScrollY = useRef(0);
 
   useEffect(() => {
+    let ticking = false;
     const handleScroll = () => {
-      const currentScrollY = window.scrollY;
-      setIsScrolled(currentScrollY > 40);
-      
-      // Only hide/show if scrolled enough to avoid jitter
-      const delta = currentScrollY - lastScrollY.current;
-      if (currentScrollY > 120) {
-        if (delta > 20) {
-          setShowHeader(false);
-        } else if (delta < -20) {
+      if (!ticking) {
+        window.requestAnimationFrame(() => {
+          const currentScrollY = window.scrollY;
+          const shouldBeScrolled = currentScrollY > 40;
+          setIsScrolled((prev) => (prev !== shouldBeScrolled ? shouldBeScrolled : prev));
           setShowHeader(true);
-        }
-      } else {
-        setShowHeader(true);
+          ticking = false;
+        });
+        ticking = true;
       }
-      lastScrollY.current = currentScrollY;
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleScroll);
@@ -1735,11 +1731,15 @@ const [isScrolled, setIsScrolled] = useState(false);
       updatedAt: new Date().toISOString(),
     };
 
-    // 1. Lưu LocalStorage tức thì (cả key ngày/ca lẫn active draft) - độ trễ 0ms
-    localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
-    localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+    // Lưu LocalStorage có debounce nhẹ (200ms) để không nghẽn luồng giao diện khi gõ phím nhanh
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+        localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+      } catch (e) {}
+    }, 200);
 
-    // Supabase chỉ được ghi khi người dùng sửa số và nhấn Enter (hoặc hoàn tất ô)
+    return () => clearTimeout(timer);
   }, [
     formDate,
     formShift,
@@ -3088,28 +3088,51 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [gasDailyReports, assemblyDailyReports]);
 
 
+  // 1. Tối ưu hóa hiệu năng cực đại: Lập chỉ mục O(1) sản lượng thực tế theo (productId_date)
+  const productionLogsAggMap = useMemo(() => {
+    const map = new Map<string, number>();
+    for (let i = 0; i < productionLogs.length; i++) {
+      const l = productionLogs[i];
+      if (!l.date || !l.productId) continue;
+      const k = `${l.productId}_${l.date}`;
+      map.set(k, (map.get(k) || 0) + (l.actualUnits || 0));
+    }
+    return map;
+  }, [productionLogs]);
+
+  // 2. Bộ nhớ cache kết quả tính lũy kế nợ tồn để không bao giờ quét mảng trùng lặp
+  const prevDayLeftoverCache = useMemo(() => {
+    return new Map<string, number>();
+  }, [productionLogsAggMap, monthlyPlan]);
+
   // Helper to calculate the accumulated leftover from preceding days of the same month/year
-  const getPrevDayLeftover = (productId: string, currentDateStr: string) => {
-      const parts = currentDateStr.split("-");
+  const getPrevDayLeftover = useCallback((productId: string, currentDateStr: string): number => {
+    if (!productId || !currentDateStr) return 0;
+    const cacheKey = `${productId}_${currentDateStr}`;
+    if (prevDayLeftoverCache.has(cacheKey)) {
+      return prevDayLeftoverCache.get(cacheKey)!;
+    }
+
+    const parts = currentDateStr.split("-");
     if (parts.length !== 3) return 0;
     const year = parts[0];
     const month = parts[1];
     const ym = `${year}-${month}`;
     const currentMonthPlan = monthlyPlan[ym] || {};
-    const currentDayNum = parseInt(parts[2]);
-    if (isNaN(currentDayNum)) return 0;
+    const currentDayNum = parseInt(parts[2], 10);
+    if (isNaN(currentDayNum) || currentDayNum <= 1) return 0;
 
+    const prodPlan = currentMonthPlan[productId] || {};
     let accumulated = 0;
     for (let d = 1; d < currentDayNum; d++) {
       const dayStr = `${year}-${month}-${String(d).padStart(2, '0')}`;
-      const plan = currentMonthPlan[productId]?.[d] || 0;
-      const actual = productionLogs
-        .filter(log => log.date === dayStr && log.productId === productId)
-        .reduce((sum, log) => sum + log.actualUnits, 0);
+      const plan = prodPlan[d] || 0;
+      const actual = productionLogsAggMap.get(`${productId}_${dayStr}`) || 0;
       accumulated += (plan - actual);
     }
+    prevDayLeftoverCache.set(cacheKey, accumulated);
     return accumulated || 0;
-  };
+  }, [monthlyPlan, productionLogsAggMap, prevDayLeftoverCache]);
 
 
   // --- FORM DYNAMICS ---
@@ -7614,9 +7637,11 @@ const [isScrolled, setIsScrolled] = useState(false);
           technician: formTechnician,
           updatedAt: new Date().toISOString(),
         };
-        localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
-        localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
-        storage.saveFormDraft(draftData);
+
+        try {
+          localStorage.setItem(`sunhouse_draft_${formDate}_${formShift}`, JSON.stringify(draftData));
+          localStorage.setItem('sunhouse_last_active_form_draft', JSON.stringify(draftData));
+        } catch (e) {}
 
         return finalMerged;
       }

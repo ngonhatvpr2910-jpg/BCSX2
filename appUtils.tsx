@@ -229,6 +229,9 @@ export function getProductModelCode(name: string, fallbackCode?: string): string
 
 export const YAXIS_DOMAIN: [number, "auto"] = [0, "auto"];
 
+// Bộ nhớ đệm O(1) tăng tốc độ nhận diện Canonical Key cho Model
+const canonicalKeyCache = new Map<string, string>();
+
 // Lấy Canonical Key đại diện duy nhất cho một Model
 export function getCanonicalProductKey(prodOrId: any, prodList: any[] = []): string {
   if (!prodOrId) return "";
@@ -240,6 +243,11 @@ export function getCanonicalProductKey(prodOrId: any, prodList: any[] = []): str
   }
 
   const c = String(prodOrId).trim().toUpperCase();
+  if (canonicalKeyCache.has(c)) {
+    return canonicalKeyCache.get(c)!;
+  }
+
+  let resolvedKey = "";
   const found = prodList.find(x => 
     (x.id && String(x.id).trim().toUpperCase() === c) || 
     (x.code && String(x.code).trim().toUpperCase() === c) || 
@@ -249,13 +257,16 @@ export function getCanonicalProductKey(prodOrId: any, prodList: any[] = []): str
 
   if (found) {
     const code = getProductModelCode(found.name, found.code);
-    if (code) return code.toUpperCase();
-    if (found.code) return cleanModelCode(found.code);
-    return String(found.id).trim().toUpperCase();
+    resolvedKey = code ? code.toUpperCase() : (found.code ? cleanModelCode(found.code) : String(found.id).trim().toUpperCase());
+  } else {
+    const directExtracted = getProductModelCode(c);
+    resolvedKey = directExtracted ? directExtracted.toUpperCase() : cleanModelCode(c);
   }
 
-  const directExtracted = getProductModelCode(c);
-  return directExtracted ? directExtracted.toUpperCase() : cleanModelCode(c);
+  if (c && resolvedKey) {
+    canonicalKeyCache.set(c, resolvedKey);
+  }
+  return resolvedKey;
 }
 
 export function getModelKeyForItem(productId?: string, prodList: any[] = []): string {
@@ -271,39 +282,7 @@ export function isSameProduct(id1?: string, id2?: string, prodList: any[] = []):
 
   const k1 = getCanonicalProductKey(id1, prodList);
   const k2 = getCanonicalProductKey(id2, prodList);
-  if (k1 && k2 && k1 === k2) return true;
-
-  const p1 = prodList.find(p => 
-    (p.id && String(p.id).toUpperCase() === c1) || 
-    (p.code && String(p.code).toUpperCase() === c1) ||
-    (p.code && cleanModelCode(p.code) === cleanModelCode(c1)) ||
-    (p.name && getProductModelCode(p.name, p.code).toUpperCase() === c1)
-  );
-  const p2 = prodList.find(p => 
-    (p.id && String(p.id).toUpperCase() === c2) || 
-    (p.code && String(p.code).toUpperCase() === c2) || 
-    (p.code && cleanModelCode(p.code) === cleanModelCode(c2)) ||
-    (p.name && getProductModelCode(p.name, p.code).toUpperCase() === c2)
-  );
-
-  if (p1 && p2) {
-    if (p1.id === p2.id) return true;
-    const m1 = getProductModelCode(p1.name, p1.code).toUpperCase();
-    const m2 = getProductModelCode(p2.name, p2.code).toUpperCase();
-    if (m1 && m2 && m1 === m2) return true;
-  }
-  if (p1 && (
-    (p1.id && String(p1.id).toUpperCase() === c2) || 
-    (p1.code && String(p1.code).toUpperCase() === c2) || 
-    (p1.name && getProductModelCode(p1.name, p1.code).toUpperCase() === c2)
-  )) return true;
-  if (p2 && (
-    (p2.id && String(p2.id).toUpperCase() === c1) || 
-    (p2.code && String(p2.code).toUpperCase() === c1) || 
-    (p2.name && getProductModelCode(p2.name, p2.code).toUpperCase() === c1)
-  )) return true;
-
-  return false;
+  return Boolean(k1 && k2 && k1 === k2);
 }
 
 // Khử trùng lặp danh mục sản phẩm hoàn toàn (chỉ giữ 1 bản ghi duy nhất cho mỗi model)
@@ -338,18 +317,16 @@ export function deduplicateProductDefinitions<T extends { id?: string; name?: st
 export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[] = []): FormModelItem[] {
   if (!items || items.length === 0) return [];
   const result: FormModelItem[] = [];
-  const seenKeys = new Set<string>();
+  const keyToIndex = new Map<string, number>();
 
   for (const item of items) {
     if (!item.productId) continue;
-    const modelKey = getCanonicalProductKey(item.productId, prodList);
-    const existingIndex = result.findIndex(r => {
-      if (modelKey && getCanonicalProductKey(r.productId, prodList) === modelKey) return true;
-      return isSameProduct(r.productId, item.productId, prodList);
-    });
+    const modelKey = getCanonicalProductKey(item.productId, prodList) || String(item.productId).trim().toUpperCase();
+    const existingIndex = keyToIndex.get(modelKey);
 
-    if (existingIndex === -1 && (!modelKey || !seenKeys.has(modelKey))) {
-      if (modelKey) seenKeys.add(modelKey);
+    if (existingIndex === undefined) {
+      const newIndex = result.length;
+      keyToIndex.set(modelKey, newIndex);
       result.push({
         ...item,
         id: item.id || `item_${item.productId}`,
@@ -357,19 +334,16 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
       });
     } else {
       // Gộp sản lượng của model trùng lặp vào dòng đầu tiên
-      const targetIndex = existingIndex !== -1 ? existingIndex : result.findIndex(r => getCanonicalProductKey(r.productId, prodList) === modelKey);
-      if (targetIndex !== -1) {
-        const existing = result[targetIndex];
-        const mergedActuals: { [k: string]: number } = { ...existing.hourlyActuals };
-        Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
-          mergedActuals[k] = (mergedActuals[k] || 0) + (Number(v) || 0);
-        });
-        result[targetIndex] = {
-          ...existing,
-          dailyPlan: Math.max(existing.dailyPlan || 0, item.dailyPlan || 0),
-          hourlyActuals: mergedActuals,
-        };
-      }
+      const existing = result[existingIndex];
+      const mergedActuals: { [k: string]: number } = { ...existing.hourlyActuals };
+      Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
+        mergedActuals[k] = (mergedActuals[k] || 0) + (Number(v) || 0);
+      });
+      result[existingIndex] = {
+        ...existing,
+        dailyPlan: Math.max(existing.dailyPlan || 0, item.dailyPlan || 0),
+        hourlyActuals: mergedActuals,
+      };
     }
   }
 

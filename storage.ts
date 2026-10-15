@@ -147,18 +147,26 @@ export function getSharedBroadcastChannel(): any {
       });
     });
 
+    let reconnectAttempts = 0;
     sharedBroadcastChannel.subscribe((status: string) => {
       if (status === 'SUBSCRIBED') {
+        reconnectAttempts = 0;
         console.log('[Realtime] Kênh Broadcast đa máy tính sunhouse_live_form_room đã kết nối thành công');
       } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-        console.warn(`[Realtime] Kênh Broadcast ở trạng thái ${status}, lên lịch kết nối lại...`);
-        setTimeout(() => {
-          try {
-            if (supabase && sharedBroadcastChannel) {
-              sharedBroadcastChannel.subscribe();
-            }
-          } catch (e) {}
-        }, 1500);
+        if (reconnectAttempts < 5) {
+          reconnectAttempts++;
+          const delay = Math.min(30000, 2000 * Math.pow(1.5, reconnectAttempts));
+          console.warn(`[Realtime] Kênh Broadcast ở trạng thái ${status}, thử lại lần ${reconnectAttempts} sau ${Math.round(delay / 1000)}s...`);
+          setTimeout(() => {
+            try {
+              if (supabase && sharedBroadcastChannel) {
+                sharedBroadcastChannel.subscribe();
+              }
+            } catch (e) {}
+          }, delay);
+        } else {
+          console.info('[Realtime] Đã dừng thử kết nối lại Broadcast sau 5 lần không thành công.');
+        }
       }
     });
   }
@@ -2342,9 +2350,12 @@ export function subscribeToRealtime(callbacks: RealtimeCallbacks): () => void {
       }));
     }
 
-    // Cleanup function để hủy kết nối channel khi unmount
+    // Cleanup function để hủy kết nối channel và tháo gỡ listeners khi unmount
     return () => {
       try {
+        unsubs.forEach(fn => {
+          try { fn(); } catch (e) {}
+        });
         supabase?.removeChannel(channel);
       } catch (err) {
         console.warn('[Realtime] Lỗi dọn dẹp kênh kết nối:', err);
