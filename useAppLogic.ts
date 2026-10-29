@@ -6,7 +6,7 @@ import {
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
-import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey } from './appUtils';
+import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, EXCEL_STANDARD_SLOTS, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey, getModelSlotActual, calculateModelTotalActual, areSlotsOverlapping, deduplicateAndSortSlots, parseSlotRange } from './appUtils';
 import * as storage from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -534,14 +534,14 @@ const [isScrolled, setIsScrolled] = useState(false);
   const [formSlots, setFormSlots] = useState<string[]>(() => {
     const draft = getInitialActiveDraft();
     if (draft && Array.isArray(draft.slots) && draft.slots.length > 0) {
-      const valid = draft.slots.filter(isValidHourlySlot);
-      if (valid.length > 0) return valid;
+      const valid = deduplicateAndSortSlots(draft.slots);
+      if (valid.length >= 15) return valid;
     }
-    return getShiftSlots("Ca HC (08:00 - 17:00)");
+    return [...EXCEL_STANDARD_SLOTS];
   });
   const formSlotsRef = useRef(formSlots);
   formSlotsRef.current = formSlots;
-  const [newSlotInput, setNewSlotInput] = useState<string>("20H - 21H");
+  const [newSlotInput, setNewSlotInput] = useState<string>("");
   const [scanInput, setScanInput] = useState<string>("");
 
   // Trạng thái Toast thông báo lỗi Supabase (hiển thị Toast đỏ chứa error.message)
@@ -578,12 +578,15 @@ const [isScrolled, setIsScrolled] = useState(false);
     }, 3000);
   }, []);
 
-  // Vệ sinh dữ liệu một lần khi khởi động: Loại bỏ vĩnh viễn các slot lỗi (như "Ca HC (08:00 - 17:00)")
+  // Vệ sinh dữ liệu một lần khi khởi động: Đảm bảo sử dụng đủ 15 khung giờ mẫu (6h - 21h30), loại bỏ triệt để trùng lặp
   useEffect(() => {
     setFormSlots((prev) => {
-      const cleaned = prev.filter(isValidHourlySlot);
-      if (cleaned.length === 0) return getShiftSlots("Ca HC (08:00 - 17:00)");
-      return cleaned.length !== prev.length ? cleaned : prev;
+      const cleaned = deduplicateAndSortSlots(prev);
+      if (cleaned.length < 15 || !cleaned.includes("6h-7h")) {
+        return [...EXCEL_STANDARD_SLOTS];
+      }
+      const isDiff = cleaned.length !== prev.length || cleaned.some((s, i) => s !== prev[i]);
+      return isDiff ? cleaned : prev;
     });
 
     setFormModelItems((prev) => {
@@ -1678,13 +1681,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           }
         });
 
-        const sortedSlots = Array.from(activeSlots)
-          .filter(isValidHourlySlot)
-          .sort((a, b) => {
-            const hourA = parseInt(a.match(/^(\d+)/)?.[1] || '0', 10);
-            const hourB = parseInt(b.match(/^(\d+)/)?.[1] || '0', 10);
-            return hourA - hourB;
-          });
+        const sortedSlots = deduplicateAndSortSlots(Array.from(activeSlots));
         if (sortedSlots.length > 0) {
           const currentSlots = formSlotsRef.current;
           const isDiff = sortedSlots.length !== currentSlots.length || sortedSlots.some((s, idx) => s !== currentSlots[idx]);
@@ -3088,24 +3085,32 @@ const [isScrolled, setIsScrolled] = useState(false);
   }, [gasDailyReports, assemblyDailyReports]);
 
 
-  // 1. Tối ưu hóa hiệu năng cực đại: Lập chỉ mục O(1) sản lượng thực tế theo (productId_date)
+  // 1. Tối ưu hóa hiệu năng cực đại: Lập chỉ mục O(1) sản lượng thực tế theo (productId_date) và (canonicalKey_date)
   const productionLogsAggMap = useMemo(() => {
     const map = new Map<string, number>();
     for (let i = 0; i < productionLogs.length; i++) {
       const l = productionLogs[i];
       if (!l.date || !l.productId) continue;
+      const units = Number(l.actualUnits) || 0;
       const k = `${l.productId}_${l.date}`;
-      map.set(k, (map.get(k) || 0) + (l.actualUnits || 0));
+      map.set(k, (map.get(k) || 0) + units);
+
+      const canonicalKey = getCanonicalProductKey(l.productId, products) || cleanModelCode(l.productId);
+      if (canonicalKey) {
+        const ck = `${canonicalKey}_${l.date}`;
+        map.set(ck, (map.get(ck) || 0) + units);
+      }
     }
     return map;
-  }, [productionLogs]);
+  }, [productionLogs, products]);
 
   // 2. Bộ nhớ cache kết quả tính lũy kế nợ tồn để không bao giờ quét mảng trùng lặp
   const prevDayLeftoverCache = useMemo(() => {
     return new Map<string, number>();
   }, [productionLogsAggMap, monthlyPlan]);
 
-  // Helper to calculate the accumulated leftover from preceding days of the same month/year
+  // Helper to calculate the accumulated uncompleted plan from day 1 to day (currentDayNum - 1) of the current month
+  // "Số lượng trễ kế hoạch là số lượng cộng dồn kế hoạch chưa được hoàn thành trong tháng trong quá khứ ví dụ tháng 10 hiện tại là 29/10 thì số lượng trễ KH là số lượng từ ngày 1/10 đến hết ngày 28/10"
   const getPrevDayLeftover = useCallback((productId: string, currentDateStr: string): number => {
     if (!productId || !currentDateStr) return 0;
     const cacheKey = `${productId}_${currentDateStr}`;
@@ -3120,19 +3125,58 @@ const [isScrolled, setIsScrolled] = useState(false);
     const ym = `${year}-${month}`;
     const currentMonthPlan = monthlyPlan[ym] || {};
     const currentDayNum = parseInt(parts[2], 10);
+    // Nếu là ngày 1 hoặc không hợp lệ -> không có ngày quá khứ trong tháng -> trễ KH = 0
     if (isNaN(currentDayNum) || currentDayNum <= 1) return 0;
 
-    const prodPlan = currentMonthPlan[productId] || {};
-    let accumulated = 0;
+    const targetCanonicalKey = getCanonicalProductKey(productId, products) || cleanModelCode(productId);
+
+    // Thu thập tất cả các key trong KHSX Tháng khớp với sản phẩm này
+    const matchingPlanKeys: string[] = [];
+    if (currentMonthPlan[productId]) {
+      matchingPlanKeys.push(productId);
+    }
+    Object.keys(currentMonthPlan).forEach(k => {
+      if (k !== productId) {
+        if (isSameProduct(k, productId, products) || (targetCanonicalKey && getCanonicalProductKey(k, products) === targetCanonicalKey)) {
+          matchingPlanKeys.push(k);
+        }
+      }
+    });
+
+    let totalPlanPast = 0;
+    let totalActualPast = 0;
+
+    // Cộng dồn từ ngày 1 đến hết ngày (currentDayNum - 1) trong tháng
     for (let d = 1; d < currentDayNum; d++) {
       const dayStr = `${year}-${month}-${String(d).padStart(2, '0')}`;
-      const plan = prodPlan[d] || 0;
-      const actual = productionLogsAggMap.get(`${productId}_${dayStr}`) || 0;
-      accumulated += (plan - actual);
+      
+      // 1. Kế hoạch ngày d: lấy max nếu có nhiều key alias cùng trỏ về 1 model để tránh cộng dồn lặp
+      let dayPlan = 0;
+      if (matchingPlanKeys.length > 0) {
+        for (const k of matchingPlanKeys) {
+          dayPlan = Math.max(dayPlan, Number(currentMonthPlan[k]?.[d]) || 0);
+        }
+      } else if (currentMonthPlan[productId]) {
+        dayPlan = Number(currentMonthPlan[productId]?.[d]) || 0;
+      }
+      totalPlanPast += dayPlan;
+
+      // 2. Thực tế ngày d
+      let dayActual = 0;
+      if (targetCanonicalKey) {
+        dayActual = productionLogsAggMap.get(`${targetCanonicalKey}_${dayStr}`) || 0;
+      }
+      if (dayActual === 0) {
+        dayActual = productionLogsAggMap.get(`${productId}_${dayStr}`) || 0;
+      }
+      totalActualPast += dayActual;
     }
-    prevDayLeftoverCache.set(cacheKey, accumulated);
-    return accumulated || 0;
-  }, [monthlyPlan, productionLogsAggMap, prevDayLeftoverCache]);
+
+    // Kế hoạch chưa được hoàn thành = max(0, KHSX lũy kế quá khứ - Thực tế lũy kế quá khứ), không bao giờ âm!
+    const uncompleted = Math.max(0, totalPlanPast - totalActualPast);
+    prevDayLeftoverCache.set(cacheKey, uncompleted);
+    return uncompleted;
+  }, [monthlyPlan, productionLogsAggMap, prevDayLeftoverCache, products]);
 
 
   // --- FORM DYNAMICS ---
@@ -3158,8 +3202,9 @@ const [isScrolled, setIsScrolled] = useState(false);
     formModelItems.forEach((item) => {
       const prodDef = products.find((p) => p.id === item.productId) || products[0];
       if (!prodDef) return;
-      
-      const modelActual = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
+      const modelActual = formSlots.length > 0
+        ? formSlots.reduce((sum, slot) => sum + getModelSlotActual(item.hourlyActuals, slot), 0)
+        : calculateModelTotalActual(item.hourlyActuals);
       const modelEq = Math.round(modelActual * prodDef.factor);
       const revenue = modelActual * (prodDef.price || 0);
       totalActualQty += modelActual;
@@ -3167,8 +3212,16 @@ const [isScrolled, setIsScrolled] = useState(false);
       totalRevenue += revenue;
       totalPlanQty += (item.dailyPlan || 0);
       
-      const leftover = getPrevDayLeftover(item.productId, formDate);
-      const remaining = Math.max(0, (item.dailyPlan || 0) + leftover - modelActual);
+      const delayedVal = Math.max(
+        0,
+        (item.delayedWeeklyQty !== undefined && item.delayedWeeklyQty !== null)
+          ? Number(item.delayedWeeklyQty) || 0
+          : (getPrevDayLeftover(item.productId, formDate) || 0)
+      );
+      const dailyPlanVal = Number(item.dailyPlan) || 0;
+      // Nếu không bị trễ KH (delayedVal <= 0) VÀ cũng không có KHSX Ngày (dailyPlanVal <= 0) -> Còn Lại = 0 (không phát sinh nợ)
+      const hasPlanOrDelay = (delayedVal > 0 || dailyPlanVal > 0);
+      const remaining = hasPlanOrDelay ? (delayedVal + dailyPlanVal - modelActual) : 0;
       totalRemainingQty += remaining;
 
       const isRMA = prodDef.group === "RMA" || 
@@ -5069,13 +5122,14 @@ const [isScrolled, setIsScrolled] = useState(false);
       const wLogs = logsByWorker[workerId];
 
       formSlots.forEach(slot => {
-        let slotStart = slotStartHours[slot];
+        const parsed = parseSlotRange(slot);
+        let slotStart = parsed ? (parsed.startMin / 60) : slotStartHours[slot];
         if (slotStart === undefined) {
           const match = slot.match(/^(\d+)H/i);
           if (match) slotStart = parseInt(match[1], 10);
         }
         if (slotStart === undefined) return;
-        const slotEnd = slotStart + 1;
+        const slotEnd = parsed ? (parsed.endMin / 60) : (slotStart + 1);
 
         // Tính tổng thời gian worker này làm việc trong slot, chia theo Division
         let durationRO = 0;
@@ -5406,11 +5460,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     });
     const defaultSlots = getShiftSlots(firstLog.shift);
     defaultSlots.forEach(s => { if (isValidHourlySlot(s)) allSlots.add(s); });
-    const sortedSlots = Array.from(allSlots).sort((a, b) => {
-      const hA = parseInt(a.split("H")[0]) || 0;
-      const hB = parseInt(b.split("H")[0]) || 0;
-      return hA - hB;
-    });
+    const sortedSlots = deduplicateAndSortSlots(Array.from(allSlots));
     setFormSlots(sortedSlots);
 
     const [editYear, editMonth, editDay] = date.split("-");
@@ -5523,16 +5573,24 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   const handleAddSlot = () => {
     if (!newSlotInput.trim()) return;
-    const cleanSlot = formatSlotLabel(newSlotInput.trim());
-    if (formSlots.includes(cleanSlot)) {
-      setFormMessage("⚠️ Khung giờ đã tồn tại");
+    const parsed = parseSlotRange(newSlotInput.trim());
+    if (!parsed) {
+      setFormMessage("⚠️ Định dạng khung giờ không hợp lệ. Ví dụ: 6h-7h, 8h-9h, 21h-21h30, 21h30-22h30");
+      setTimeout(() => setFormMessage(""), 4000);
       return;
     }
-    const nextSlots = [...formSlots, cleanSlot].sort((a, b) => {
-      const hourA = parseInt(a.match(/^(\d+)/)?.[1] || "0", 10);
-      const hourB = parseInt(b.match(/^(\d+)/)?.[1] || "0", 10);
-      return hourA - hourB;
-    });
+
+    const cleanSlot = parsed.canonical;
+
+    // Kiểm tra xem khung giờ có bị trùng lặp hoặc giao thoa thời gian với bất kỳ khung giờ nào đã có
+    const overlappingSlot = formSlots.find((existing) => areSlotsOverlapping(existing, cleanSlot));
+    if (overlappingSlot) {
+      setFormMessage(`⚠️ Khung giờ [${cleanSlot}] bị trùng lặp hoặc giao thoa thời gian với khung giờ [${overlappingSlot}] đã có!`);
+      setTimeout(() => setFormMessage(""), 4500);
+      return;
+    }
+
+    const nextSlots = deduplicateAndSortSlots([...formSlots, cleanSlot]);
     setFormSlots(nextSlots);
     setFormOfficialWorkersRO((prev) => ({ ...prev, [cleanSlot]: 0 }));
     setFormSeasonalWorkersRO((prev) => ({ ...prev, [cleanSlot]: 0 }));
@@ -5546,7 +5604,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     }));
     setFormModelItems(updatedItems);
     setNewSlotInput("");
-    setFormMessage(`✅ Đã thêm khung giờ ${cleanSlot} thành công!`);
+    setFormMessage(`✅ Đã thêm khung giờ ${cleanSlot} thành công (không trùng lặp)!`);
     setTimeout(() => setFormMessage(""), 3500);
 
     // Lưu ngay lập tức để không bị mất dữ liệu
@@ -5697,6 +5755,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         id: newItemId,
         productId: chosenProdId,
         dailyPlan: planVal,
+        delayedWeeklyQty: planVal > 0 ? undefined : 0,
         hourlyActuals: initialHrs,
       },
     ], products);
@@ -5813,7 +5872,9 @@ const [isScrolled, setIsScrolled] = useState(false);
           const [year, month, day] = formDateRef.current.split("-");
           const ym = `${year}-${month}`;
           const dayNum = parseInt(day, 10);
-          newUpdates.dailyPlan = (monthlyPlanRef.current[ym]?.[updates.productId]?.[dayNum]) || 0;
+          const newPlan = (monthlyPlanRef.current[ym]?.[updates.productId]?.[dayNum]) || 0;
+          newUpdates.dailyPlan = newPlan;
+          newUpdates.delayedWeeklyQty = newPlan > 0 ? undefined : 0;
         }
         return { ...item, ...newUpdates };
       });
@@ -7841,6 +7902,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     setScanInput,
     handleScanSubmit,
     formSlots,
+    setFormSlots,
     handleDeleteSlot,
     formModelItems,
     handleUpdateItem,

@@ -3,6 +3,8 @@ export interface FormModelItem {
   id: string;
   productId: string;
   dailyPlan?: number;
+  delayedWeeklyQty?: number;
+  note?: string;
   hourlyActuals: { [slotName: string]: number };
 }
 
@@ -148,50 +150,126 @@ export function getWeeksInMonth(year: number, month: number): YearWeek[] {
   return allWeeks.filter(w => w.days.some(d => d.monthNum === month));
 }
 
-export function getShiftSlots(shift: string): string[] {
-  if (shift.includes("17:00")) {
-    return [
-      "8H - 9H", "9H - 10H", "10H - 11H", "11H - 12H",
-      "13H - 14H", "14H - 15H", "15H - 16H", "16H - 17H"
-    ];
-  } else if (shift.includes("19h")) {
-    return [
-      "8H - 9H", "9H - 10H", "10H - 11H", "11H - 12H",
-      "13H - 14H", "14H - 15H", "15H - 16H", "16H - 17H",
-      "17H - 18H", "18H - 19H"
-    ];
-  } else if (shift.includes("20h00")) {
-    return [
-      "8H - 9H", "9H - 10H", "10H - 11H", "11H - 12H",
-      "13H - 14H", "14H - 15H", "15H - 16H", "16H - 17H",
-      "17H - 18H", "18H - 19H", "19H - 20H"
-    ];
-  }
+export const EXCEL_STANDARD_SLOTS = [
+  "6h-7h", "7h-8h", "8h-9h", "9h-10h", "10h-11h", "11h-12h",
+  "13h-14h", "14h-15h", "15h-16h", "16h-17h", "17h-18h",
+  "18h-19h", "19h-20h", "20h-21h", "21h-21h30"
+];
+
+export function getShiftSlots(_shift?: string): string[] {
   return [
-    "8H - 9H", "9H - 10H", "10H - 11H", "11H - 12H",
-    "13H - 14H", "14H - 15H", "15H - 16H", "16H - 17H"
+    "6h-7h", "7h-8h", "8h-9h", "9h-10h", "10h-11h", "11h-12h",
+    "13h-14h", "14h-15h", "15h-16h", "16h-17h", "17h-18h",
+    "18h-19h", "19h-20h", "20h-21h", "21h-21h30"
   ];
 }
 
+// Phân tích thành phần thời gian (ví dụ: '6', '6h', '6h30', '06:00', '21h30') thành số phút tính từ 00:00
+export function parseSlotTimePart(timeStr: string): number | null {
+  if (!timeStr || typeof timeStr !== 'string') return null;
+  const clean = timeStr.trim().toLowerCase().replace(/\s+/g, '');
+  const match = clean.match(/^(\d{1,2})(?:[h:.](\d{1,2})?|h)?$/);
+  if (!match) return null;
+
+  const hour = parseInt(match[1], 10);
+  const min = match[2] ? parseInt(match[2], 10) : 0;
+  if (isNaN(hour) || isNaN(min) || hour < 0 || hour > 24 || min < 0 || min >= 60) {
+    return null;
+  }
+  return hour * 60 + min;
+}
+
+// Chuyển đổi số phút thành chuỗi chuẩn Excel (ví dụ: 360 -> '6h', 1290 -> '21h30')
+export function formatMinutesToSlotTime(minutes: number): string {
+  const hour = Math.floor(minutes / 60);
+  const min = minutes % 60;
+  if (min === 0) return `${hour}h`;
+  return `${hour}h${String(min).padStart(2, '0')}`;
+}
+
+// Phân tích khung giờ thành khoảng thời gian [startMin, endMin) và chuỗi hiển thị chuẩn tắc
+export function parseSlotRange(slot: string): { startMin: number; endMin: number; canonical: string } | null {
+  if (!slot || typeof slot !== 'string') return null;
+  const s = slot.trim().toLowerCase().replace(/–/g, '-').replace(/\s+/g, '');
+  if (s.startsWith('ca') || s.includes('08:00-17:00')) return null;
+
+  const parts = s.split('-');
+  if (parts.length !== 2) return null;
+
+  const startMin = parseSlotTimePart(parts[0]);
+  const endMin = parseSlotTimePart(parts[1]);
+  if (startMin === null || endMin === null || startMin >= endMin) {
+    return null;
+  }
+
+  const canonical = `${formatMinutesToSlotTime(startMin)}-${formatMinutesToSlotTime(endMin)}`;
+  return { startMin, endMin, canonical };
+}
+
+// Kiểm tra 2 khung giờ có bị trùng lặp hoặc giao thoa thời gian với nhau không
+export function areSlotsOverlapping(slotA: string, slotB: string): boolean {
+  if (!slotA || !slotB) return false;
+  const rangeA = parseSlotRange(slotA);
+  const rangeB = parseSlotRange(slotB);
+
+  if (rangeA && rangeB) {
+    // Hai khoảng [S1, E1) và [S2, E2) giao nhau khi và chỉ khi: max(S1, S2) < min(E1, E2)
+    return Math.max(rangeA.startMin, rangeB.startMin) < Math.min(rangeA.endMin, rangeB.endMin);
+  }
+
+  // Fallback so sánh chuỗi nếu định dạng đặc biệt
+  const normA = slotA.toLowerCase().replace(/\s+/g, '');
+  const normB = slotB.toLowerCase().replace(/\s+/g, '');
+  return normA === normB;
+}
+
+// Loại bỏ hoàn toàn các khung giờ trùng lặp hoặc giao thoa nhau, sắp xếp tăng dần theo thời gian
+export function deduplicateAndSortSlots(slots: string[]): string[] {
+  if (!slots || !Array.isArray(slots) || slots.length === 0) {
+    return [...EXCEL_STANDARD_SLOTS];
+  }
+
+  const validParsed: { startMin: number; endMin: number; canonical: string }[] = [];
+
+  for (const s of slots) {
+    if (!s || typeof s !== 'string') continue;
+    const parsed = parseSlotRange(s);
+    if (!parsed) continue;
+
+    // Kiểm tra xem đã có slot nào giao thoa thời gian với slot này chưa
+    const isConflict = validParsed.some(existing =>
+      Math.max(existing.startMin, parsed.startMin) < Math.min(existing.endMin, parsed.endMin)
+    );
+
+    if (!isConflict) {
+      validParsed.push(parsed);
+    }
+  }
+
+  if (validParsed.length === 0) {
+    return [...EXCEL_STANDARD_SLOTS];
+  }
+
+  // Sắp xếp thứ tự thời gian tăng dần từ sớm đến muộn
+  validParsed.sort((a, b) => a.startMin - b.startMin || a.endMin - b.endMin);
+
+  return validParsed.map(p => p.canonical);
+}
+
 export function isValidHourlySlot(slot: string): boolean {
-  if (!slot || typeof slot !== "string") return false;
+  if (!slot || typeof slot !== 'string') return false;
   const s = slot.trim().toUpperCase();
   if (s.startsWith("CA ") || s.startsWith("CA_") || s.includes("08:00") || s.includes("17:00") || s.includes("CA HC") || s.includes("CA 1") || s.includes("CA 2") || s.includes("CA 3")) {
     return false;
   }
-  return /\d+\s*H/i.test(s) && (s.includes("-") || s.includes("–"));
+  return parseSlotRange(slot) !== null;
 }
 
 export function formatSlotLabel(slot: string): string {
-  if (!slot || typeof slot !== "string") return "";
-  let clean = slot.trim().toUpperCase().replace(/:00/g, "").replace(/\s+/g, "");
-  const match = clean.match(/^(\d+)(H|H-)?-?(\d+)(H)?$/);
-  if (match) {
-    const start = parseInt(match[1]);
-    const end = parseInt(match[3]);
-    return `${start}H - ${end}H`;
-  }
-  return slot.trim();
+  if (!slot || typeof slot !== 'string') return "";
+  const parsed = parseSlotRange(slot);
+  if (parsed) return parsed.canonical;
+  return slot.trim().toLowerCase();
 }
 
 export function cleanModelCode(str: string): string {
@@ -313,6 +391,53 @@ export function deduplicateProductDefinitions<T extends { id?: string; name?: st
   return result;
 }
 
+// Lấy sản lượng khung giờ chuẩn hóa (chống lệch chữ hoa/thường hoặc khoảng trắng hoặc biến thể cú pháp)
+export function getModelSlotActual(hourlyActuals?: { [k: string]: number }, slotName?: string): number {
+  if (!hourlyActuals || !slotName) return 0;
+  if (hourlyActuals[slotName] !== undefined && hourlyActuals[slotName] !== null) {
+    return Number(hourlyActuals[slotName]) || 0;
+  }
+  const normTarget = slotName.toLowerCase().replace(/\s+/g, '');
+  const parsedTarget = parseSlotRange(slotName);
+  const targetCanonical = parsedTarget ? parsedTarget.canonical : normTarget;
+
+  for (const [k, v] of Object.entries(hourlyActuals)) {
+    const normK = k.toLowerCase().replace(/\s+/g, '');
+    if (normK === normTarget) {
+      return Number(v) || 0;
+    }
+    const parsedK = parseSlotRange(k);
+    if (parsedK && parsedK.canonical === targetCanonical) {
+      return Number(v) || 0;
+    }
+  }
+  return 0;
+}
+
+// Tính tổng sản lượng thực tế theo danh sách khung giờ hợp lệ không trùng lặp
+export function calculateModelTotalActual(hourlyActuals?: { [k: string]: number }, activeSlots?: string[]): number {
+  if (!hourlyActuals) return 0;
+  if (activeSlots && activeSlots.length > 0) {
+    const uniqueSlots = deduplicateAndSortSlots(activeSlots);
+    return uniqueSlots.reduce((sum, slot) => sum + getModelSlotActual(hourlyActuals, slot), 0);
+  }
+  // Nếu không truyền activeSlots, tính tổng các khung giờ duy nhất (chống cộng lặp hoa/thường)
+  const canonicalSeen = new Map<string, number>();
+  for (const [k, v] of Object.entries(hourlyActuals)) {
+    const parsed = parseSlotRange(k);
+    const key = parsed ? parsed.canonical : k.toLowerCase().replace(/\s+/g, '');
+    const val = Number(v) || 0;
+    if (val > 0) {
+      canonicalSeen.set(key, Math.max(canonicalSeen.get(key) || 0, val));
+    }
+  }
+  let sum = 0;
+  for (const val of canonicalSeen.values()) {
+    sum += val;
+  }
+  return sum;
+}
+
 // Hàm đảm bảo 1 bảng nhật ký ca KHÔNG BAO GIỜ có 2 model sản xuất trùng nhau, giữ thứ tự ổn định không nhảy
 export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[] = []): FormModelItem[] {
   if (!items || items.length === 0) return [];
@@ -324,24 +449,36 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
     const modelKey = getCanonicalProductKey(item.productId, prodList) || String(item.productId).trim().toUpperCase();
     const existingIndex = keyToIndex.get(modelKey);
 
+    // Chuẩn hóa slot keys
+    const cleanActuals: { [k: string]: number } = {};
+    Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
+      const normK = k.toLowerCase().trim();
+      const val = Number(v) || 0;
+      if (val > 0) {
+        cleanActuals[normK] = Math.max(cleanActuals[normK] || 0, val);
+      }
+    });
+
     if (existingIndex === undefined) {
       const newIndex = result.length;
       keyToIndex.set(modelKey, newIndex);
       result.push({
         ...item,
         id: item.id || `item_${item.productId}`,
-        hourlyActuals: { ...(item.hourlyActuals || {}) }
+        hourlyActuals: cleanActuals
       });
     } else {
-      // Gộp sản lượng của model trùng lặp vào dòng đầu tiên
+      // Khi model bị trùng lặp trong mảng, gộp giá trị lớn nhất của từng khung giờ (chống cộng dồn gấp đôi số lượng)
       const existing = result[existingIndex];
       const mergedActuals: { [k: string]: number } = { ...existing.hourlyActuals };
-      Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
-        mergedActuals[k] = (mergedActuals[k] || 0) + (Number(v) || 0);
+      Object.entries(cleanActuals).forEach(([k, v]) => {
+        mergedActuals[k] = Math.max(mergedActuals[k] || 0, v);
       });
       result[existingIndex] = {
         ...existing,
         dailyPlan: Math.max(existing.dailyPlan || 0, item.dailyPlan || 0),
+        delayedWeeklyQty: existing.delayedWeeklyQty !== undefined ? existing.delayedWeeklyQty : item.delayedWeeklyQty,
+        note: existing.note || item.note,
         hourlyActuals: mergedActuals,
       };
     }

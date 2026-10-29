@@ -451,14 +451,62 @@ input, select, textarea {
 
 .light-theme .text-sky-400 {
   color: #0369a1 !important;
+}
 
 /* Force footer total rows to have orange background in light mode */
+.light-theme tfoot td,
+tfoot td {
+  background-color: #fbcfa5 !important;
 }
-/* Force footer total rows to have orange background in light mode */
-.light-theme tfoot td { background-color: #fbcfa5 !important; }
--e 
-.light-theme table tfoot tr td, table tfoot tr td { background-color: #fbcfa5 !important; color: #000000 !important; border-color: #cbd5e1 !important; }
--e 
-tfoot td { background-color: #fbcfa5 !important; }
--e 
-.light-theme tfoot td { background-color: #fbcfa5 !important; }
+
+/* Matrix Table Specific Compact Sizing & Layout */
+.matrix-table {
+  table-layout: auto !important;
+  border-collapse: collapse !important;
+}
+
+.matrix-table th,
+.matrix-table td,
+.light-theme .matrix-table th,
+.light-theme .matrix-table td {
+  padding: 3px 2px !important;
+  white-space: nowrap !important;
+  font-size: 11px !important;
+}
+
+.matrix-table input,
+.light-theme .matrix-table input {
+  padding: 1px 2px !important;
+  font-size: 11.5px !important;
+  text-align: center !important;
+}
+
+/* Green cell for Trễ KH tuần - Solid green with high specificity to prevent even-row light theme override */
+.matrix-table td.col-delayed-green,
+.matrix-table tr:nth-child(even) td.col-delayed-green,
+.matrix-table tr:hover td.col-delayed-green,
+.light-theme .matrix-table td.col-delayed-green,
+.light-theme .matrix-table tr:nth-child(even) td.col-delayed-green,
+.light-theme .matrix-table tr:hover td.col-delayed-green,
+td.col-delayed-green {
+  background-color: #008000 !important;
+  color: #ffffff !important;
+}
+
+.matrix-table td.col-delayed-green input,
+.matrix-table tr:nth-child(even) td.col-delayed-green input,
+.matrix-table tr:hover td.col-delayed-green input,
+.light-theme .matrix-table td.col-delayed-green input,
+.light-theme .matrix-table tr:nth-child(even) td.col-delayed-green input,
+.light-theme .matrix-table tr:hover td.col-delayed-green input,
+td.col-delayed-green input {
+  background-color: transparent !important;
+  color: #ffffff !important;
+  font-weight: 700 !important;
+}
+
+.matrix-table td.col-delayed-green input::placeholder,
+.light-theme .matrix-table td.col-delayed-green input::placeholder,
+td.col-delayed-green input::placeholder {
+  color: rgba(255, 255, 255, 0.7) !important;
+}

@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, getCanonicalProductKey, deduplicateFormModelItems, deduplicateProductDefinitions } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, getCanonicalProductKey, deduplicateFormModelItems, deduplicateProductDefinitions, EXCEL_STANDARD_SLOTS, getModelSlotActual, calculateModelTotalActual } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo, useState } from 'react';
@@ -31,6 +31,7 @@ export const LoggingTab = ({
   setScanInput,
   handleScanSubmit,
   formSlots,
+  setFormSlots,
   handleDeleteSlot,
   formModelItems,
   filterDivision,
@@ -144,6 +145,24 @@ export const LoggingTab = ({
     });
   }, [formDate, monthlyPlan, products, filterDivision, chosenProductCanonicalKeys, getPrevDayLeftover]);
 
+  const displayTotalDelayedQty = useMemo(() => {
+    return (activeFormModelItems || [])
+      .filter((item: any) => {
+        if (filterDivision === "ALL") return true;
+        const p = (products || []).find((x: any) => x.id === item.productId);
+        return p && p.group === filterDivision;
+      })
+      .reduce((sum: number, item: any) => {
+        const delayed = Math.max(
+          0,
+          (item.delayedWeeklyQty !== undefined && item.delayedWeeklyQty !== null)
+            ? Number(item.delayedWeeklyQty) || 0
+            : (getPrevDayLeftover ? getPrevDayLeftover(item.productId, formDate) || 0 : 0)
+        );
+        return sum + delayed;
+      }, 0);
+  }, [activeFormModelItems, filterDivision, products, getPrevDayLeftover, formDate]);
+
   return (
     <motion.div
               key="logging"
@@ -173,6 +192,19 @@ export const LoggingTab = ({
                     >
                       <Sparkles className="w-4 h-4 text-amber-300" />
                       Đồng bộ đủ Model từ KHSX Tháng {missingPlannedModels.length > 0 ? `(${missingPlannedModels.length} còn thiếu)` : "✓"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (setFormSlots) {
+                          setFormSlots([...EXCEL_STANDARD_SLOTS]);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition shadow-lg shadow-amber-900/20 cursor-pointer"
+                      title="Áp dụng chuẩn 15 khung giờ từ 6h-7h đến 21h-21h30 theo biểu mẫu Excel"
+                    >
+                      <Clock className="w-4 h-4 text-white" />
+                      15 Khung giờ mẫu (6h - 21h30)
                     </button>
                     <button
                       type="button"
@@ -270,16 +302,22 @@ export const LoggingTab = ({
                         <div className="flex gap-1">
                           <input
                             type="text"
-                            placeholder="8H - 9H"
+                            placeholder="VD: 21h30-22h30 (không trùng lặp)"
                             value={newSlotInput}
                             onChange={(e) => setNewSlotInput(e.target.value)}
-                            className="w-full bg-slate-950/40 border border-slate-700/60 rounded p-1.5 text-white font-mono focus:border-rose-500 outline-none placeholder-slate-750 text-xs"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleAddSlot();
+                              }
+                            }}
+                            className="w-full bg-slate-950/40 border border-slate-700/60 rounded p-1.5 text-white font-mono focus:border-rose-500 outline-none placeholder-slate-600 text-xs"
                           />
                           <button
                             type="button"
                             onClick={handleAddSlot}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 rounded flex items-center justify-center shrink-0 text-xs cursor-pointer"
-                            title="Thêm khung giờ mới"
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 rounded flex items-center justify-center shrink-0 text-xs cursor-pointer shadow-sm transition"
+                            title="Thêm khung giờ mới (tự động kiểm tra không trùng lặp)"
                           >
                             Thêm
                           </button>
@@ -356,31 +394,55 @@ export const LoggingTab = ({
 
                     {/* Matrix Input Table */}
                     <div className="overflow-x-auto border border-slate-800 rounded-lg shadow-xl shadow-slate-950">
-                      <table className="matrix-table w-full text-[12px] font-mono whitespace-nowrap text-center">
+                      <table className="matrix-table w-full text-[12px] font-mono whitespace-nowrap text-center border-collapse">
                         <thead>
-                          <tr className="!bg-yellow-400 text-slate-950 border-b border-slate-800 font-bold uppercase">
-                            <th className="py-1 px-1 text-left sticky left-0 !bg-yellow-400 z-10 min-w-[160px] w-[160px]">Model Sản Xuất</th>
-                            <th className="py-1 px-1 border-r border-yellow-500 !bg-yellow-400 min-w-[65px] w-[65px] text-center">HSQĐ</th>
-                            <th className="py-1 px-1 border-r border-yellow-500 !bg-yellow-400 min-w-[95px] w-[95px] text-center">KHSX Ngày</th>
+                          {/* Row 1 of Header */}
+                          <tr className="!bg-yellow-400 text-slate-950 font-bold uppercase text-[10px] border-b border-yellow-500">
+                            <th rowSpan={2} className="py-1 px-1.5 text-left sticky left-0 !bg-yellow-400 z-20 min-w-[130px] w-[130px] border-r border-yellow-500 shadow-sm">
+                              Model
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 min-w-[58px] w-[58px] leading-tight" title="Số lượng trễ kế hoạch: Cộng dồn kế hoạch chưa hoàn thành trong tháng từ ngày 1 đến hết ngày hôm trước">
+                              Số lượng<br/>trễ KH
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 min-w-[56px] w-[56px] leading-tight">
+                              Khsx<br/>Ngày
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 min-w-[50px] w-[50px] leading-tight">
+                              Thực<br/>Hiện
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 min-w-[50px] w-[50px] leading-tight" title="Còn lại = Số lượng trễ KH + KHSX Ngày - Thực Hiện">
+                              Còn<br/>Lại
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 min-w-[44px] w-[44px] leading-tight">
+                              HSQĐ
+                            </th>
+                            <th colSpan={formSlots.length} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 text-[10px] tracking-wide">
+                              Sản lượng theo múi giờ
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 border-r border-yellow-500 min-w-[62px] w-[62px] leading-tight">
+                              Tổng sản<br/>lượng
+                            </th>
+                            <th rowSpan={2} className="py-1 px-0.5 text-center !bg-yellow-400 w-7 min-w-[28px]">
+                              Xóa
+                            </th>
+                          </tr>
+                          {/* Row 2 of Header: Time slots */}
+                          <tr className="!bg-yellow-400 text-slate-950 font-bold text-[9.5px] uppercase border-b border-slate-700">
                             {formSlots.map(slot => (
-                              <th key={slot} className="py-1 px-1 border-r border-yellow-500 !bg-yellow-400 relative group min-w-[80px] w-[80px] text-center">
-                                <div className="flex items-center justify-center gap-0.5 flex-nowrap whitespace-nowrap text-[11px] font-bold">
+                              <th key={slot} className="py-1 px-0.5 border-r border-yellow-500 !bg-yellow-400 text-center min-w-[45px] w-[45px] relative group">
+                                <div className="flex items-center justify-center gap-0.5 flex-nowrap whitespace-nowrap">
                                   <span>{slot}</span>
                                   <button
                                     type="button"
                                     onClick={() => handleDeleteSlot(slot)}
-                                    className="opacity-0 group-hover:opacity-100 transition text-rose-600 hover:text-rose-700 p-0.5 rounded cursor-pointer bg-white/50"
+                                    className="opacity-0 group-hover:opacity-100 transition text-rose-600 hover:text-rose-700 p-0.5 rounded cursor-pointer bg-white/60"
                                     title={`Xóa khung giờ ${slot}`}
                                   >
-                                    <X className="w-3 h-3" />
+                                    <X className="w-2.5 h-2.5" />
                                   </button>
                                 </div>
                               </th>
                             ))}
-                            <th className="py-1 px-1 border-r border-yellow-500 !bg-yellow-400 min-w-[85px] w-[85px] text-center">Tổng Lượng</th>
-                            <th className="py-1 px-1 border-r border-yellow-500 !bg-yellow-400 min-w-[85px] w-[85px] text-center">Chênh Lệch</th>
-                            <th className="py-1 px-1 border-r border-yellow-500 !bg-yellow-400 min-w-[115px] w-[115px] text-center">SL CẦN HOÀN THÀNH LSX</th>
-                            <th className="py-1 px-1 text-center w-8 !bg-yellow-400">Xóa</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-slate-800 bg-slate-950/30 text-slate-200">
@@ -394,16 +456,31 @@ export const LoggingTab = ({
                             .map((item, idx) => {
                               const prodDef = products.find((p) => p.id === item.productId) || products[0];
                               if (!prodDef) return null;
-                              const modelActual = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
+                              // Tính chính xác tổng sản lượng thực tế theo danh sách khung giờ hợp lệ
+                              const modelActual = formSlots.length > 0
+                                ? formSlots.reduce((sum: number, slot: string) => sum + getModelSlotActual(item.hourlyActuals, slot), 0)
+                                : calculateModelTotalActual(item.hourlyActuals);
+                              const delayedWeekly = Math.max(
+                                0,
+                                (item.delayedWeeklyQty !== undefined && item.delayedWeeklyQty !== null)
+                                  ? Number(item.delayedWeeklyQty) || 0
+                                  : (getPrevDayLeftover(item.productId, formDate) || 0)
+                              );
+                              const dailyTarget = (item.dailyPlan || 0);
+                              // Nếu không bị trễ KH và cũng không có KHSX Ngày -> dứt khoát không có sản lượng còn lại
+                              const hasPlanOrDelay = (delayedWeekly > 0 || dailyTarget > 0);
+                              const remaining = hasPlanOrDelay ? (delayedWeekly + dailyTarget - modelActual) : 0;
+
                               return (
                                 <tr key={`model-row-${item.id || item.productId}`} className="hover:bg-slate-900/50 transition">
-                                  <td className="py-1 px-1 sticky left-0 bg-slate-950/50 z-10 text-left border-r border-slate-800 min-w-[160px] w-[160px]">
+                                  {/* 1. Model */}
+                                  <td className="py-0.5 px-1 sticky left-0 bg-slate-950/95 z-10 text-left border-r border-slate-800 min-w-[130px] w-[130px] shadow-sm">
                                     <div className="flex gap-1 items-center w-full">
-                                      <span className="text-slate-600 font-bold ml-1 shrink-0 select-none whitespace-nowrap">{idx + 1}.</span>
+                                      <span className="text-slate-500 font-bold ml-1 shrink-0 select-none whitespace-nowrap">{idx + 1}.</span>
                                       <select
                                         value={item.productId}
                                         onChange={(e) => handleUpdateItem(item.id, { productId: e.target.value })}
-                                        className="w-full bg-transparent border-0 text-white focus:ring-0 outline-none cursor-pointer whitespace-nowrap text-[13px] py-0.5"
+                                        className="w-full bg-transparent border-0 text-white font-bold focus:ring-0 outline-none cursor-pointer whitespace-nowrap text-[13px] py-0.5 font-mono"
                                       >
                                         {availableProductsList.map((prod: any) => {
                                           const isChosenElsewhere = item.productId !== prod.id && chosenProductIds.has(prod.id);
@@ -421,8 +498,26 @@ export const LoggingTab = ({
                                       </select>
                                     </div>
                                   </td>
-                                  <td className="py-1 px-2 border-r border-slate-800 text-cyan-500 font-bold min-w-[65px] w-[65px] text-center">{prodDef.factor || 1}</td>
-                                  <td className="p-0 border-r border-slate-800 min-w-[95px] w-[95px]">
+
+                                  {/* 2. Số lượng trễ KH (Green cell in Excel) */}
+                                  <td className="p-0 border-r border-slate-800 bg-[#008000] col-delayed-green text-white font-bold text-center min-w-[58px] w-[58px]">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      value={delayedWeekly > 0 ? delayedWeekly : ""}
+                                      placeholder="-"
+                                      onChange={(e) => {
+                                        const raw = e.target.value;
+                                        const parsedVal = raw === "" ? 0 : Math.max(0, parseInt(raw, 10) || 0);
+                                        handleUpdateItem(item.id, { delayedWeeklyQty: parsedVal });
+                                      }}
+                                      className="w-full h-full min-h-[26px] bg-transparent text-center focus:bg-emerald-900 focus:outline-none font-bold text-white placeholder-emerald-200/60 text-[11.5px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      title="Số lượng trễ kế hoạch: Cộng dồn kế hoạch chưa hoàn thành trong tháng từ ngày 1 đến hết ngày hôm trước"
+                                    />
+                                  </td>
+
+                                  {/* 3. Khsx Ngày */}
+                                  <td className="p-0 border-r border-slate-800 min-w-[56px] w-[56px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -442,56 +537,74 @@ export const LoggingTab = ({
                                         const raw = e.target.value;
                                         handleCommitItemDailyPlan?.(item.id, raw === "" ? 0 : parseInt(raw, 10) || 0);
                                       }}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-amber-400 placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                      placeholder="0"
-                                      title="Nhập KHSX rồi nhấn ENTER để lưu lên database Supabase"
+                                      className="w-full h-full min-h-[26px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-amber-400 placeholder-slate-700 text-[11.5px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      placeholder="-"
+                                      title="KHSX Ngày (nhấn ENTER để lưu)"
                                     />
                                   </td>
-                                  {formSlots.map(slot => (
-                                    <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        value={item.hourlyActuals[slot] !== undefined && item.hourlyActuals[slot] !== null && !Number.isNaN(item.hourlyActuals[slot]) && item.hourlyActuals[slot] !== 0 ? item.hourlyActuals[slot] : ""}
-                                        onChange={(e) => {
-                                          const raw = e.target.value;
-                                          handleUpdateItemHourly(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
-                                        }}
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter') {
-                                            (e.target as HTMLInputElement).blur();
-                                            const raw = (e.target as HTMLInputElement).value;
+
+                                  {/* 4. Thực Hiện (Luôn bằng Tổng sản lượng các khung giờ trong ca) */}
+                                  <td className="py-0.5 px-0.5 border-r border-slate-800 text-center font-bold text-white min-w-[50px] w-[50px] text-[11.5px]" title="Thực hiện = Tổng sản lượng các khung giờ">
+                                    {modelActual > 0 ? modelActual : "-"}
+                                  </td>
+
+                                  {/* 5. Còn Lại (Số lượng trễ KH + KHSX Ngày - Thực Hiện) */}
+                                  <td className="py-0.5 px-0.5 border-r border-slate-800 text-center font-bold text-sky-400 min-w-[50px] w-[50px] text-[11.5px]" title="Còn lại = Số lượng trễ KH + KHSX Ngày - Thực Hiện">
+                                    {hasPlanOrDelay ? remaining : "-"}
+                                  </td>
+
+                                  {/* 6. HSQĐ */}
+                                  <td className="py-0.5 px-0.5 border-r border-slate-800 text-cyan-500 font-bold min-w-[44px] w-[44px] text-center text-[11px]">
+                                    {prodDef.factor ? prodDef.factor.toFixed(2) : "1.00"}
+                                  </td>
+
+                                  {/* 7. Sản lượng theo múi giờ */}
+                                  {formSlots.map(slot => {
+                                    const slotVal = getModelSlotActual(item.hourlyActuals, slot);
+                                    return (
+                                      <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          value={slotVal > 0 ? slotVal : ""}
+                                          onChange={(e) => {
+                                            const raw = e.target.value;
+                                            handleUpdateItemHourly(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
+                                          }}
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                              (e.target as HTMLInputElement).blur();
+                                              const raw = (e.target as HTMLInputElement).value;
+                                              handleCommitItemHourly?.(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
+                                            }
+                                          }}
+                                          onBlur={(e) => {
+                                            const raw = e.target.value;
                                             handleCommitItemHourly?.(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
-                                          }
-                                        }}
-                                        onBlur={(e) => {
-                                          const raw = e.target.value;
-                                          handleCommitItemHourly?.(item.id, slot, raw === "" ? 0 : parseInt(raw, 10) || 0);
-                                        }}
-                                        className="w-full h-full min-h-[30px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-white placeholder-slate-700 text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                        placeholder="-"
-                                        title="Nhập sản lượng thực tế theo giờ (bấm 'Lưu Nhật Ký Ca' ở cuối ca để lưu chính thức)"
-                                      />
-                                    </td>
-                                  ))}
-                                  <td className="py-1 px-2 font-bold text-emerald-400 border-r border-slate-800 bg-slate-900/30 min-w-[85px] w-[85px] text-center">{modelActual || 0}</td>
-                                  <td className={`py-1 px-2 font-bold border-r border-slate-800 bg-slate-900/30 text-center min-w-[85px] w-[85px] ${
-                                    modelActual - (item.dailyPlan || 0) >= 0 ? "text-emerald-400" : "text-rose-500"
-                                  }`}>
-                                    {modelActual - (item.dailyPlan || 0) > 0 ? `+${modelActual - (item.dailyPlan || 0)}` : modelActual - (item.dailyPlan || 0)}
+                                          }}
+                                          className="w-full h-full min-h-[26px] bg-transparent text-center focus:bg-slate-900 focus:outline-none font-bold text-white placeholder-slate-700 text-[11.5px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                          placeholder="-"
+                                          title={`Sản lượng khung giờ ${slot}`}
+                                        />
+                                      </td>
+                                    );
+                                  })}
+
+                                  {/* 8. Tổng sản lượng (Tổng cộng tất cả các khung giờ) */}
+                                  <td className="py-0.5 px-0.5 font-bold text-emerald-400 border-r border-slate-800 bg-slate-900/30 min-w-[62px] w-[62px] text-center text-[11.5px]" title="Tổng sản lượng = Sum(Khung giờ)">
+                                    {modelActual > 0 ? modelActual : "-"}
                                   </td>
-                                  <td className="py-1 px-2 font-bold text-sky-400 border-r border-slate-800 bg-slate-900/30 text-center min-w-[115px] w-[115px]">
-                                    {Math.max(0, (item.dailyPlan || 0) + (getPrevDayLeftover(item.productId, formDate) || 0) - (modelActual || 0))}
-                                  </td>
-                                  <td className="py-1 px-2 text-center">
+
+                                  {/* 9. Xóa */}
+                                  <td className="py-0.5 px-0.5 text-center w-7 min-w-[28px]">
                                     <button
                                       type="button"
                                       onClick={() => handleRemoveItem(item.id || item.productId)}
-                                      className="text-rose-500 hover:text-rose-400 hover:bg-rose-950/50 p-1 rounded transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                                      className="text-rose-500 hover:text-rose-400 hover:bg-rose-950/50 p-0.5 rounded transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                                       disabled={activeFormModelItems.length === 1}
                                       title={activeFormModelItems.length === 1 ? "Cần giữ ít nhất 1 model trong bảng" : "Xóa model này khỏi bảng"}
                                     >
-                                      <Trash2 className="w-4 h-4 mx-auto" />
+                                      <Trash2 className="w-3.5 h-3.5 mx-auto" />
                                     </button>
                                   </td>
                                 </tr>
@@ -500,7 +613,7 @@ export const LoggingTab = ({
 
                           {/* 2. Add Row Button */}
                           <tr key="add-row-btn">
-                            <td colSpan={formSlots.length + 7} className="py-2 px-2 text-left bg-slate-900/30">
+                            <td colSpan={formSlots.length + 8} className="py-2 px-2 text-left bg-slate-900/30">
                               <div className="flex items-center gap-3">
                                 <button
                                   type="button"
@@ -524,6 +637,18 @@ export const LoggingTab = ({
                                 </button>
                                 <button
                                   type="button"
+                                  onClick={() => {
+                                    if (setFormSlots) {
+                                      setFormSlots([...EXCEL_STANDARD_SLOTS]);
+                                    }
+                                  }}
+                                  className="text-[11px] text-amber-400 hover:text-amber-300 flex items-center gap-1 transition cursor-pointer border border-amber-600/40 px-2 py-0.5 rounded"
+                                  title="Thiết lập lại bảng về đúng 15 khung giờ mẫu (6h - 21h30)"
+                                >
+                                  <Clock className="w-3 h-3" /> Chuẩn 15 khung giờ (6h-21h30)
+                                </button>
+                                <button
+                                  type="button"
                                   onClick={handleSyncModelsFromMonthlyPlan}
                                   className="text-[11px] bg-sky-800/60 hover:bg-sky-700/80 text-sky-200 border border-sky-500/50 px-2.5 py-1 rounded-md font-bold flex items-center gap-1.5 transition shadow-sm cursor-pointer ml-auto"
                                   title="Tự động đồng bộ và nạp đủ tất cả các model được lập kế hoạch trong KHSX Tháng cho ngày này"
@@ -537,38 +662,41 @@ export const LoggingTab = ({
 
                           {/* 3. Metrics Summary Rows */}
                           {/* Total Qty */}
-                          <tr key="total-qty-row" className="bg-white font-bold text-blue-700 border-t-2 border-slate-300">
-                            <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 text-blue-700">
+                          <tr key="total-qty-row" className="bg-slate-100 dark:bg-slate-900 font-bold text-blue-700 dark:text-blue-400 border-t-2 border-slate-300 dark:border-slate-800 text-[11px]">
+                            <td className="py-1 px-1.5 text-left sticky left-0 z-20 font-bold whitespace-nowrap text-[11px] bg-slate-100 dark:bg-slate-900 border-r border-slate-300 dark:border-slate-800 text-blue-700 dark:text-blue-400 min-w-[130px] w-[130px] shadow-sm">
                               Tổng sản lượng (Cái)
+                            </td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold text-slate-700 dark:text-emerald-400 min-w-[58px] w-[58px]">
+                              {displayTotalDelayedQty > 0 ? displayTotalDelayedQty : "-"}
+                            </td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold text-amber-600 dark:text-amber-400 min-w-[56px] w-[56px]">
+                              {displayTotalPlanQty > 0 ? displayTotalPlanQty : "-"}
+                            </td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold text-blue-700 dark:text-white min-w-[50px] w-[50px]">
+                              {displayTotalActualQty > 0 ? displayTotalActualQty : "-"}
+                            </td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold text-sky-600 dark:text-sky-400 min-w-[50px] w-[50px]" title="Tổng còn lại = Số lượng trễ KH + KHSX Ngày - Thực Hiện">
+                              {(displayTotalDelayedQty > 0 || displayTotalPlanQty > 0) ? displayTotalRemainingQty : "-"}
+                            </td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 min-w-[44px] w-[44px]">
+                              -
                             </td>
                             {formSlots.map(slot => {
                               const sum = activeFormModelItems
                                 .filter(item => filterDivision === "ALL" || (products.find(x => x.id === item.productId) || products[0]).group === filterDivision)
                                 .reduce((acc, item) => acc + (item.hourlyActuals[slot] || 0), 0);
-                              return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-blue-700 min-w-[80px] w-[80px] text-center">{sum || 0}</td>
+                              return <td key={slot} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-blue-700 dark:text-blue-400 min-w-[45px] w-[45px] text-center font-bold">{sum || 0}</td>
                             })}
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 font-bold text-center">{(Number(displayTotalActualQty) || 0)}</td>
-                            <td className={`py-1 px-1 border-r border-slate-300 font-bold text-center ${
-                              (Number(displayTotalActualQty) || 0) - (Number(displayTotalPlanQty) || 0) >= 0 ? "text-emerald-400" : "text-rose-400"
-                            }`}>
-                              {(() => {
-                                const act = Number(displayTotalActualQty) || 0;
-                                const plan = Number(displayTotalPlanQty) || 0;
-                                const diff = act - plan;
-                                return diff > 0 ? `+${diff}` : String(diff);
-                              })()}
-                            </td>
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 font-bold text-center">
-                              {Number(displayTotalRemainingQty) || 0}
-                            </td>
-                            <td></td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-blue-700 dark:text-blue-400 font-bold text-center min-w-[62px] w-[62px]">{(Number(displayTotalActualQty) || 0)}</td>
+                            <td className="w-7 min-w-[28px]"></td>
                           </tr>
 
                           {/* Equivalent Qty */}
-                          <tr key="equivalent-qty-row" className="bg-white font-bold text-blue-700">
-                            <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap text-blue-700">
+                          <tr key="equivalent-qty-row" className="bg-slate-50 dark:bg-slate-900/80 font-bold text-blue-700 dark:text-blue-400 text-[11px] border-t border-slate-200 dark:border-slate-800">
+                            <td className="py-1 px-1.5 text-left sticky left-0 z-20 whitespace-nowrap text-blue-700 dark:text-blue-400 bg-slate-50 dark:bg-slate-900/80 border-r border-slate-300 dark:border-slate-800 min-w-[130px] w-[130px] shadow-sm">
                               Tổng sản phẩm quy đổi (SP)
                             </td>
+                            <td colSpan={5} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                             {formSlots.map(slot => {
                               let sumEq = 0;
                               formModelItems
@@ -578,20 +706,19 @@ export const LoggingTab = ({
                                 const factor = Number(p?.factor) || 1;
                                 sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * factor);
                               });
-                              return <td key={slot} className="py-1 px-1 border-r border-slate-300 min-w-[80px] w-[80px] text-center text-blue-700">{sumEq || 0}</td>
+                              return <td key={slot} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 min-w-[45px] w-[45px] text-center text-blue-700 dark:text-blue-400 font-bold">{sumEq || 0}</td>
                             })}
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">{Number(displayTotalEqQty) || 0}</td>
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
-                            <td></td>
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-blue-700 dark:text-blue-400 text-center font-bold min-w-[62px] w-[62px]">{Number(displayTotalEqQty) || 0}</td>
+                            <td className="w-7 min-w-[28px]"></td>
                           </tr>
 
                           {/* Equivalent Qty RO */}
                           {(filterDivision === "ALL" || filterDivision === "MLN") && (
-                            <tr key="eq-qty-ro-row" className="bg-white font-medium text-slate-700 border-t border-slate-100">
-                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap">
+                            <tr key="eq-qty-ro-row" className="bg-white dark:bg-slate-900/60 font-medium text-slate-700 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 text-[10.5px]">
+                              <td className="py-0.5 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 bg-white dark:bg-slate-900 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                                 Sản Phẩm QĐ RO (SP)
                               </td>
+                              <td colSpan={5} className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEq = 0;
                                 formModelItems.forEach(item => {
@@ -601,21 +728,20 @@ export const LoggingTab = ({
                                     sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * (Number(p.factor) || 1));
                                   }
                                 });
-                                return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-center">{sumEq || 0}</td>
+                                return <td key={slot} className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center min-w-[45px] w-[45px]">{sumEq || 0}</td>
                               })}
-                              <td className="py-1 px-1 border-r border-slate-300 text-center font-bold">{formAggregates.totalEqQtyRO || 0}</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
-                              <td></td>
+                              <td className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold min-w-[62px] w-[62px]">{formAggregates.totalEqQtyRO || 0}</td>
+                              <td className="w-7 min-w-[28px]"></td>
                             </tr>
                           )}
 
                           {/* Equivalent Qty BG */}
                           {(filterDivision === "ALL" || filterDivision === "BG") && (
-                            <tr key="eq-qty-bg-row" className="bg-white font-medium text-slate-700 border-t border-slate-100">
-                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap">
+                            <tr key="eq-qty-bg-row" className="bg-white dark:bg-slate-900/60 font-medium text-slate-700 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 text-[10.5px]">
+                              <td className="py-0.5 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 bg-white dark:bg-slate-900 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                                 Sản Phẩm QĐ BG (SP)
                               </td>
+                              <td colSpan={5} className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEq = 0;
                                 formModelItems.forEach(item => {
@@ -624,21 +750,20 @@ export const LoggingTab = ({
                                     sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * (Number(p.factor) || 1));
                                   }
                                 });
-                                return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-center">{sumEq || 0}</td>
+                                return <td key={slot} className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center min-w-[45px] w-[45px]">{sumEq || 0}</td>
                               })}
-                              <td className="py-1 px-1 border-r border-slate-300 text-center font-bold">{formAggregates.totalEqQtyBG || 0}</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
-                              <td></td>
+                              <td className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold min-w-[62px] w-[62px]">{formAggregates.totalEqQtyBG || 0}</td>
+                              <td className="w-7 min-w-[28px]"></td>
                             </tr>
                           )}
 
                           {/* Equivalent Qty RMA */}
                           {(filterDivision === "ALL" || filterDivision === "RMA") && (
-                            <tr key="eq-qty-rma-row" className="bg-white font-medium text-slate-700 border-t border-slate-100">
-                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 whitespace-nowrap">
+                            <tr key="eq-qty-rma-row" className="bg-white dark:bg-slate-900/60 font-medium text-slate-700 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 text-[10.5px]">
+                              <td className="py-0.5 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 bg-white dark:bg-slate-900 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                                 Sản Phẩm QĐ RMA (SP)
                               </td>
+                              <td colSpan={5} className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEq = 0;
                                 formModelItems.forEach(item => {
@@ -648,20 +773,19 @@ export const LoggingTab = ({
                                     sumEq += Math.round((Number(item.hourlyActuals[slot]) || 0) * (Number(p.factor) || 1));
                                   }
                                 });
-                                return <td key={slot} className="py-1 px-1 border-r border-slate-300 text-center">{sumEq || 0}</td>
+                                return <td key={slot} className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center min-w-[45px] w-[45px]">{sumEq || 0}</td>
                               })}
-                              <td className="py-1 px-1 border-r border-slate-300 text-center font-bold">{formAggregates.totalEqQtyRMA || 0}</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-center">-</td>
-                              <td></td>
+                              <td className="py-0.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold min-w-[62px] w-[62px]">{formAggregates.totalEqQtyRMA || 0}</td>
+                              <td className="w-7 min-w-[28px]"></td>
                             </tr>
                           )}
 
                           {/* Tỷ lệ hoàn thành KHSX (%) */}
-                          <tr key="completion-rate-row" className="bg-white font-bold border-t border-slate-300 text-blue-700">
-                            <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 bg-white z-10 text-blue-700 whitespace-nowrap">
+                          <tr key="completion-rate-row" className="bg-white dark:bg-slate-900 font-bold border-t border-slate-300 dark:border-slate-800 text-blue-700 dark:text-blue-400 text-[11px]">
+                            <td className="py-1 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 bg-white dark:bg-slate-900 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                               Tỷ lệ hoàn thành KHSX (%)
                             </td>
+                            <td colSpan={5} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                             {formSlots.map(slot => {
                               const sumActual = formModelItems
                                 .filter(item => filterDivision === "ALL" || (products.find(x => x.id === item.productId) || products[0]).group === filterDivision)
@@ -673,12 +797,12 @@ export const LoggingTab = ({
                                 rate = Number(((sumActual / hourlyPlan) * 100).toFixed(1));
                               }
                               return (
-                                <td key={slot} className={`py-1 px-1 border-r border-slate-800 min-w-[80px] w-[80px] text-center ${rate >= 100 ? "text-emerald-400" : rate > 0 ? "text-amber-400" : "text-rose-400"}`}>
+                                <td key={slot} className={`py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 min-w-[45px] w-[45px] text-center font-bold ${rate >= 100 ? "text-emerald-500" : rate > 0 ? "text-amber-500" : "text-rose-500"}`}>
                                   {safePlanQty > 0 ? `${Number.isFinite(rate) ? rate : 0}%` : "-"}
                                 </td>
                               )
                             })}
-                            <td className="py-1 px-1 border-r border-slate-800 text-amber-400">
+                            <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-amber-500 font-bold text-center min-w-[62px] w-[62px]">
                               {(() => {
                                 const act = Number(displayTotalActualQty) || 0;
                                 const plan = Number(displayTotalPlanQty) || 0;
@@ -688,23 +812,22 @@ export const LoggingTab = ({
                                 return "-";
                               })()}
                             </td>
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
-                            <td className="py-1 px-1 border-r border-slate-300 text-blue-700 text-center">-</td>
-                            <td></td>
+                            <td className="w-7 min-w-[28px]"></td>
                           </tr>
 
                           {/* Productivity RO % */}
                           {(filterDivision === "ALL" || filterDivision === "MLN") && (
-                            <tr key="productivity-ro-row" className="prod-row-ro font-bold bg-emerald-950/30 border-t border-slate-300 text-emerald-400 text-[14px]">
-                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 prod-row-ro bg-emerald-950/90 z-10 whitespace-nowrap">
+                            <tr key="productivity-ro-row" className="prod-row-ro font-bold bg-emerald-950/30 border-t border-slate-300 dark:border-slate-800 text-emerald-400 text-[11px]">
+                              <td className="py-1 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 prod-row-ro bg-emerald-950/90 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                                 NSLĐ DCRO (%)
                               </td>
+                              <td colSpan={5} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEqRO = 0;
                                 formModelItems.forEach(item => {
                                   const p = products.find(x => x.id === item.productId) || products[0];
-        if (!p) return;
-        if (p.group === "MLN") {
+                                  if (!p) return;
+                                  if (p.group === "MLN") {
                                     sumEqRO += Math.round((item.hourlyActuals[slot] || 0) * p.factor);
                                   }
                                 });
@@ -714,24 +837,23 @@ export const LoggingTab = ({
                                   prodPct = Number(((sumEqRO / (workersRO * (INDUSTRIAL_STANDARDS.standardQtyPerManday / 8))) * 100).toFixed(1));
                                 }
                                 return (
-                                  <td key={slot} className="py-1 px-1 border-r border-slate-300 min-w-[80px] w-[80px] text-center text-emerald-700">
+                                  <td key={slot} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 min-w-[45px] w-[45px] text-center text-emerald-500 font-bold">
                                     {prodPct > 0 ? `${prodPct}%` : "-"}
                                   </td>
                                 )
                               })}
-                              <td className="py-1 px-1 border-r border-slate-300 font-bold text-center">{(formAggregates.avgProductivityRO || 0).toFixed(1)}%</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-emerald-700 text-center">-</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-emerald-700 text-center">-</td>
-                              <td></td>
+                              <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 font-bold text-center text-emerald-500 min-w-[62px] w-[62px]">{(formAggregates.avgProductivityRO || 0).toFixed(1)}%</td>
+                              <td className="w-7 min-w-[28px]"></td>
                             </tr>
                           )}
 
                           {/* Productivity RMA % */}
                           {(filterDivision === "ALL" || filterDivision === "RMA") && (
-                            <tr key="productivity-rma-row" className="prod-row-rma font-bold bg-amber-950/30 border-t border-slate-300 text-amber-400 text-[14px]">
-                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 prod-row-rma bg-amber-950/90 z-10 whitespace-nowrap">
+                            <tr key="productivity-rma-row" className="prod-row-rma font-bold bg-amber-950/30 border-t border-slate-300 dark:border-slate-800 text-amber-400 text-[11px]">
+                              <td className="py-1 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 prod-row-rma bg-amber-950/90 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                                 NSLĐ DCRMA (%)
                               </td>
+                              <td colSpan={5} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEqRMA = 0;
                                 formModelItems.forEach(item => {
@@ -753,24 +875,23 @@ export const LoggingTab = ({
                                   prodPct = Number(((sumEqRMA / (workersRMA * (INDUSTRIAL_STANDARDS.standardQtyPerManday / 8))) * 100).toFixed(1));
                                 }
                                 return (
-                                  <td key={slot} className="py-1 px-1 border-r border-slate-300 min-w-[80px] w-[80px] text-center text-amber-700">
+                                  <td key={slot} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 min-w-[45px] w-[45px] text-center text-amber-500 font-bold">
                                     {prodPct > 0 ? `${prodPct}%` : "-"}
                                   </td>
                                 )
                               })}
-                              <td className="py-1 px-1 border-r border-slate-300 font-bold text-center">{(formAggregates.avgProductivityRMA || 0).toFixed(1)}%</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-amber-700 text-center">-</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-amber-700 text-center">-</td>
-                              <td></td>
+                              <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 font-bold text-center text-amber-500 min-w-[62px] w-[62px]">{(formAggregates.avgProductivityRMA || 0).toFixed(1)}%</td>
+                              <td className="w-7 min-w-[28px]"></td>
                             </tr>
                           )}
 
                           {/* Productivity BG % */}
                           {(filterDivision === "ALL" || filterDivision === "BG") && (
-                            <tr key="productivity-bg-row" className="prod-row-bg font-bold bg-sky-950/30 border-t border-slate-300 text-sky-400 text-[14px]">
-                              <td colSpan={3} className="py-1 px-1 text-right border-r border-slate-300 sticky left-0 prod-row-bg bg-sky-950/90 z-10 whitespace-nowrap">
+                            <tr key="productivity-bg-row" className="prod-row-bg font-bold bg-sky-950/30 border-t border-slate-300 dark:border-slate-800 text-sky-400 text-[11px]">
+                              <td className="py-1 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 prod-row-bg bg-sky-950/90 z-10 whitespace-nowrap min-w-[130px] w-[130px] shadow-sm">
                                 NSLĐ DCBG (%)
                               </td>
+                              <td colSpan={5} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEqBG = 0;
                                 formModelItems.forEach(item => {
@@ -785,24 +906,23 @@ export const LoggingTab = ({
                                   prodPct = Number(((sumEqBG / (workersBG * (INDUSTRIAL_STANDARDS.standardQtyPerManday / 8))) * 100).toFixed(1));
                                 }
                                 return (
-                                  <td key={slot} className="py-1 px-1 border-r border-slate-300 min-w-[80px] w-[80px] text-center text-sky-700">
+                                  <td key={slot} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 min-w-[45px] w-[45px] text-center text-sky-500 font-bold">
                                     {prodPct > 0 ? `${prodPct}%` : "-"}
                                   </td>
                                 )
                               })}
-                              <td className="py-1 px-1 border-r border-slate-300 font-bold text-center">{(formAggregates.avgProductivityBG || 0).toFixed(1)}%</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-sky-700 text-center">-</td>
-                              <td className="py-1 px-1 border-r border-slate-300 text-sky-700 text-center">-</td>
-                              <td></td>
+                              <td className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 font-bold text-center text-sky-500 min-w-[62px] w-[62px]">{(formAggregates.avgProductivityBG || 0).toFixed(1)}%</td>
+                              <td className="w-7 min-w-[28px]"></td>
                             </tr>
                           )}
 
                           {/* Combined Productivity % */}
                           {filterDivision === "ALL" && (
-                            <tr key="productivity-combined-row" className="prod-row-lr font-black bg-rose-950/30 text-rose-400 border-t border-slate-300 text-[15px]">
-                              <td colSpan={3} className="py-2 px-1 text-right border-r border-slate-300 sticky left-0 prod-row-lr bg-rose-950/90 z-10 whitespace-nowrap uppercase tracking-wide">
-                                NSLĐ Phân Xưởng LR (%)
+                            <tr key="productivity-combined-row" className="prod-row-lr font-black bg-rose-950/30 text-rose-400 border-t border-slate-300 dark:border-slate-800 text-[11px]">
+                              <td className="py-1.5 px-1.5 text-left border-r border-slate-300 dark:border-slate-800 sticky left-0 prod-row-lr bg-rose-950/90 z-10 whitespace-nowrap uppercase tracking-tight min-w-[130px] w-[130px] shadow-sm">
+                                NSLĐ PX LR (%)
                               </td>
+                              <td colSpan={5} className="py-1 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center text-slate-400 font-normal">-</td>
                               {formSlots.map(slot => {
                                 let sumEqCombined = 0;
                                 formModelItems.forEach(item => {
@@ -815,39 +935,38 @@ export const LoggingTab = ({
                                   prodPct = Number(((sumEqCombined / (workersCombined * (INDUSTRIAL_STANDARDS.standardQtyPerManday / 8))) * 100).toFixed(1));
                                 }
                                 return (
-                                  <td key={slot} className="py-2 px-1 border-r border-slate-300 min-w-[80px] w-[80px] text-center text-rose-700">
+                                  <td key={slot} className="py-1.5 px-0.5 border-r border-slate-300 dark:border-slate-800 min-w-[45px] w-[45px] text-center text-rose-500 font-bold">
                                     {prodPct > 0 ? `${prodPct}%` : "-"}
                                   </td>
                                 )
                               })}
-                              <td className="py-2 px-1 border-r border-slate-300 text-center">{(formAggregates.avgProductivity || 0).toFixed(1)}%</td>
-                              <td className="py-2 px-1 border-r border-slate-300 text-rose-700 text-center">-</td>
-                              <td className="py-2 px-1 border-r border-slate-300 text-rose-700 text-center">-</td>
-                              <td className="bg-slate-700/80"></td>
+                              <td className="py-1.5 px-0.5 border-r border-slate-300 dark:border-slate-800 text-center font-bold text-rose-500 min-w-[62px] w-[62px]">{(formAggregates.avgProductivity || 0).toFixed(1)}%</td>
+                              <td className="w-7 min-w-[28px] bg-slate-700/80"></td>
                             </tr>
                           )}
 
                           {/* Spacer */}
                           <tr key="spacer-1" className="h-2 bg-slate-950">
-                            <td colSpan={formSlots.length + 7}></td>
+                            <td colSpan={formSlots.length + 8}></td>
                           </tr>
 
                           {/* --- worker tracking: LINE RO --- */}
                           {(filterDivision === "ALL" || filterDivision === "MLN") && (
                             <React.Fragment key="worker-tracking-ro">
                               <tr key="ro-header" className="bg-emerald-950/20 border-t border-emerald-900/50">
-                                <td colSpan={3} className="py-1 px-1 text-left pl-2 text-emerald-400 font-bold border-r border-slate-800 sticky left-0 bg-slate-950 z-10 whitespace-nowrap">
-                                  📍 DÂY CHUYỀN LẮP RÁP RO (DCRO)
+                                <td colSpan={6} className="py-1 px-1.5 text-left text-emerald-400 font-bold border-r border-slate-800 sticky left-0 bg-slate-950 z-10 whitespace-nowrap text-[11px] shadow-sm">
+                                  📍 DC LẮP RÁP RO (DCRO)
                                 </td>
-                                <td colSpan={formSlots.length + 4}></td>
+                                <td colSpan={formSlots.length + 2}></td>
                               </tr>
 
                               <tr key="ro-official-workers" className="bg-slate-900/40">
-                                <td colSpan={3} className="py-0.5 px-2 text-right text-rose-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/40 z-10 pl-4 whitespace-nowrap">
+                                <td className="py-0.5 px-1.5 text-left text-rose-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/90 z-10 whitespace-nowrap text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ NS CHÍNH THỨC RO
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-slate-900/40"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
+                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -860,22 +979,21 @@ export const LoggingTab = ({
                                       }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      className="w-full h-full min-h-[24px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
                                 ))}
-                                <td className="border-r border-slate-800 text-rose-300 font-bold text-center">{formOfficialCountRO || 0}</td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="border-r border-slate-800 text-rose-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">{formOfficialCountRO || 0}</td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
                               <tr key="ro-seasonal-workers" className="bg-slate-900/40">
-                                <td colSpan={3} className="py-0.5 px-2 text-right text-amber-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/40 z-10 pl-4 whitespace-nowrap">
+                                <td className="py-0.5 px-1.5 text-left text-amber-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/90 z-10 whitespace-nowrap text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ NS THỜI VỤ RO
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-slate-900/40"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
+                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -888,47 +1006,45 @@ export const LoggingTab = ({
                                       }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      className="w-full h-full min-h-[24px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
                                 ))}
-                                <td className="border-r border-slate-800 text-amber-300 font-bold text-center">{formSeasonalCountRO || 0}</td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="border-r border-slate-800 text-amber-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">{formSeasonalCountRO || 0}</td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
-                              <tr key="ro-total-workers" className="bg-emerald-950/30 text-[14px] total-row-ro">
-                                <td colSpan={3} className="py-2 px-2 text-right text-emerald-400 font-bold border-r border-slate-800 sticky left-0 bg-emerald-950/90 z-10 pl-4 whitespace-nowrap">
+                              <tr key="ro-total-workers" className="bg-emerald-950/30 text-[11px] total-row-ro">
+                                <td className="py-1 px-1.5 text-left text-emerald-400 font-bold border-r border-slate-800 sticky left-0 bg-emerald-950/90 z-10 whitespace-nowrap text-[10.5px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ Tổng công DCRO (Công)
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-emerald-950/20"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="py-2 px-1 border-r border-slate-800 text-emerald-400 font-bold min-w-[80px] w-[80px] text-center">
+                                  <td key={slot} className="py-1 px-0.5 border-r border-slate-800 text-emerald-400 font-bold min-w-[45px] w-[45px] text-center text-[11px]">
                                     {(formOfficialWorkersRO[slot] || 0) + (formSeasonalWorkersRO[slot] || 0)}
                                   </td>
                                 ))}
-                                <td className="py-2 px-1 border-r border-slate-800 text-emerald-400 font-bold text-center">
+                                <td className="py-1 px-0.5 border-r border-slate-800 text-emerald-400 font-bold text-center min-w-[62px] w-[62px] text-[11px]">
                                   {formWorkersCountRO}
                                 </td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
-                              <tr key="ro-people-count" className="bg-emerald-900/10 text-[13px]">
-                                <td colSpan={3} className="py-1 px-2 text-right text-emerald-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 pl-4 whitespace-nowrap italic">
+                              <tr key="ro-people-count" className="bg-emerald-900/10 text-[10.5px]">
+                                <td className="py-0.5 px-1.5 text-left text-emerald-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 whitespace-nowrap italic text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ Số người DCRO thực tế
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800"></td>
                                 <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
-                                <td className="py-1 px-1 border-r border-slate-800 text-emerald-300 font-bold text-center">
+                                <td className="py-0.5 px-0.5 border-r border-slate-800 text-emerald-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">
                                   {formAggregates.formPersonCountRO}
                                 </td>
-                                <td colSpan={3}></td>
+                                <td></td>
                               </tr>
 
                               {/* Spacer */}
                               <tr key="ro-spacer" className="h-2 bg-slate-950">
-                                <td colSpan={formSlots.length + 7}></td>
+                                <td colSpan={formSlots.length + 8}></td>
                               </tr>
                             </React.Fragment>
                           )}
@@ -937,18 +1053,19 @@ export const LoggingTab = ({
                           {(filterDivision === "ALL" || filterDivision === "RMA") && (
                             <React.Fragment key="worker-tracking-rma">
                               <tr key="rma-header" className="bg-amber-950/20 border-t border-amber-900/50">
-                                <td colSpan={3} className="py-1 px-1 text-left pl-2 text-amber-400 font-bold border-r border-slate-800 sticky left-0 bg-slate-950 z-10 whitespace-nowrap">
-                                  📍 DÂY CHUYỀN LẮP RÁP RMA (RW)
+                                <td colSpan={6} className="py-1 px-1.5 text-left text-amber-400 font-bold border-r border-slate-800 sticky left-0 bg-slate-950 z-10 whitespace-nowrap text-[11px] shadow-sm">
+                                  📍 DC LẮP RÁP RMA (RW)
                                 </td>
-                                <td colSpan={formSlots.length + 4}></td>
+                                <td colSpan={formSlots.length + 2}></td>
                               </tr>
 
                               <tr key="rma-official-workers" className="bg-slate-900/40">
-                                <td colSpan={3} className="py-0.5 px-2 text-right text-rose-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/40 z-10 pl-4 whitespace-nowrap">
+                                <td className="py-0.5 px-1.5 text-left text-rose-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/90 z-10 whitespace-nowrap text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ NS CHÍNH THỨC RMA
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-slate-900/40"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
+                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -961,22 +1078,21 @@ export const LoggingTab = ({
                                       }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      className="w-full h-full min-h-[24px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
                                 ))}
-                                <td className="border-r border-slate-800 text-rose-300 font-bold text-center">{formOfficialCountRMA || 0}</td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="border-r border-slate-800 text-rose-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">{formOfficialCountRMA || 0}</td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
                               <tr key="rma-seasonal-workers" className="bg-slate-900/40">
-                                <td colSpan={3} className="py-0.5 px-2 text-right text-amber-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/40 z-10 pl-4 whitespace-nowrap">
+                                <td className="py-0.5 px-1.5 text-left text-amber-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/90 z-10 whitespace-nowrap text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ NS THỜI VỤ RMA
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-slate-900/40"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
+                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -989,46 +1105,45 @@ export const LoggingTab = ({
                                       }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      className="w-full h-full min-h-[24px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
                                 ))}
-                                <td className="border-r border-slate-800 text-amber-300 font-bold text-center">{formSeasonalCountRMA || 0}</td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="border-r border-slate-800 text-amber-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">{formSeasonalCountRMA || 0}</td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
-                              <tr key="rma-total-workers" className="bg-amber-950/30 text-[14px] total-row-rma">
-                                <td colSpan={3} className="py-2 px-2 text-right text-amber-400 font-bold border-r border-slate-800 sticky left-0 bg-amber-950/90 z-10 pl-4 whitespace-nowrap">
+                              <tr key="rma-total-workers" className="bg-amber-950/30 text-[11px] total-row-rma">
+                                <td className="py-1 px-1.5 text-left text-amber-400 font-bold border-r border-slate-800 sticky left-0 bg-amber-950/90 z-10 whitespace-nowrap text-[10.5px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ Tổng công DCRMA (Công)
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-amber-950/20"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="py-2 px-1 border-r border-slate-800 text-amber-400 font-bold min-w-[80px] w-[80px] text-center">
+                                  <td key={slot} className="py-1 px-0.5 border-r border-slate-800 text-amber-400 font-bold min-w-[45px] w-[45px] text-center text-[11px]">
                                     {(formOfficialWorkersRMA[slot] || 0) + (formSeasonalWorkersRMA[slot] || 0)}
                                   </td>
                                 ))}
-                                <td className="py-2 px-1 border-r border-slate-800 text-amber-400 font-bold text-center">
+                                <td className="py-1 px-0.5 border-r border-slate-800 text-amber-400 font-bold text-center min-w-[62px] w-[62px] text-[11px]">
                                   {formWorkersCountRMA}
                                 </td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
+                                <td className="w-7 min-w-[28px]"></td>
+                              </tr>
+
+                              <tr key="rma-people-count" className="bg-amber-900/10 text-[10.5px]">
+                                <td className="py-0.5 px-1.5 text-left text-amber-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 whitespace-nowrap italic text-[10px] min-w-[130px] w-[130px] shadow-sm">
+                                  ↳ Số người DCRMA thực tế
+                                </td>
+                                <td colSpan={5} className="border-r border-slate-800"></td>
+                                <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
+                                <td className="py-0.5 px-0.5 border-r border-slate-800 text-amber-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">
+                                  {formAggregates.formPersonCountRMA}
+                                </td>
                                 <td></td>
                               </tr>
 
-                              <tr key="rma-people-count" className="bg-amber-900/10 text-[13px]">
-                                <td colSpan={3} className="py-1 px-2 text-right text-amber-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 pl-4 whitespace-nowrap italic">
-                                  ↳ Số người DCRMA thực tế
-                                </td>
-                                <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
-                                <td className="py-1 px-1 border-r border-slate-800 text-amber-300 font-bold text-center">
-                                  {formAggregates.formPersonCountRMA}
-                                </td>
-                                <td colSpan={3}></td>
-                              </tr>
-
+                              {/* Spacer */}
                               <tr key="rma-spacer" className="h-2 bg-slate-950">
-                                <td colSpan={formSlots.length + 7}></td>
+                                <td colSpan={formSlots.length + 8}></td>
                               </tr>
                             </React.Fragment>
                           )}
@@ -1037,18 +1152,19 @@ export const LoggingTab = ({
                           {(filterDivision === "ALL" || filterDivision === "BG") && (
                             <React.Fragment key="worker-tracking-bg">
                               <tr key="bg-header" className="bg-sky-950/20 border-t border-sky-900/50">
-                                <td colSpan={3} className="py-1 px-1 text-left pl-2 text-sky-400 font-bold border-r border-slate-800 sticky left-0 bg-slate-950 z-10 whitespace-nowrap">
-                                  📍 DÂY CHUYỀN LẮP RÁP BẾP GAS (DCBG)
+                                <td colSpan={6} className="py-1 px-1.5 text-left text-sky-400 font-bold border-r border-slate-800 sticky left-0 bg-slate-950 z-10 whitespace-nowrap text-[11px] shadow-sm">
+                                  📍 DC LẮP RÁP BẾP GAS (DCBG)
                                 </td>
-                                <td colSpan={formSlots.length + 4}></td>
+                                <td colSpan={formSlots.length + 2}></td>
                               </tr>
 
                               <tr key="bg-official-workers" className="bg-slate-900/40">
-                                <td colSpan={3} className="py-0.5 px-2 text-right text-rose-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/40 z-10 pl-4 whitespace-nowrap">
+                                <td className="py-0.5 px-1.5 text-left text-rose-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/90 z-10 whitespace-nowrap text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ NS CHÍNH THỨC BG
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-slate-900/40"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
+                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -1061,22 +1177,21 @@ export const LoggingTab = ({
                                       }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      className="w-full h-full min-h-[24px] bg-transparent text-center text-rose-300 font-bold focus:bg-slate-800 focus:outline-none text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
                                 ))}
-                                <td className="border-r border-slate-800 text-rose-300 font-bold text-center">{formOfficialCountBG || 0}</td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="border-r border-slate-800 text-rose-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">{formOfficialCountBG || 0}</td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
                               <tr key="bg-seasonal-workers" className="bg-slate-900/40">
-                                <td colSpan={3} className="py-0.5 px-2 text-right text-amber-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/40 z-10 pl-4 whitespace-nowrap">
+                                <td className="py-0.5 px-1.5 text-left text-amber-300 font-bold border-r border-slate-800 sticky left-0 bg-slate-900/90 z-10 whitespace-nowrap text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ NS THỜI VỤ BG
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-slate-900/40"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[80px] w-[80px]">
+                                  <td key={slot} className="p-0 border-r border-slate-800 min-w-[45px] w-[45px]">
                                     <input
                                       type="number"
                                       min={0}
@@ -1089,70 +1204,69 @@ export const LoggingTab = ({
                                       }}
                                       onKeyDown={(e) => { if (e.key === "Enter") { (e.target as HTMLInputElement).blur(); handleCommitWorkerDraft?.(); } }}
                                       onBlur={() => handleCommitWorkerDraft?.()}
-                                      className="w-full h-full min-h-[30px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[13px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      className="w-full h-full min-h-[24px] bg-transparent text-center text-amber-300 font-bold focus:bg-slate-800 focus:outline-none text-[11px] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                     />
                                   </td>
                                 ))}
-                                <td className="border-r border-slate-800 text-amber-300 font-bold text-center">{formSeasonalCountBG || 0}</td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="border-r border-slate-800 text-amber-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">{formSeasonalCountBG || 0}</td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
-                              <tr key="bg-total-workers" className="bg-sky-950/30 text-[14px] total-row-bg">
-                                <td colSpan={3} className="py-2 px-2 text-right text-sky-400 font-bold border-r border-slate-800 sticky left-0 bg-sky-950/90 z-10 pl-4 whitespace-nowrap">
+                              <tr key="bg-total-workers" className="bg-sky-950/30 text-[11px] total-row-bg">
+                                <td className="py-1 px-1.5 text-left text-sky-400 font-bold border-r border-slate-800 sticky left-0 bg-sky-950/90 z-10 whitespace-nowrap text-[10.5px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ Tổng công DCBG (Công)
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800 bg-sky-950/20"></td>
                                 {formSlots.map(slot => (
-                                  <td key={slot} className="py-2 px-1 border-r border-slate-800 text-sky-400 font-bold min-w-[80px] w-[80px] text-center">
+                                  <td key={slot} className="py-1 px-0.5 border-r border-slate-800 text-sky-400 font-bold min-w-[45px] w-[45px] text-center text-[11px]">
                                     {(formOfficialWorkersBG[slot] || 0) + (formSeasonalWorkersBG[slot] || 0)}
                                   </td>
                                 ))}
-                                <td className="py-2 px-1 border-r border-slate-800 text-sky-400 font-bold text-center">
+                                <td className="py-1 px-0.5 border-r border-slate-800 text-sky-400 font-bold text-center min-w-[62px] w-[62px] text-[11px]">
                                   {formWorkersCountBG}
                                 </td>
-                                <td className="border-r border-slate-800"></td>
-                                <td className="border-r border-slate-800"></td>
-                                <td></td>
+                                <td className="w-7 min-w-[28px]"></td>
                               </tr>
 
-                              <tr key="bg-people-count" className="bg-sky-900/10 text-[13px]">
-                                <td colSpan={3} className="py-1 px-2 text-right text-sky-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 pl-4 whitespace-nowrap italic">
+                              <tr key="bg-people-count" className="bg-sky-900/10 text-[10.5px]">
+                                <td className="py-0.5 px-1.5 text-left text-sky-300 font-medium border-r border-slate-800 sticky left-0 bg-slate-900 z-10 whitespace-nowrap italic text-[10px] min-w-[130px] w-[130px] shadow-sm">
                                   ↳ Số người DCBG thực tế
                                 </td>
+                                <td colSpan={5} className="border-r border-slate-800"></td>
                                 <td colSpan={formSlots.length} className="border-r border-slate-800"></td>
-                                <td className="py-1 px-1 border-r border-slate-800 text-sky-300 font-bold text-center">
+                                <td className="py-0.5 px-0.5 border-r border-slate-800 text-sky-300 font-bold text-center min-w-[62px] w-[62px] text-[11px]">
                                   {formAggregates.formPersonCountBG}
                                 </td>
-                                <td colSpan={3}></td>
+                                <td></td>
                               </tr>
 
                               {/* Spacer */}
                               <tr key="bg-spacer" className="h-2 bg-slate-950">
-                                <td colSpan={formSlots.length + 7}></td>
+                                <td colSpan={formSlots.length + 8}></td>
                               </tr>
                             </React.Fragment>
                           )}
 
                           {/* Combined Grand Total Workers */}
                           {filterDivision === "ALL" && (
-                            <tr key="grand-total-workers" className="bg-[#92D050] border-t border-green-600 text-slate-950 font-black text-[15px]">
-                              <td colSpan={3} className="py-2 px-1 text-right border-r border-green-600 sticky left-0 bg-[#92D050] z-10 whitespace-nowrap uppercase tracking-wide">
-                                TỔNG CÔNG (CÔNG THAO TÁC)
+                            <tr key="grand-total-workers" className="bg-[#92D050] border-t border-green-600 text-slate-950 font-black text-[11.5px]">
+                              <td className="py-1.5 px-1.5 text-left border-r border-green-600 sticky left-0 bg-[#92D050] z-10 whitespace-nowrap uppercase tracking-tight min-w-[130px] w-[130px] shadow-sm">
+                                TỔNG CÔNG (CÔNG TT)
                               </td>
+                              <td colSpan={5} className="border-r border-green-600 bg-[#92D050]"></td>
                               {formSlots.map(slot => {
                                 const totalH = (formOfficialWorkersRO[slot] || 0) + (formSeasonalWorkersRO[slot] || 0) + (formOfficialWorkersRMA[slot] || 0) + (formSeasonalWorkersRMA[slot] || 0) + (formOfficialWorkersBG[slot] || 0) + (formSeasonalWorkersBG[slot] || 0);
                                 return (
-                                  <td key={slot} className="py-2 px-1 border-r border-green-600 min-w-[80px] w-[80px] text-center">
+                                  <td key={slot} className="py-1.5 px-0.5 border-r border-green-600 min-w-[45px] w-[45px] text-center font-bold">
                                     {totalH}
                                   </td>
                                 );
                               })}
-                              <td className="py-2 px-1 border-r border-green-600 text-center">
+                              <td className="py-1.5 px-0.5 border-r border-green-600 text-center font-bold min-w-[62px] w-[62px]">
                                 {formWorkersCount}
                               </td>
-                              <td colSpan={3} className="bg-[#92D050]/80 text-[13px] text-right pr-4 font-bold italic">
-                                Số người trung bình: {formAggregates.formPersonCount}
+                              <td className="bg-[#92D050]/90 text-[10.5px] text-center font-bold italic w-7 min-w-[28px]">
+                                {formAggregates.formPersonCount}
                               </td>
                             </tr>
                           )}

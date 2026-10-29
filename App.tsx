@@ -217,6 +217,7 @@ export default function App() {
     setScanInput,
     handleScanSubmit,
     formSlots,
+    setFormSlots,
     handleDeleteSlot,
     formModelItems,
     handleUpdateItem,
@@ -777,6 +778,7 @@ export default function App() {
       setScanInput={setScanInput}
       handleScanSubmit={handleScanSubmit}
       formSlots={formSlots}
+      setFormSlots={setFormSlots}
       handleDeleteSlot={handleDeleteSlot}
       formModelItems={formModelItems}
       filterDivision={filterDivision}
