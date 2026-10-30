@@ -6,7 +6,7 @@ import {
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
-import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, EXCEL_STANDARD_SLOTS, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey, getModelSlotActual, calculateModelTotalActual, areSlotsOverlapping, deduplicateAndSortSlots, parseSlotRange } from './appUtils';
+import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, EXCEL_STANDARD_SLOTS, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey, getModelSlotActual, calculateModelTotalActual, areSlotsOverlapping, deduplicateAndSortSlots, parseSlotRange, canonicalizeHourlyActuals } from './appUtils';
 import * as storage from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
@@ -336,14 +336,25 @@ const [isScrolled, setIsScrolled] = useState(false);
       try {
         const parsed = JSON.parse(saved) as ProductionLog[];
         return parsed.map(log => {
+          let lineName = log.lineName;
           const nameLower = (log.lineName || "").toLowerCase();
           if (nameLower.includes("mln") || nameLower.includes("lắp ráp ro") || nameLower.includes("dcro")) {
-            return { ...log, lineName: "DCRO" };
+            lineName = "DCRO";
+          } else if (nameLower.includes("kín ga") || nameLower.includes("bếp gas") || nameLower.includes("lr bg") || nameLower.includes("dcbg")) {
+            lineName = "DCBG";
           }
-          if (nameLower.includes("kín ga") || nameLower.includes("bếp gas") || nameLower.includes("lr bg") || nameLower.includes("dcbg")) {
-            return { ...log, lineName: "DCBG" };
-          }
-          return log;
+          const cleanHourly = canonicalizeHourlyActuals(log.hourlyActuals);
+          const hourlySum = calculateModelTotalActual(cleanHourly);
+          const actualUnits = hourlySum > 0 ? hourlySum : (Number(log.actualUnits) || 0);
+          const factor = Number(log.equivalentFactor) || 1;
+          const equivalentProducts = Math.round(actualUnits * factor);
+          return {
+            ...log,
+            lineName,
+            hourlyActuals: cleanHourly,
+            actualUnits,
+            equivalentProducts,
+          };
         });
       } catch (e) {
         return INITIAL_PRODUCTION_LOGS;
@@ -592,22 +603,46 @@ const [isScrolled, setIsScrolled] = useState(false);
     setFormModelItems((prev) => {
       let changed = false;
       const next = prev.map((item) => {
-        const cleanedHourly: Record<string, number> = {};
-        let itemChanged = false;
-        Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
-          if (isValidHourlySlot(k)) {
-            cleanedHourly[k] = Number(v) || 0;
-          } else {
-            itemChanged = true;
-          }
-        });
-        if (itemChanged) {
+        const cleanedHourly = canonicalizeHourlyActuals(item.hourlyActuals);
+        const originalKeys = Object.keys(item.hourlyActuals || {});
+        const cleanedKeys = Object.keys(cleanedHourly);
+        if (originalKeys.length !== cleanedKeys.length || originalKeys.some(k => item.hourlyActuals[k] !== cleanedHourly[k])) {
           changed = true;
           return { ...item, hourlyActuals: cleanedHourly };
         }
         return item;
       });
       return changed ? next : prev;
+    });
+
+    setProductionLogs((prev) => {
+      let changed = false;
+      const sanitized = prev.map((log) => {
+        const cleanHourly = canonicalizeHourlyActuals(log.hourlyActuals);
+        const hourlySum = calculateModelTotalActual(cleanHourly);
+        const actualUnits = hourlySum > 0 ? hourlySum : (Number(log.actualUnits) || 0);
+        const factor = Number(log.equivalentFactor) || 1;
+        const equivalentProducts = Math.round(actualUnits * factor);
+        if (
+          actualUnits !== log.actualUnits ||
+          equivalentProducts !== log.equivalentProducts ||
+          Object.keys(cleanHourly).length !== Object.keys(log.hourlyActuals || {}).length
+        ) {
+          changed = true;
+          return {
+            ...log,
+            hourlyActuals: cleanHourly,
+            actualUnits,
+            equivalentProducts,
+          };
+        }
+        return log;
+      });
+      if (changed) {
+        storage.saveAllProductionLogs(sanitized);
+        return sanitized;
+      }
+      return prev;
     });
   }, []);
 
@@ -4627,7 +4662,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         // Filter by group if not ALL
         if (filterDivision !== "ALL" && prod.group !== filterDivision) return;
         
-        const actualUnits = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
+        const actualUnits = calculateModelTotalActual(item.hourlyActuals);
         finalActualRevenue += actualUnits * (prod.price || 0);
       });
     }
@@ -4973,15 +5008,15 @@ const [isScrolled, setIsScrolled] = useState(false);
       const shiftWorkersMap: { [shiftKey: string]: number } = {};
 
       filteredLogs.forEach((log) => {
-        if (log.hourlyActuals && log.hourlyActuals[key] !== undefined) {
-          const val = log.hourlyActuals[key] || 0;
+        const val = getModelSlotActual(log.hourlyActuals, key);
+        if (val > 0) {
           qty += val;
-          eqQty += Math.round(val * log.equivalentFactor);
+          eqQty += Math.round(val * (log.equivalentFactor || 1));
           
           // Get unique worker count for this shift-hour
           const shiftKey = `${log.date}_${log.lineId}_${log.shift}`;
           if (!shiftWorkersMap[shiftKey]) {
-            shiftWorkersMap[shiftKey] = (log.hourlyWorkers && log.hourlyWorkers[key]) || log.workersCount || 0;
+            shiftWorkersMap[shiftKey] = (log.hourlyWorkers && (log.hourlyWorkers[key] || getModelSlotActual(log.hourlyWorkers as any, key))) || log.workersCount || 0;
           }
         }
       });
@@ -5266,7 +5301,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     let totalEquivalent = 0;
 
     for (const item of formModelItems) {
-      const actualUnits = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
+      const cleanHourly = canonicalizeHourlyActuals(item.hourlyActuals);
+      const actualUnits = calculateModelTotalActual(cleanHourly, formSlots);
       if (actualUnits < 0) {
         const prodDef = products.find((p) => p.id === item.productId) || products[0];
         setFormMessage(`⚠️ Sản lượng hoàn thành cho model "${prodDef.name}" không được âm`);
@@ -5285,7 +5321,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     // Tạo danh sách bản ghi mới cho từng model trong ca
     const newLogs: ProductionLog[] = validModelItems.map((item, idx) => {
       const prodDef = products.find((p) => p.id === item.productId) || products[0];
-      const actualUnits = Object.keys(item.hourlyActuals).reduce((sum, key) => sum + (item.hourlyActuals[key] || 0), 0);
+      const cleanHourly = canonicalizeHourlyActuals(item.hourlyActuals);
+      const actualUnits = calculateModelTotalActual(cleanHourly, formSlots);
       const equivalentProducts = Math.round(actualUnits * prodDef.factor);
 
       // Determine Line ID & Name based on Product Group
@@ -5347,7 +5384,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         laborProductivityPercent,
         shift: formShift,
         technicianName: formTechnician,
-        hourlyActuals: item.hourlyActuals,
+        hourlyActuals: cleanHourly,
         hourlyWorkers,
         hourlyOfficialWorkers,
         hourlySeasonalWorkers,
@@ -5921,14 +5958,23 @@ const [isScrolled, setIsScrolled] = useState(false);
 
     // Cập nhật state cục bộ ngay lập tức (0ms delay), không gửi request Supabase khi đang gõ phím
     setFormModelItems((prev) => {
+      const parsed = parseSlotRange(slotName);
+      const canonicalSlot = parsed ? parsed.canonical : slotName;
       const updated = prev.map((item) => {
         if (item.id !== id) return item;
+        const nextHourly = { ...item.hourlyActuals };
+        // Xóa các key biểu diễn cùng khoảng thời gian này để chống nhân đôi khung giờ
+        Object.keys(nextHourly).forEach((k) => {
+          if (areSlotsOverlapping(k, canonicalSlot) || k.toLowerCase().trim() === canonicalSlot.toLowerCase().trim()) {
+            delete nextHourly[k];
+          }
+        });
+        if (qty > 0) {
+          nextHourly[canonicalSlot] = qty;
+        }
         return {
           ...item,
-          hourlyActuals: {
-            ...item.hourlyActuals,
-            [slotName]: qty,
-          },
+          hourlyActuals: nextHourly,
         };
       });
       formModelItemsRef.current = updated;
@@ -5950,14 +5996,22 @@ const [isScrolled, setIsScrolled] = useState(false);
       const item = prev.find((it) => it.id === id);
       if (!item) return prev;
 
-      const qty = customQty !== undefined ? customQty : (item.hourlyActuals[slotName] || 0);
-      const updatedHourly = {
-        ...item.hourlyActuals,
-        [slotName]: qty,
-      };
+      const qty = customQty !== undefined ? customQty : getModelSlotActual(item.hourlyActuals, slotName);
+      const parsed = parseSlotRange(slotName);
+      const canonicalSlot = parsed ? parsed.canonical : slotName;
+
+      const nextHourly = { ...item.hourlyActuals };
+      Object.keys(nextHourly).forEach((k) => {
+        if (areSlotsOverlapping(k, canonicalSlot) || k.toLowerCase().trim() === canonicalSlot.toLowerCase().trim()) {
+          delete nextHourly[k];
+        }
+      });
+      if (qty > 0) {
+        nextHourly[canonicalSlot] = qty;
+      }
 
       const nextItems = prev.map((it) =>
-        it.id === id ? { ...it, hourlyActuals: updatedHourly } : it
+        it.id === id ? { ...it, hourlyActuals: nextHourly } : it
       );
       formModelItemsRef.current = nextItems;
 

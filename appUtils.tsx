@@ -191,19 +191,31 @@ export function formatMinutesToSlotTime(minutes: number): string {
 export function parseSlotRange(slot: string): { startMin: number; endMin: number; canonical: string } | null {
   if (!slot || typeof slot !== 'string') return null;
   const s = slot.trim().toLowerCase().replace(/–/g, '-').replace(/\s+/g, '');
-  if (s.startsWith('ca') || s.includes('08:00-17:00')) return null;
+  if (s.startsWith('ca') || s.includes('08:00-17:00') || s.includes('cahc')) return null;
 
   const parts = s.split('-');
-  if (parts.length !== 2) return null;
-
-  const startMin = parseSlotTimePart(parts[0]);
-  const endMin = parseSlotTimePart(parts[1]);
-  if (startMin === null || endMin === null || startMin >= endMin) {
-    return null;
+  if (parts.length === 2) {
+    const startMin = parseSlotTimePart(parts[0]);
+    const endMin = parseSlotTimePart(parts[1]);
+    if (startMin === null || endMin === null || startMin >= endMin) {
+      return null;
+    }
+    const canonical = `${formatMinutesToSlotTime(startMin)}-${formatMinutesToSlotTime(endMin)}`;
+    return { startMin, endMin, canonical };
+  } else if (parts.length === 1) {
+    // Xử lý các khung giờ biểu diễn đơn lẻ (ví dụ: '7h', '8h', '07:00', '7')
+    const startMin = parseSlotTimePart(parts[0]);
+    if (startMin !== null && startMin >= 0 && startMin < 24 * 60) {
+      let endMin = startMin + 60;
+      if (startMin === 21 * 60) {
+        endMin = 21 * 60 + 30; // 21h - 21h30
+      }
+      const canonical = `${formatMinutesToSlotTime(startMin)}-${formatMinutesToSlotTime(endMin)}`;
+      return { startMin, endMin, canonical };
+    }
   }
 
-  const canonical = `${formatMinutesToSlotTime(startMin)}-${formatMinutesToSlotTime(endMin)}`;
-  return { startMin, endMin, canonical };
+  return null;
 }
 
 // Kiểm tra 2 khung giờ có bị trùng lặp hoặc giao thoa thời gian với nhau không
@@ -259,7 +271,16 @@ export function deduplicateAndSortSlots(slots: string[]): string[] {
 export function isValidHourlySlot(slot: string): boolean {
   if (!slot || typeof slot !== 'string') return false;
   const s = slot.trim().toUpperCase();
-  if (s.startsWith("CA ") || s.startsWith("CA_") || s.includes("08:00") || s.includes("17:00") || s.includes("CA HC") || s.includes("CA 1") || s.includes("CA 2") || s.includes("CA 3")) {
+  if (
+    s.startsWith("CA ") ||
+    s.startsWith("CA_") ||
+    s.includes("08:00 - 17:00") ||
+    s.includes("08:00-17:00") ||
+    s.includes("CA HC") ||
+    s.includes("CA 1") ||
+    s.includes("CA 2") ||
+    s.includes("CA 3")
+  ) {
     return false;
   }
   return parseSlotRange(slot) !== null;
@@ -414,6 +435,26 @@ export function getModelSlotActual(hourlyActuals?: { [k: string]: number }, slot
   return 0;
 }
 
+// Chuẩn hóa và gộp sạch các khung giờ trùng lặp (ví dụ: '7h', '7h-8h', '7h - 8h') về dạng canonical duy nhất
+export function canonicalizeHourlyActuals(hourlyActuals?: { [k: string]: number } | null): { [k: string]: number } {
+  if (!hourlyActuals || typeof hourlyActuals !== 'object') return {};
+  const result: { [k: string]: number } = {};
+
+  for (const [k, v] of Object.entries(hourlyActuals)) {
+    if (!k) continue;
+    const num = Number(v) || 0;
+    if (num <= 0) continue;
+
+    const parsed = parseSlotRange(k);
+    const canonicalKey = parsed ? parsed.canonical : k.trim().toLowerCase();
+
+    // Lấy giá trị lớn nhất (thay vì cộng dồn làm sai lệch sản lượng)
+    result[canonicalKey] = Math.max(result[canonicalKey] || 0, num);
+  }
+
+  return result;
+}
+
 // Tính tổng sản lượng thực tế theo danh sách khung giờ hợp lệ không trùng lặp
 export function calculateModelTotalActual(hourlyActuals?: { [k: string]: number }, activeSlots?: string[]): number {
   if (!hourlyActuals) return 0;
@@ -421,21 +462,9 @@ export function calculateModelTotalActual(hourlyActuals?: { [k: string]: number 
     const uniqueSlots = deduplicateAndSortSlots(activeSlots);
     return uniqueSlots.reduce((sum, slot) => sum + getModelSlotActual(hourlyActuals, slot), 0);
   }
-  // Nếu không truyền activeSlots, tính tổng các khung giờ duy nhất (chống cộng lặp hoa/thường)
-  const canonicalSeen = new Map<string, number>();
-  for (const [k, v] of Object.entries(hourlyActuals)) {
-    const parsed = parseSlotRange(k);
-    const key = parsed ? parsed.canonical : k.toLowerCase().replace(/\s+/g, '');
-    const val = Number(v) || 0;
-    if (val > 0) {
-      canonicalSeen.set(key, Math.max(canonicalSeen.get(key) || 0, val));
-    }
-  }
-  let sum = 0;
-  for (const val of canonicalSeen.values()) {
-    sum += val;
-  }
-  return sum;
+  // Nếu không truyền activeSlots, tính tổng các khung giờ duy nhất (chống cộng lặp các biến thể)
+  const canonical = canonicalizeHourlyActuals(hourlyActuals);
+  return Object.values(canonical).reduce((sum, val) => sum + val, 0);
 }
 
 // Hàm đảm bảo 1 bảng nhật ký ca KHÔNG BAO GIỜ có 2 model sản xuất trùng nhau, giữ thứ tự ổn định không nhảy
@@ -449,15 +478,8 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
     const modelKey = getCanonicalProductKey(item.productId, prodList) || String(item.productId).trim().toUpperCase();
     const existingIndex = keyToIndex.get(modelKey);
 
-    // Chuẩn hóa slot keys
-    const cleanActuals: { [k: string]: number } = {};
-    Object.entries(item.hourlyActuals || {}).forEach(([k, v]) => {
-      const normK = k.toLowerCase().trim();
-      const val = Number(v) || 0;
-      if (val > 0) {
-        cleanActuals[normK] = Math.max(cleanActuals[normK] || 0, val);
-      }
-    });
+    // Chuẩn hóa slot keys sạch hoàn toàn
+    const cleanActuals = canonicalizeHourlyActuals(item.hourlyActuals);
 
     if (existingIndex === undefined) {
       const newIndex = result.length;
@@ -479,7 +501,7 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
         dailyPlan: Math.max(existing.dailyPlan || 0, item.dailyPlan || 0),
         delayedWeeklyQty: existing.delayedWeeklyQty !== undefined ? existing.delayedWeeklyQty : item.delayedWeeklyQty,
         note: existing.note || item.note,
-        hourlyActuals: mergedActuals,
+        hourlyActuals: canonicalizeHourlyActuals(mergedActuals),
       };
     }
   }

@@ -1,4 +1,4 @@
-import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, getCanonicalProductKey, deduplicateFormModelItems, deduplicateProductDefinitions, EXCEL_STANDARD_SLOTS, getModelSlotActual, calculateModelTotalActual } from "./appUtils";
+import { YAXIS_DOMAIN, getProductModelCode, getWeeksInMonth, getYearWeeks, getStandardYearWeeks, isSameProduct, getCanonicalProductKey, deduplicateFormModelItems, deduplicateProductDefinitions, EXCEL_STANDARD_SLOTS, getModelSlotActual, calculateModelTotalActual, canonicalizeHourlyActuals, deduplicateAndSortSlots } from "./appUtils";
 import * as XLSX from "xlsx";
 import { SUNHOUSE_LINES, INDUSTRIAL_STANDARDS } from "./data";
 import React, { useMemo, useState } from 'react';
@@ -1493,21 +1493,33 @@ export const LoggingTab = ({
                                     <span className="font-medium text-slate-400 block text-[11px]">{log.productName}</span>
                                     {log.hourlyActuals && (
                                       <div className="flex flex-wrap gap-1 mt-1 max-w-[280px]">
-                                        {Object.keys(log.hourlyActuals).map((slot) => {
-                                          const val = log.hourlyActuals?.[slot];
-                                          const startHr = slot.split(" ")[0] || slot;
-                                          return (
-                                            <span key={slot} className="text-[9px] bg-slate-950 px-1.5 py-0.2 rounded border border-slate-800 text-slate-450 font-mono" title={slot}>
-                                              {startHr}: <span className="text-sky-400 font-extrabold">{val}</span>
-                                            </span>
-                                          );
-                                        })}
+                                        {(() => {
+                                          const cleanHourly = canonicalizeHourlyActuals(log.hourlyActuals);
+                                          const sortedSlots = deduplicateAndSortSlots(Object.keys(cleanHourly));
+                                          return sortedSlots.map((slot) => {
+                                            const val = cleanHourly[slot];
+                                            if (val === undefined || val === null || val <= 0) return null;
+                                            return (
+                                              <span
+                                                key={slot}
+                                                className="text-[9px] bg-slate-950 px-1.5 py-0.2 rounded border border-slate-800 text-slate-450 font-mono"
+                                                title={`Khung giờ ${slot}: ${val}`}
+                                              >
+                                                {slot}: <span className="text-sky-400 font-extrabold">{val}</span>
+                                              </span>
+                                            );
+                                          });
+                                        })()}
                                       </div>
                                     )}
                                   </td>
-                                  <td className="py-3 px-3 text-right font-mono font-medium text-white">{log.actualUnits || 0}</td>
+                                  <td className="py-3 px-3 text-right font-mono font-medium text-white">
+                                    {calculateModelTotalActual(log.hourlyActuals) || log.actualUnits || 0}
+                                  </td>
                                   <td className="py-3 px-3 text-right font-mono text-cyan-500 font-bold">x{log.equivalentFactor || 0}</td>
-                                  <td className="py-3 px-3 text-right font-mono font-bold text-white">{log.equivalentProducts || 0}</td>
+                                  <td className="py-3 px-3 text-right font-mono font-bold text-white">
+                                    {Math.round((calculateModelTotalActual(log.hourlyActuals) || log.actualUnits || 0) * (log.equivalentFactor || 1))}
+                                  </td>
                                   <td className="py-3 px-3 text-right font-mono">{log.workersCount || 0}</td>
                                   <td className="py-3 px-3 text-center">
                                     <span className={`inline-block font-mono font-bold px-1.5 py-0.2 rounded text-[10px] ${
@@ -1664,17 +1676,18 @@ export const LoggingTab = ({
                               }
 
                               return filteredLogs.map((log) => {
-                                const h08_09 = log.hourlyActuals?.["8H - 9H"] !== undefined ? log.hourlyActuals["8H - 9H"] : null;
-                                const h09_10 = log.hourlyActuals?.["9H - 10H"] !== undefined ? log.hourlyActuals["9H - 10H"] : null;
-                                const h10_11 = log.hourlyActuals?.["10H - 11H"] !== undefined ? log.hourlyActuals["10H - 11H"] : null;
-                                const h11_12 = log.hourlyActuals?.["11H - 12H"] !== undefined ? log.hourlyActuals["11H - 12H"] : null;
-                                const h13_14 = log.hourlyActuals?.["13H - 14H"] !== undefined ? log.hourlyActuals["13H - 14H"] : null;
-                                const h14_15 = log.hourlyActuals?.["14H - 15H"] !== undefined ? log.hourlyActuals["14H - 15H"] : null;
-                                const h15_16 = log.hourlyActuals?.["15H - 16H"] !== undefined ? log.hourlyActuals["15H - 16H"] : null;
-                                const h16_17 = log.hourlyActuals?.["16H - 17H"] !== undefined ? log.hourlyActuals["16H - 17H"] : null;
-                                const h17_18 = log.hourlyActuals?.["17H - 18H"] !== undefined ? log.hourlyActuals["17H - 18H"] : null;
-                                const h18_19 = log.hourlyActuals?.["18H - 19H"] !== undefined ? log.hourlyActuals["18H - 19H"] : null;
-                                const h19_20 = log.hourlyActuals?.["19H - 20H"] !== undefined ? log.hourlyActuals["19H - 20H"] : null;
+                                const h08_09 = getModelSlotActual(log.hourlyActuals, "8h-9h");
+                                const h09_10 = getModelSlotActual(log.hourlyActuals, "9h-10h");
+                                const h10_11 = getModelSlotActual(log.hourlyActuals, "10h-11h");
+                                const h11_12 = getModelSlotActual(log.hourlyActuals, "11h-12h");
+                                const h13_14 = getModelSlotActual(log.hourlyActuals, "13h-14h");
+                                const h14_15 = getModelSlotActual(log.hourlyActuals, "14h-15h");
+                                const h15_16 = getModelSlotActual(log.hourlyActuals, "15h-16h");
+                                const h16_17 = getModelSlotActual(log.hourlyActuals, "16h-17h");
+                                const h17_18 = getModelSlotActual(log.hourlyActuals, "17h-18h");
+                                const h18_19 = getModelSlotActual(log.hourlyActuals, "18h-19h");
+                                const h19_20 = getModelSlotActual(log.hourlyActuals, "19h-20h");
+                                const totalUnits = calculateModelTotalActual(log.hourlyActuals) || log.actualUnits || 0;
 
                                 return (
                                   <tr key={log.id} className="hover:bg-slate-900 transition text-slate-300">
@@ -1687,40 +1700,40 @@ export const LoggingTab = ({
                                       </div>
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h08_09 !== null && !Number.isNaN(h08_09) ? h08_09 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h08_09 > 0 ? h08_09 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h09_10 !== null && !Number.isNaN(h09_10) ? h09_10 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h09_10 > 0 ? h09_10 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h10_11 !== null && !Number.isNaN(h10_11) ? h10_11 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h10_11 > 0 ? h10_11 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h11_12 !== null && !Number.isNaN(h11_12) ? h11_12 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h11_12 > 0 ? h11_12 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h13_14 !== null && !Number.isNaN(h13_14) ? h13_14 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h13_14 > 0 ? h13_14 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h14_15 !== null && !Number.isNaN(h14_15) ? h14_15 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h14_15 > 0 ? h14_15 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h15_16 !== null && !Number.isNaN(h15_16) ? h15_16 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h15_16 > 0 ? h15_16 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h16_17 !== null && !Number.isNaN(h16_17) ? h16_17 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h16_17 > 0 ? h16_17 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h17_18 !== null && !Number.isNaN(h17_18) ? h17_18 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h17_18 > 0 ? h17_18 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h18_19 !== null && !Number.isNaN(h18_19) ? h18_19 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h18_19 > 0 ? h18_19 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-1.5 text-center bg-slate-1000 text-sky-400 font-bold border-r border-slate-900">
-                                      {h19_20 !== null && !Number.isNaN(h19_20) ? h19_20 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
+                                      {h19_20 > 0 ? h19_20 : <span className="text-slate-700 font-normal text-[10px]">-</span>}
                                     </td>
                                     <td className="py-2.5 px-2 text-right font-bold text-white text-[11px]">
-                                      {(!log.actualUnits || Number.isNaN(log.actualUnits)) ? 0 : log.actualUnits}
+                                      {totalUnits}
                                     </td>
                                     <td className="py-2.5 px-2.5 text-center">
                                       <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded border ${

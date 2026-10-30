@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { isValidHourlySlot, deduplicateProductDefinitions, getProductModelCode, cleanModelCode, isSameProduct } from './appUtils';
+import { isValidHourlySlot, deduplicateProductDefinitions, getProductModelCode, cleanModelCode, isSameProduct, canonicalizeHourlyActuals, calculateModelTotalActual } from './appUtils';
 import {
   Worker,
   WorkerDivision,
@@ -204,7 +204,19 @@ export function deduplicateProductionLogs(logs: ProductionLog[]): { deduplicated
   const duplicateIds: string[] = [];
 
   // Duyệt qua danh sách. Bản ghi có id xác định theo composite key hoặc id hợp lệ
-  logs.forEach((log) => {
+  logs.forEach((rawLog) => {
+    const cleanHourly = canonicalizeHourlyActuals(rawLog.hourlyActuals);
+    const hourlySum = calculateModelTotalActual(cleanHourly);
+    const actualUnits = hourlySum > 0 ? hourlySum : (Number(rawLog.actualUnits) || 0);
+    const factor = Number(rawLog.equivalentFactor) || 1;
+    const equivalentProducts = Math.round(actualUnits * factor);
+    const log: ProductionLog = {
+      ...rawLog,
+      hourlyActuals: cleanHourly,
+      actualUnits,
+      equivalentProducts,
+    };
+
     // Chuẩn hóa key theo date, shift, productId và lineId
     const key = `${log.date}_${(log.shift || '').trim()}_${(log.productId || '').trim()}_${(log.lineId || '').trim()}`;
     if (!map.has(key)) {
@@ -215,13 +227,19 @@ export function deduplicateProductionLogs(logs: ProductionLog[]): { deduplicated
       if (log.id && log.id !== existing.id) {
         duplicateIds.push(log.id);
       }
-      // Ưu tiên giữ bản ghi có actualUnits lớn hơn hoặc có hourlyActuals đầy đủ hơn
-      const existingHourlyKeys = Object.keys(existing.hourlyActuals || {}).length;
-      const logHourlyKeys = Object.keys(log.hourlyActuals || {}).length;
-      if (logHourlyKeys > existingHourlyKeys || (log.actualUnits || 0) > (existing.actualUnits || 0)) {
-        // Giữ id của existing để duy trì tính nhất quán của ID đã lưu
-        map.set(key, { ...log, id: existing.id || log.id });
-      }
+      // Gộp các khung giờ giữa 2 bản ghi nếu có
+      const mergedHourly = canonicalizeHourlyActuals({ ...(existing.hourlyActuals || {}), ...(log.hourlyActuals || {}) });
+      const mergedUnits = calculateModelTotalActual(mergedHourly);
+      const mergedEq = Math.round(mergedUnits * factor);
+
+      map.set(key, {
+        ...existing,
+        ...log,
+        id: existing.id || log.id,
+        hourlyActuals: mergedHourly,
+        actualUnits: mergedUnits,
+        equivalentProducts: mergedEq,
+      });
     }
   });
 
