@@ -484,9 +484,10 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
     if (existingIndex === undefined) {
       const newIndex = result.length;
       keyToIndex.set(modelKey, newIndex);
+      const uniqueId = item.id && !result.some(r => r.id === item.id) ? item.id : `model_item_${modelKey}_${newIndex}`;
       result.push({
         ...item,
-        id: item.id || `item_${item.productId}`,
+        id: uniqueId,
         hourlyActuals: cleanActuals
       });
     } else {
@@ -507,6 +508,46 @@ export function deduplicateFormModelItems(items: FormModelItem[], prodList: any[
   }
 
   return result;
+}
+
+export function resolveLogEquivalentFactor(log: { productId?: string; productName?: string; equivalentFactor?: number }, productsList?: any[]): number {
+  const pName = String(log.productName || "").toUpperCase().replace(/\s+/g, "");
+  const pId = String(log.productId || "").toUpperCase().replace(/\s+/g, "");
+
+  if (
+    pName.includes("SHA76656") ||
+    pId.includes("SHA76656") ||
+    pId.includes("RMVSHA76656") ||
+    pId === "MLN-11" ||
+    pId === "MLN11"
+  ) {
+    return 2.40;
+  }
+
+  if (productsList && productsList.length > 0) {
+    const matched = productsList.find((p: any) => {
+      const codeClean = String(p.code || "").toUpperCase().replace(/\s+/g, "");
+      const nameClean = String(p.name || "").toUpperCase().replace(/\s+/g, "");
+      const idClean = String(p.id || "").toUpperCase().replace(/\s+/g, "");
+      return (
+        idClean === pId ||
+        (codeClean && (codeClean === pId || pName.includes(codeClean))) ||
+        (nameClean && (nameClean === pName || pName.includes(nameClean) || nameClean.includes(pName)))
+      );
+    });
+    if (matched && typeof matched.factor === "number" && matched.factor > 0) {
+      if (
+        matched.id === "mln-11" ||
+        String(matched.code || "").includes("SHA76656") ||
+        String(matched.name || "").includes("SHA76656")
+      ) {
+        return 2.40;
+      }
+      return matched.factor;
+    }
+  }
+
+  return Number(log.equivalentFactor) || 1.0;
 }
 
 export const DigitalClock = () => {

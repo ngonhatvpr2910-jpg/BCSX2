@@ -199,6 +199,14 @@ export const SUNHOUSE_PRODUCTS: ProductDefinition[] = [
     code: "RMVSHA76620KL",
     factor: 2.40,
     description: "Máy lọc nước RO UltraPURE Sunhouse 10 lõi SHA76620KL."
+  },
+  {
+    id: "mln-11",
+    name: "Máy lọc nước ion kiềm Hydrogen UltraX Sunhouse SHA76656LA",
+    group: "MLN",
+    code: "RMVSHA76656LA",
+    factor: 2.40,
+    description: "Máy lọc nước ion kiềm Hydrogen UltraX Sunhouse SHA76656LA."
   }
 ];
 

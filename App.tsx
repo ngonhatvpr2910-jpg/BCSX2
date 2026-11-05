@@ -223,6 +223,7 @@ export default function App() {
     handleUpdateItem,
     handleUpdateItemHourly,
     getPrevDayLeftover,
+    getPrevDayNetBalance,
     handleRemoveItem,
     handleAddNewItem,
     handleSyncModelsFromMonthlyPlan,
@@ -786,6 +787,7 @@ export default function App() {
       handleUpdateItem={handleUpdateItem}
       handleUpdateItemHourly={handleUpdateItemHourly}
       getPrevDayLeftover={getPrevDayLeftover}
+      getPrevDayNetBalance={getPrevDayNetBalance}
       handleRemoveItem={handleRemoveItem}
       handleAddNewItem={handleAddNewItem}
       handleSyncModelsFromMonthlyPlan={handleSyncModelsFromMonthlyPlan}

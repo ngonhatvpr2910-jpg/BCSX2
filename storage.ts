@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
-import { isValidHourlySlot, deduplicateProductDefinitions, getProductModelCode, cleanModelCode, isSameProduct, canonicalizeHourlyActuals, calculateModelTotalActual } from './appUtils';
+import { isValidHourlySlot, deduplicateProductDefinitions, getProductModelCode, cleanModelCode, isSameProduct, canonicalizeHourlyActuals, calculateModelTotalActual, resolveLogEquivalentFactor } from './appUtils';
 import {
   Worker,
   WorkerDivision,
@@ -208,10 +208,11 @@ export function deduplicateProductionLogs(logs: ProductionLog[]): { deduplicated
     const cleanHourly = canonicalizeHourlyActuals(rawLog.hourlyActuals);
     const hourlySum = calculateModelTotalActual(cleanHourly);
     const actualUnits = hourlySum > 0 ? hourlySum : (Number(rawLog.actualUnits) || 0);
-    const factor = Number(rawLog.equivalentFactor) || 1;
+    const factor = resolveLogEquivalentFactor(rawLog, SUNHOUSE_PRODUCTS);
     const equivalentProducts = Math.round(actualUnits * factor);
     const log: ProductionLog = {
       ...rawLog,
+      equivalentFactor: factor,
       hourlyActuals: cleanHourly,
       actualUnits,
       equivalentProducts,
@@ -236,6 +237,7 @@ export function deduplicateProductionLogs(logs: ProductionLog[]): { deduplicated
         ...existing,
         ...log,
         id: existing.id || log.id,
+        equivalentFactor: factor,
         hourlyActuals: mergedHourly,
         actualUnits: mergedUnits,
         equivalentProducts: mergedEq,

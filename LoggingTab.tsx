@@ -39,6 +39,7 @@ export const LoggingTab = ({
   handleUpdateItem,
   handleUpdateItemHourly,
   getPrevDayLeftover,
+  getPrevDayNetBalance,
   handleRemoveItem,
   handleAddNewItem,
   displayTotalActualQty,
@@ -464,12 +465,15 @@ export const LoggingTab = ({
                                 0,
                                 (item.delayedWeeklyQty !== undefined && item.delayedWeeklyQty !== null)
                                   ? Number(item.delayedWeeklyQty) || 0
-                                  : (getPrevDayLeftover(item.productId, formDate) || 0)
+                                  : (getPrevDayLeftover ? (getPrevDayLeftover(item.productId, formDate) || 0) : 0)
                               );
+                              const netPastBalance = (item.delayedWeeklyQty !== undefined && item.delayedWeeklyQty !== null)
+                                ? Number(item.delayedWeeklyQty) || 0
+                                : (getPrevDayNetBalance ? (getPrevDayNetBalance(item.productId, formDate) || 0) : 0);
                               const dailyTarget = (item.dailyPlan || 0);
-                              // Nếu không bị trễ KH và cũng không có KHSX Ngày -> dứt khoát không có sản lượng còn lại
-                              const hasPlanOrDelay = (delayedWeekly > 0 || dailyTarget > 0);
-                              const remaining = hasPlanOrDelay ? (delayedWeekly + dailyTarget - modelActual) : 0;
+                              const effectivePlanBeforeToday = netPastBalance + dailyTarget;
+                              const hasPlanOrDelay = (effectivePlanBeforeToday > 0) || (delayedWeekly > 0 || dailyTarget > 0 || modelActual > 0);
+                              const remaining = hasPlanOrDelay ? Math.max(0, effectivePlanBeforeToday - modelActual) : 0;
 
                               return (
                                 <tr key={`model-row-${item.id || item.productId}`} className="hover:bg-slate-900/50 transition">

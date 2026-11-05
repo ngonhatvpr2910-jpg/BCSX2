@@ -6,13 +6,14 @@ import {
 import {
   INDUSTRIAL_STANDARDS, SUNHOUSE_PRODUCTS, SUNHOUSE_LINES, HISTORICAL_2025, HISTORICAL_2026, CURRENT_STATE_SUMMARY, INITIAL_PRODUCTION_LOGS, WEEKLY_ATTENDANCE, MONTHLY_SCRAP_REPORT, WEEKLY_SCRAP_REPORT, WEEKLY_DCLR_ERROR_RATE, MONTHLY_DCLR_ERROR_RATE, INITIAL_GAS_DAILY_REPORTS, INITIAL_ASSEMBLY_DAILY_REPORTS, INITIAL_WORKERS, INITIAL_ATTENDANCE
 } from './data';
-import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, EXCEL_STANDARD_SLOTS, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey, getModelSlotActual, calculateModelTotalActual, areSlotsOverlapping, deduplicateAndSortSlots, parseSlotRange, canonicalizeHourlyActuals } from './appUtils';
+import { getFridayToThursdayWeeksForMonth, getStandardYearWeeks, getYearWeeks, getWeeksInMonth, getShiftSlots, EXCEL_STANDARD_SLOTS, formatSlotLabel, getProductModelCode, FormModelItem, isValidHourlySlot, isSameProduct, deduplicateFormModelItems, deduplicateProductDefinitions, cleanModelCode, getCanonicalProductKey, getModelSlotActual, calculateModelTotalActual, areSlotsOverlapping, deduplicateAndSortSlots, parseSlotRange, canonicalizeHourlyActuals, resolveLogEquivalentFactor } from './appUtils';
 import * as storage from './storage';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 export const useAppLogic = () => {
   // Trạng thái đồng bộ Supabase Cloud
   const isLoadedRef = useRef(false);
+  const syncHistoryRef = useRef<((logs: ProductionLog[]) => void) | null>(null);
   // Nếu đã có dữ liệu cache trong localStorage thì vào app ngay lập tức (0ms), không để người dùng chờ đợi hay giật lag
   const [isInitialLoading, setIsInitialLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'local' | 'error'>(
@@ -286,11 +287,14 @@ const [isScrolled, setIsScrolled] = useState(false);
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((p: any) => ({
-            ...p,
-            price: (p.price === null || Number.isNaN(Number(p.price))) ? (p.group === "MLN" ? 4500000 : 1800000) : Number(p.price),
-            factor: (p.factor === null || Number.isNaN(Number(p.factor))) ? 1 : Number(p.factor)
-          }));
+          return parsed.map((p: any) => {
+            const isSHA76656 = String(p.name || "").includes("SHA76656") || String(p.code || "").includes("SHA76656") || p.id === "mln-11";
+            return {
+              ...p,
+              price: (p.price === null || Number.isNaN(Number(p.price))) ? (p.group === "MLN" ? 4500000 : 1800000) : Number(p.price),
+              factor: isSHA76656 ? 2.40 : ((p.factor === null || Number.isNaN(Number(p.factor))) ? 1 : Number(p.factor))
+            };
+          });
         }
       } catch (e) {
         // ignore
@@ -306,9 +310,6 @@ const [isScrolled, setIsScrolled] = useState(false);
         const parsed = JSON.parse(saved);
         // Simple heuristic to check if it's the new format
         if (Object.keys(parsed).length > 0 && typeof Object.values(parsed)[0] === 'object' && !Array.isArray(Object.values(parsed)[0])) {
-           // It might be the new format or old one. 
-           // Old format: { [productId]: { [day]: number } }
-           // New format: { [yearMonth]: { [productId]: { [day]: number } } }
            const firstVal = Object.values(parsed)[0];
            const keys = Object.keys(firstVal);
            if (keys.length > 0 && typeof Object.values(firstVal)[0] === 'object') {
@@ -346,11 +347,12 @@ const [isScrolled, setIsScrolled] = useState(false);
           const cleanHourly = canonicalizeHourlyActuals(log.hourlyActuals);
           const hourlySum = calculateModelTotalActual(cleanHourly);
           const actualUnits = hourlySum > 0 ? hourlySum : (Number(log.actualUnits) || 0);
-          const factor = Number(log.equivalentFactor) || 1;
+          const factor = resolveLogEquivalentFactor(log, SUNHOUSE_PRODUCTS);
           const equivalentProducts = Math.round(actualUnits * factor);
           return {
             ...log,
             lineName,
+            equivalentFactor: factor,
             hourlyActuals: cleanHourly,
             actualUnits,
             equivalentProducts,
@@ -615,22 +617,41 @@ const [isScrolled, setIsScrolled] = useState(false);
       return changed ? next : prev;
     });
 
+    setProducts((prev) => {
+      let changed = false;
+      const updated = prev.map((p) => {
+        const isSHA76656 = String(p.name || "").includes("SHA76656") || String(p.code || "").includes("SHA76656") || p.id === "mln-11";
+        if (isSHA76656 && p.factor !== 2.40) {
+          changed = true;
+          return { ...p, factor: 2.40 };
+        }
+        return p;
+      });
+      if (changed) {
+        storage.saveAllProducts(updated);
+        return updated;
+      }
+      return prev;
+    });
+
     setProductionLogs((prev) => {
       let changed = false;
       const sanitized = prev.map((log) => {
         const cleanHourly = canonicalizeHourlyActuals(log.hourlyActuals);
         const hourlySum = calculateModelTotalActual(cleanHourly);
         const actualUnits = hourlySum > 0 ? hourlySum : (Number(log.actualUnits) || 0);
-        const factor = Number(log.equivalentFactor) || 1;
+        const factor = resolveLogEquivalentFactor(log, products);
         const equivalentProducts = Math.round(actualUnits * factor);
         if (
           actualUnits !== log.actualUnits ||
           equivalentProducts !== log.equivalentProducts ||
+          factor !== log.equivalentFactor ||
           Object.keys(cleanHourly).length !== Object.keys(log.hourlyActuals || {}).length
         ) {
           changed = true;
           return {
             ...log,
+            equivalentFactor: factor,
             hourlyActuals: cleanHourly,
             actualUnits,
             equivalentProducts,
@@ -640,11 +661,12 @@ const [isScrolled, setIsScrolled] = useState(false);
       });
       if (changed) {
         storage.saveAllProductionLogs(sanitized);
+        setTimeout(() => syncHistoryRef.current?.(sanitized), 50);
         return sanitized;
       }
       return prev;
     });
-  }, []);
+  }, [products]);
 
   // Debounce ref cho cập nhật khung giờ để tránh spam mạng và khóa hàng trên Supabase
   const hourlySyncDebounceRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
@@ -1939,6 +1961,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   // Đồng bộ số liệu lịch sử các tháng từ toàn bộ danh sách nhật ký ca
   const syncHistoricalMetricsWithLogs = useCallback((currentLogs: ProductionLog[]) => {
+    syncHistoryRef.current = syncHistoricalMetricsWithLogs;
     const yearMonthMap: { [year: number]: { [month: number]: ProductionLog[] } } = {
       2025: {},
       2026: {},
@@ -3144,11 +3167,12 @@ const [isScrolled, setIsScrolled] = useState(false);
     return new Map<string, number>();
   }, [productionLogsAggMap, monthlyPlan]);
 
-  // Helper to calculate the accumulated uncompleted plan from day 1 to day (currentDayNum - 1) of the current month
-  // "Số lượng trễ kế hoạch là số lượng cộng dồn kế hoạch chưa được hoàn thành trong tháng trong quá khứ ví dụ tháng 10 hiện tại là 29/10 thì số lượng trễ KH là số lượng từ ngày 1/10 đến hết ngày 28/10"
-  const getPrevDayLeftover = useCallback((productId: string, currentDateStr: string): number => {
+  // Helper tính chênh lệch lũy kế kế hoạch quá khứ và thực tế quá khứ (KHSX quá khứ - Thực tế quá khứ)
+  // Nếu net > 0: nợ KH (trễ KH)
+  // Nếu net < 0: chạy trước KHSX (đã sản xuất vượt/trước KHSX)
+  const getPrevDayNetBalance = useCallback((productId: string, currentDateStr: string): number => {
     if (!productId || !currentDateStr) return 0;
-    const cacheKey = `${productId}_${currentDateStr}`;
+    const cacheKey = `net_${productId}_${currentDateStr}`;
     if (prevDayLeftoverCache.has(cacheKey)) {
       return prevDayLeftoverCache.get(cacheKey)!;
     }
@@ -3160,12 +3184,10 @@ const [isScrolled, setIsScrolled] = useState(false);
     const ym = `${year}-${month}`;
     const currentMonthPlan = monthlyPlan[ym] || {};
     const currentDayNum = parseInt(parts[2], 10);
-    // Nếu là ngày 1 hoặc không hợp lệ -> không có ngày quá khứ trong tháng -> trễ KH = 0
     if (isNaN(currentDayNum) || currentDayNum <= 1) return 0;
 
     const targetCanonicalKey = getCanonicalProductKey(productId, products) || cleanModelCode(productId);
 
-    // Thu thập tất cả các key trong KHSX Tháng khớp với sản phẩm này
     const matchingPlanKeys: string[] = [];
     if (currentMonthPlan[productId]) {
       matchingPlanKeys.push(productId);
@@ -3181,11 +3203,8 @@ const [isScrolled, setIsScrolled] = useState(false);
     let totalPlanPast = 0;
     let totalActualPast = 0;
 
-    // Cộng dồn từ ngày 1 đến hết ngày (currentDayNum - 1) trong tháng
     for (let d = 1; d < currentDayNum; d++) {
       const dayStr = `${year}-${month}-${String(d).padStart(2, '0')}`;
-      
-      // 1. Kế hoạch ngày d: lấy max nếu có nhiều key alias cùng trỏ về 1 model để tránh cộng dồn lặp
       let dayPlan = 0;
       if (matchingPlanKeys.length > 0) {
         for (const k of matchingPlanKeys) {
@@ -3196,7 +3215,6 @@ const [isScrolled, setIsScrolled] = useState(false);
       }
       totalPlanPast += dayPlan;
 
-      // 2. Thực tế ngày d
       let dayActual = 0;
       if (targetCanonicalKey) {
         dayActual = productionLogsAggMap.get(`${targetCanonicalKey}_${dayStr}`) || 0;
@@ -3207,11 +3225,16 @@ const [isScrolled, setIsScrolled] = useState(false);
       totalActualPast += dayActual;
     }
 
-    // Kế hoạch chưa được hoàn thành = max(0, KHSX lũy kế quá khứ - Thực tế lũy kế quá khứ), không bao giờ âm!
-    const uncompleted = Math.max(0, totalPlanPast - totalActualPast);
-    prevDayLeftoverCache.set(cacheKey, uncompleted);
-    return uncompleted;
+    const net = totalPlanPast - totalActualPast;
+    prevDayLeftoverCache.set(cacheKey, net);
+    return net;
   }, [monthlyPlan, productionLogsAggMap, prevDayLeftoverCache, products]);
+
+  // Helper cho ô hiển thị "Trễ KH" (chỉ lấy nợ > 0, không hiển thị âm)
+  const getPrevDayLeftover = useCallback((productId: string, currentDateStr: string): number => {
+    const net = getPrevDayNetBalance(productId, currentDateStr);
+    return Math.max(0, net);
+  }, [getPrevDayNetBalance]);
 
 
   // --- FORM DYNAMICS ---
@@ -3253,10 +3276,14 @@ const [isScrolled, setIsScrolled] = useState(false);
           ? Number(item.delayedWeeklyQty) || 0
           : (getPrevDayLeftover(item.productId, formDate) || 0)
       );
+      const netPastBalance = (item.delayedWeeklyQty !== undefined && item.delayedWeeklyQty !== null)
+        ? Number(item.delayedWeeklyQty) || 0
+        : (getPrevDayNetBalance(item.productId, formDate) || 0);
+
       const dailyPlanVal = Number(item.dailyPlan) || 0;
-      // Nếu không bị trễ KH (delayedVal <= 0) VÀ cũng không có KHSX Ngày (dailyPlanVal <= 0) -> Còn Lại = 0 (không phát sinh nợ)
-      const hasPlanOrDelay = (delayedVal > 0 || dailyPlanVal > 0);
-      const remaining = hasPlanOrDelay ? (delayedVal + dailyPlanVal - modelActual) : 0;
+      const effectivePlanBeforeToday = netPastBalance + dailyPlanVal;
+      const hasPlanOrDelay = (effectivePlanBeforeToday > 0) || (delayedVal > 0 || dailyPlanVal > 0 || modelActual > 0);
+      const remaining = hasPlanOrDelay ? Math.max(0, effectivePlanBeforeToday - modelActual) : 0;
       totalRemainingQty += remaining;
 
       const isRMA = prodDef.group === "RMA" || 
@@ -3415,7 +3442,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       const isFormMonth = m.year === formYear && m.month === formMonth;
       const hasLogs = logsForMonth.length > 0;
 
-      if (isAutoReportMonth && (hasLogs || isFormMonth)) {
+      if (hasLogs || isFormMonth) {
         const filteredLogs = hasSavedFormDate
           ? logsForMonth
           : logsForMonth.filter((log) => log.date !== formDate);
@@ -7962,6 +7989,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     handleUpdateItem,
     handleUpdateItemHourly,
     getPrevDayLeftover,
+    getPrevDayNetBalance,
     handleRemoveItem,
     handleAddNewItem,
     handleSyncModelsFromMonthlyPlan,
