@@ -3828,7 +3828,7 @@ const [isScrolled, setIsScrolled] = useState(false);
           });
 
           const prevWeekKHSX = prevWeekBasePlan + rollingUncompleted;
-          rollingUncompleted = Math.max(0, prevWeekKHSX - prevWeekActual);
+          rollingUncompleted = prevWeekKHSX - prevWeekActual;
         }
         carryOverPlan = rollingUncompleted;
       }
@@ -3860,7 +3860,7 @@ const [isScrolled, setIsScrolled] = useState(false);
         diff,
         diffEq
       };
-    }).filter(row => row.totalPlan > 0 || row.totalActual > 0 || row.carryOverPlan > 0);
+    }).filter(row => row.totalPlan !== 0 || row.totalActual !== 0 || row.carryOverPlan !== 0 || row.basePlan > 0);
 
     const dayTotals = weekObj.days.map((_, i) => {
       const plan = rows.reduce((sum, r) => sum + r.dayData[i].plan, 0);
