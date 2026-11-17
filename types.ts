@@ -34,6 +34,7 @@ export interface MonthlyMetric {
   equivalentProducts: number | null; // Tổng sản phẩm quy đổi (Sản phẩm)
   actualProducts?: number | null; // Sản phẩm thực tế (trước quy đổi)
   attendanceRatePercent?: number | null; // Tỉ lệ đi làm (%)
+  manualOverride?: boolean; // Đánh dấu tháng đã được nhập/cập nhật thủ công
 }
 
 // Nhật ký sản xuất ca làm việc (Do người dùng ghi nhận)

@@ -131,22 +131,46 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   const [selectedTargetMonth, setSelectedTargetMonth] = useState<number>(1);
 
+  const processedMetrics2026Ref = useRef<MonthlyMetric[]>([]);
+
   const updateHistoryMetric = (year: 2025 | 2026, month: number, field: keyof MonthlyMetric, value: string) => {
     const numericValue = value === "" ? null : Number(value);
-    
+    if (value !== "" && Number.isNaN(numericValue)) return;
+
     const updateMetricsList = (prev: MonthlyMetric[]) => {
       return prev.map(m => {
         if (m.month === month) {
-          const updatedItem = { ...m, [field]: numericValue };
-          
-          // Tự động tính toán NSLĐ (%) từ SP Quy đổi và Tổng Công (công thao tác)
-          const eq = updatedItem.equivalentProducts;
-          const mandays = updatedItem.productionMandays;
-          
-          if (eq !== null && mandays !== null && mandays > 0) {
-            updatedItem.laborProductivityPercent = Number(((eq / mandays) / INDUSTRIAL_STANDARDS.standardQtyPerManday * 100).toFixed(1));
-          } else if (field === "equivalentProducts" || field === "productionMandays") {
-            updatedItem.laborProductivityPercent = null;
+          let baseItem = { ...m };
+          // Khi bắt đầu chỉnh sửa thủ công một tháng đang tự động đồng bộ, giữ lại các giá trị hiện tại đang hiển thị ở các cột chưa sửa
+          if (year === 2026 && !baseItem.manualOverride) {
+            const displayed = processedMetrics2026Ref.current.find(pm => pm.month === month);
+            if (displayed) {
+              baseItem = {
+                ...baseItem,
+                actualProducts: displayed.actualProducts ?? baseItem.actualProducts ?? null,
+                equivalentProducts: displayed.equivalentProducts ?? baseItem.equivalentProducts ?? null,
+                productionMandays: displayed.productionMandays ?? baseItem.productionMandays ?? null,
+                laborProductivityPercent: displayed.laborProductivityPercent ?? baseItem.laborProductivityPercent ?? null,
+              };
+            }
+          }
+
+          const updatedItem: MonthlyMetric = {
+            ...baseItem,
+            [field]: numericValue,
+            manualOverride: true,
+          };
+
+          // Chỉ tự động tính lại NSLĐ (%) khi người dùng sửa SP Quy đổi hoặc Tổng Công;
+          // Nếu người dùng tự nhập NSLĐ (%) trực tiếp thì giữ nguyên giá trị nhập.
+          if (field === "equivalentProducts" || field === "productionMandays") {
+            const eq = updatedItem.equivalentProducts;
+            const mandays = updatedItem.productionMandays;
+            if (eq !== null && mandays !== null && mandays > 0) {
+              updatedItem.laborProductivityPercent = Number(((eq / mandays) / INDUSTRIAL_STANDARDS.standardQtyPerManday * 100).toFixed(2));
+            } else {
+              updatedItem.laborProductivityPercent = null;
+            }
           }
           return updatedItem;
         }
@@ -160,6 +184,17 @@ const [isScrolled, setIsScrolled] = useState(false);
       setMetrics2026(prev => updateMetricsList(prev));
     }
   };
+
+  const resetManualHistoryMetric = useCallback((year: 2025 | 2026, month: number) => {
+    const clearOverride = (prev: MonthlyMetric[]) =>
+      prev.map(m => (m.month === month ? { ...m, manualOverride: false } : m));
+
+    if (year === 2025) {
+      setMetrics2025(prev => clearOverride(prev));
+    } else {
+      setMetrics2026(prev => clearOverride(prev));
+    }
+  }, []);
 
   const updateMonthlyTarget = (year: number, month: number, targetValue: number) => {
     setMonthlyTargets(prev => ({
@@ -1811,6 +1846,7 @@ const [isScrolled, setIsScrolled] = useState(false);
   // Lưu trữ dữ liệu khi có thay đổi (LocalStorage cache 0ms + tự động đồng bộ lên Supabase Cloud)
   useEffect(() => {
     localStorage.setItem("sunhouse_metrics_2025", JSON.stringify(metrics2025));
+    localStorage.setItem("sunhouse_metrics_2025_v2", JSON.stringify(metrics2025));
     if (isLoadedRef.current) {
       const currentJson = JSON.stringify(metrics2025);
       if (currentJson === lastSavedMetrics2025Ref.current) return;
@@ -1822,6 +1858,7 @@ const [isScrolled, setIsScrolled] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("sunhouse_metrics_2026", JSON.stringify(metrics2026));
+    localStorage.setItem("sunhouse_metrics_2026_v2", JSON.stringify(metrics2026));
     if (isLoadedRef.current) {
       const currentJson = JSON.stringify(metrics2026);
       if (currentJson === lastSavedMetrics2026Ref.current) return;
@@ -1996,6 +2033,10 @@ const [isScrolled, setIsScrolled] = useState(false);
             else if (m.month === 8) { res.laborProductivityPercent = 133.6; res.productionMandays = 1625; res.equivalentProducts = 19601; res.actualProducts = 12615; }
             else if (m.month === 9) { res.laborProductivityPercent = 130.98; res.productionMandays = 1916.46; res.equivalentProducts = 22667; res.actualProducts = 15456; }
             return res;
+          }
+          // Giữ nguyên số liệu tháng đã được cập nhật thủ công (ví dụ: Tháng 10/2026)
+          if (m.manualOverride) {
+            return m;
           }
           const monthLogs = yearMonthMap[year]?.[m.month];
           if (!monthLogs || monthLogs.length === 0) {
@@ -3434,6 +3475,11 @@ const [isScrolled, setIsScrolled] = useState(false);
         return res;
       }
 
+      // Ưu tiên số liệu cập nhật thủ công khi xem toàn phân xưởng (cho phép cập nhật thủ công Tháng 10/2026)
+      if (m.manualOverride && filterDivision === "ALL") {
+        return { ...m };
+      }
+
       // Get logs for this month
       const logsForMonth = productionLogs.filter(
         (log) => log.date.startsWith(`${m.year}-${String(m.month).padStart(2, '0')}`)
@@ -3564,6 +3610,7 @@ const [isScrolled, setIsScrolled] = useState(false);
       };
     });
 
+    processedMetrics2026Ref.current = updated;
     return updated;
   }, [metrics2026, productionLogs, formDate, formAggregates, formWorkersCount, formWorkersCountRO, formWorkersCountBG, filterDivision, assemblyDailyReports, gasDailyReports]);
 
@@ -8083,6 +8130,7 @@ const [isScrolled, setIsScrolled] = useState(false);
     metrics2025,
     processedMetrics2026,
     updateHistoryMetric,
+    resetManualHistoryMetric,
     setFocusedField,
     simulatedHistoryMetrics,
     yearlyCumulativeCompareData,

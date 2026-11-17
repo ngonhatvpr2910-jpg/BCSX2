@@ -317,6 +317,7 @@ export default function App() {
     metrics2025,
     processedMetrics2026,
     updateHistoryMetric,
+    resetManualHistoryMetric,
     setFocusedField,
     simulatedHistoryMetrics,
     yearlyCumulativeCompareData,
@@ -927,6 +928,7 @@ export default function App() {
               metrics2025={metrics2025}
               processedMetrics2026={processedMetrics2026}
               updateHistoryMetric={updateHistoryMetric}
+              resetManualHistoryMetric={resetManualHistoryMetric}
               setFocusedField={setFocusedField}
               simulatedHistoryMetrics={simulatedHistoryMetrics}
               selectedYear={selectedYear}

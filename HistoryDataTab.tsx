@@ -18,6 +18,7 @@ export const HistoryDataTab = ({
   metrics2025,
   processedMetrics2026,
   updateHistoryMetric,
+  resetManualHistoryMetric,
   setFocusedField,
   simulatedHistoryMetrics,
   selectedYear,
@@ -46,7 +47,7 @@ export const HistoryDataTab = ({
   const toggleMonthLock = (year: number, month: number) => {
     const key = `${year}-${month}`;
     setUnlockedMonths(prev => {
-      const currentUnlocked = prev[key] ?? (year === 2026 && month > 9);
+      const currentUnlocked = prev[key] ?? (year !== 2026 || month > 9);
       const nextState = { ...prev, [key]: !currentUnlocked };
       try {
         localStorage.setItem("sunhouse_unlocked_history_months", JSON.stringify(nextState));
@@ -163,12 +164,10 @@ export const HistoryDataTab = ({
                       <tbody className="divide-y divide-slate-800/50">
                         {(historyYear === 2025 ? metrics2025 : processedMetrics2026).map((m) => {
                           const monthKey = `${historyYear}-${m.month}`;
-                          // Tháng 9 năm 2026 đã được khóa lại theo yêu cầu
-                          const isExplicitlyUnlocked = unlockedMonths[monthKey] ?? (historyYear === 2026 && m.month > 9);
-
-                          // Mặc định khóa các tháng 1-9 năm 2026
-                          const isBaseLocked = (historyYear === 2026 && m.month <= 9);
-                          const isLocked = !isExplicitlyUnlocked && isBaseLocked;
+                          // Mặc định khóa các tháng 1-9 năm 2026; Tháng 10, 11, 12 năm 2026 & năm 2025 mở khóa cho phép cập nhật thủ công
+                          const isDefaultUnlocked = historyYear !== 2026 || m.month > 9;
+                          const isExplicitlyUnlocked = unlockedMonths[monthKey] ?? isDefaultUnlocked;
+                          const isLocked = !isExplicitlyUnlocked;
 
                           const monthLogsCount = (productionLogs || []).filter(
                             (l: any) => l.date && l.date.startsWith(`${historyYear}-${String(m.month).padStart(2, '0')}`)
@@ -215,11 +214,25 @@ export const HistoryDataTab = ({
                                     {isLocked ? "🔒 T9 Đã khóa" : "🔓 T9 Mở khóa"}
                                   </span>
                                 )}
-                                {monthLogsCount > 0 && (
+                                {m.manualOverride ? (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-950/80 border border-amber-700 text-amber-300 font-semibold" title="Đang dùng số liệu cập nhật thủ công">
+                                    Thủ công
+                                    {monthLogsCount > 0 && resetManualHistoryMetric && (
+                                      <button
+                                        type="button"
+                                        onClick={() => resetManualHistoryMetric(historyYear, m.month)}
+                                        className="ml-0.5 hover:text-white cursor-pointer"
+                                        title={`Khôi phục đồng bộ tự động từ ${monthLogsCount} bản ghi nhật ký ca`}
+                                      >
+                                        <RotateCcw className="w-2.5 h-2.5" />
+                                      </button>
+                                    )}
+                                  </span>
+                                ) : monthLogsCount > 0 ? (
                                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/80 border border-emerald-800 text-emerald-400 font-semibold" title={`Đã đồng bộ ${monthLogsCount} bản ghi nhật ký ca`}>
                                     {monthLogsCount} ca
                                   </span>
-                                )}
+                                ) : null}
                               </div>
                             </td>
                             
@@ -227,7 +240,8 @@ export const HistoryDataTab = ({
                             <td className="py-2 px-2">
                               <div className="relative flex items-center">
                                 <input 
-                                  type="number" 
+                                  type="number"
+                                  step="any"
                                   value={m.laborProductivityPercent === null || Number.isNaN(Number(m.laborProductivityPercent)) ? "" : m.laborProductivityPercent} 
                                   onChange={(e) => updateHistoryMetric(historyYear, m.month, "laborProductivityPercent", e.target.value)}
                                   onFocus={() => setFocusedField({ month: m.month, year: historyYear, field: "laborProductivityPercent" })}
@@ -264,85 +278,88 @@ export const HistoryDataTab = ({
                                   </>
                                 ) : (
                                   <>
-                                    <input 
-                                      type="number" 
-                                      value={m.actualProducts === null || Number.isNaN(Number(m.actualProducts)) ? "" : m.actualProducts} 
-                                      onChange={(e) => updateHistoryMetric(historyYear, m.month, "actualProducts", e.target.value)}
-                                      onFocus={() => setFocusedField({ month: m.month, year: historyYear, field: "actualProducts" })}
-                                      onBlur={() => setFocusedField(null)}
-                                      disabled={isApLocked}
-                                      className={`w-full bg-slate-900/40 border rounded p-1.5 pr-8 text-sm outline-none transition-all ${
-                                        isApLocked 
-                                          ? "bg-slate-950/40 text-slate-500 border-slate-900/20 cursor-not-allowed"
-                                          : "border-slate-700/50 text-white focus:border-orange-500/50 focus:bg-slate-900/60"
-                                      }`} 
-                                      placeholder="VD: 1500"
-                                    />
-                                    {isApLocked && (
-                                      <Lock className="w-3.5 h-3.5 text-slate-600 absolute right-2.5 pointer-events-none" />
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </td>
+                                      <input 
+                                        type="number"
+                                        step="any"
+                                        value={m.actualProducts === null || Number.isNaN(Number(m.actualProducts)) ? "" : m.actualProducts} 
+                                        onChange={(e) => updateHistoryMetric(historyYear, m.month, "actualProducts", e.target.value)}
+                                        onFocus={() => setFocusedField({ month: m.month, year: historyYear, field: "actualProducts" })}
+                                        onBlur={() => setFocusedField(null)}
+                                        disabled={isApLocked}
+                                        className={`w-full bg-slate-900/40 border rounded p-1.5 pr-8 text-sm outline-none transition-all ${
+                                          isApLocked 
+                                            ? "bg-slate-950/40 text-slate-500 border-slate-900/20 cursor-not-allowed"
+                                            : "border-slate-700/50 text-white focus:border-orange-500/50 focus:bg-slate-900/60"
+                                        }`} 
+                                        placeholder="VD: 1500"
+                                      />
+                                      {isApLocked && (
+                                        <Lock className="w-3.5 h-3.5 text-slate-600 absolute right-2.5 pointer-events-none" />
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </td>
 
-                            {/* SP Quy đổi */}
-                            <td className="py-2 px-2">
-                              <div className="relative flex items-center">
-                                {isAutoReportMonth ? (
-                                  <>
-                                    <input 
-                                      type="text" 
-                                      readOnly
-                                      value={m.equivalentProducts == null || Number.isNaN(Number(m.equivalentProducts)) ? "" : m.equivalentProducts.toLocaleString()} 
-                                      className="w-full bg-slate-950/20 border border-slate-800/40 text-blue-400/80 rounded p-1.5 pr-14 text-sm cursor-not-allowed font-medium font-mono"
-                                      placeholder="Tự động..."
-                                    />
-                                    <span className="absolute right-2 text-[9px] font-bold text-slate-500 tracking-wider bg-slate-900/80 px-1 py-0.5 rounded border border-slate-800 pointer-events-none select-none">Báo cáo</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <input 
-                                      type="number" 
-                                      value={m.equivalentProducts === null || Number.isNaN(Number(m.equivalentProducts)) ? "" : m.equivalentProducts} 
-                                      onChange={(e) => updateHistoryMetric(historyYear, m.month, "equivalentProducts", e.target.value)}
-                                      onFocus={() => setFocusedField({ month: m.month, year: historyYear, field: "equivalentProducts" })}
-                                      onBlur={() => setFocusedField(null)}
-                                      disabled={isEpLocked}
-                                      className={`w-full bg-slate-900/40 border rounded p-1.5 pr-8 text-sm outline-none transition-all ${
-                                        isEpLocked
-                                          ? "bg-slate-950/40 text-slate-500 border-slate-900/20 cursor-not-allowed"
-                                          : "border-slate-700/50 text-white focus:border-orange-500/50 focus:bg-slate-900/60"
-                                      }`} 
-                                      placeholder="VD: 1550"
-                                    />
-                                    {isEpLocked && (
-                                      <Lock className="w-3.5 h-3.5 text-slate-600 absolute right-2.5 pointer-events-none" />
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </td>
+                              {/* SP Quy đổi */}
+                              <td className="py-2 px-2">
+                                <div className="relative flex items-center">
+                                  {isAutoReportMonth ? (
+                                    <>
+                                      <input 
+                                        type="text" 
+                                        readOnly
+                                        value={m.equivalentProducts == null || Number.isNaN(Number(m.equivalentProducts)) ? "" : m.equivalentProducts.toLocaleString()} 
+                                        className="w-full bg-slate-950/20 border border-slate-800/40 text-blue-400/80 rounded p-1.5 pr-14 text-sm cursor-not-allowed font-medium font-mono"
+                                        placeholder="Tự động..."
+                                      />
+                                      <span className="absolute right-2 text-[9px] font-bold text-slate-500 tracking-wider bg-slate-900/80 px-1 py-0.5 rounded border border-slate-800 pointer-events-none select-none">Báo cáo</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <input 
+                                        type="number"
+                                        step="any"
+                                        value={m.equivalentProducts === null || Number.isNaN(Number(m.equivalentProducts)) ? "" : m.equivalentProducts} 
+                                        onChange={(e) => updateHistoryMetric(historyYear, m.month, "equivalentProducts", e.target.value)}
+                                        onFocus={() => setFocusedField({ month: m.month, year: historyYear, field: "equivalentProducts" })}
+                                        onBlur={() => setFocusedField(null)}
+                                        disabled={isEpLocked}
+                                        className={`w-full bg-slate-900/40 border rounded p-1.5 pr-8 text-sm outline-none transition-all ${
+                                          isEpLocked
+                                            ? "bg-slate-950/40 text-slate-500 border-slate-900/20 cursor-not-allowed"
+                                            : "border-slate-700/50 text-white focus:border-orange-500/50 focus:bg-slate-900/60"
+                                        }`} 
+                                        placeholder="VD: 1550"
+                                      />
+                                      {isEpLocked && (
+                                        <Lock className="w-3.5 h-3.5 text-slate-600 absolute right-2.5 pointer-events-none" />
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </td>
 
-                            {/* Tổng Công */}
-                            <td className="py-2 px-2">
-                              <div className="relative flex items-center">
-                                {isAutoReportMonth ? (
-                                  <>
-                                    <input 
-                                      type="text" 
-                                      readOnly
-                                      value={m.productionMandays == null || Number.isNaN(Number(m.productionMandays)) ? "" : m.productionMandays.toLocaleString()} 
-                                      className="w-full bg-slate-950/20 border border-slate-800/40 text-purple-400/80 rounded p-1.5 pr-14 text-sm cursor-not-allowed font-medium font-mono"
-                                      placeholder="Tự động..."
-                                    />
-                                    <span className="absolute right-2 text-[9px] font-bold text-slate-500 tracking-wider bg-slate-900/80 px-1 py-0.5 rounded border border-slate-800 pointer-events-none select-none">Báo cáo</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <input 
-                                      type="number" 
-                                      value={m.productionMandays === null || Number.isNaN(Number(m.productionMandays)) ? "" : m.productionMandays} 
+                              {/* Tổng Công */}
+                              <td className="py-2 px-2">
+                                <div className="relative flex items-center">
+                                  {isAutoReportMonth ? (
+                                    <>
+                                      <input 
+                                        type="text" 
+                                        readOnly
+                                        value={m.productionMandays == null || Number.isNaN(Number(m.productionMandays)) ? "" : m.productionMandays.toLocaleString()} 
+                                        className="w-full bg-slate-950/20 border border-slate-800/40 text-purple-400/80 rounded p-1.5 pr-14 text-sm cursor-not-allowed font-medium font-mono"
+                                        placeholder="Tự động..."
+                                      />
+                                      <span className="absolute right-2 text-[9px] font-bold text-slate-500 tracking-wider bg-slate-900/80 px-1 py-0.5 rounded border border-slate-800 pointer-events-none select-none">Báo cáo</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <input 
+                                        type="number"
+                                        step="any"
+                                        value={m.productionMandays === null || Number.isNaN(Number(m.productionMandays)) ? "" : m.productionMandays} 
                                       onChange={(e) => updateHistoryMetric(historyYear, m.month, "productionMandays", e.target.value)}
                                       onFocus={() => setFocusedField({ month: m.month, year: historyYear, field: "productionMandays" })}
                                       onBlur={() => setFocusedField(null)}
@@ -427,7 +444,7 @@ export const HistoryDataTab = ({
                                       Mục tiêu: <span className="text-rose-400 font-semibold">{Number.isFinite(data.targetNSLD) ? `${data.targetNSLD}%` : "0%"}</span>
                                     </p>
                                     <div className="border-t border-slate-800/80 pt-1.5 mt-1 text-[10px] text-slate-500 space-y-0.5 font-mono">
-                                      {unlockedMonths[`${historyYear}-${data.monthNum}`] || (historyYear === 2026 && data.monthNum > 9) ? (
+                                      {(unlockedMonths[`${historyYear}-${data.monthNum}`] ?? (historyYear !== 2026 || data.monthNum > 9)) ? (
                                         <p className="text-emerald-400 font-semibold">🔓 Ô dữ liệu tháng này đang mở khóa tự do</p>
                                       ) : (
                                         <p className="text-amber-500/85">🔒 Ô dữ liệu tháng này đã được lưu khóa</p>
